@@ -1,0 +1,29 @@
+[project]
+name = "contab-core"
+version = "0.1.0"
+description = "Contab — Python sidecar: Excel DIAN parser, SQLite per-empresa storage, validations, exports."
+requires-python = ">=3.10"
+dependencies = [
+    "openpyxl>=3.1",
+    "xlsxwriter>=3.2",
+    "pypdfium2>=4.30",
+    "opencv-python-headless>=4.5",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+contab-sidecar = "contab_core.sidecar:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["contab_core*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

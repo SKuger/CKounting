@@ -1,0 +1,637 @@
+"""stdio JSON-lines IPC loop. One request per line on stdin → one response per line on stdout.
+
+Protocol:
+  request:  {"id": "...", "method": "...", "params": {...}}
+  response: {"id": "...", "result": <any>}                     on success
+            {"id": "...", "error": {"code": "...", "message": "..."}}  on failure
+"""
+from __future__ import annotations
+
+import json
+import sys
+import traceback
+from pathlib import Path
+from typing import Any, Callable
+
+from . import excel as excel_module
+from . import nit as nit_module
+from . import paths as paths_module
+from . import storage as storage_module
+from . import validations as validations_module
+from . import export as export_module
+from . import pdf_cufe as pdf_cufe_module
+from . import backup as backup_module
+
+
+# ---------- handlers ----------
+
+def _h_ping(_params: dict) -> dict:
+    return {"pong": True}
+
+
+def _h_list_empresas(params: dict) -> list[dict]:
+    include_archived = bool(params.get("include_archived", False))
+    out: list[dict] = []
+    for db_path in paths_module.scan_empresa_dbs():
+        info = None
+        try:
+            info = storage_module.read_empresa_info(db_path)
+        except Exception:
+            pass
+        archived = bool(info["archived"]) if info else False
+        if archived and not include_archived:
+            continue
+        out.append({
+            "db_path": str(db_path),
+            "filename": db_path.name,
+            "nit": info["nit"] if info else None,
+            "razon_social": info["razon_social"] if info else None,
+            "archived": archived,
+        })
+    return out
+
+
+def _h_validate_nit(params: dict) -> dict:
+    nit_input = params.get("nit", "")
+    dv = params.get("dv")
+    if dv is not None and str(dv).strip():
+        return {"valid": nit_module.is_valid_nit_with_dv(f"{nit_input}-{dv}")}
+    digits = nit_module.normalize(nit_input)
+    if not digits:
+        return {"valid": False, "computed_dv": None}
+    computed = nit_module.compute_dv(digits)
+    return {"valid": True, "computed_dv": computed}
+
+
+def _h_create_empresa(params: dict) -> dict:
+    nit_raw = str(params.get("nit", "")).strip()
+    razon_social = str(params.get("razon_social", "")).strip()
+    if not nit_raw or not razon_social:
+        raise ValueError("nit y razon_social son requeridos")
+    digits = nit_module.normalize(nit_raw)
+    if "-" in nit_raw:
+        body, dv_in = nit_raw.rsplit("-", 1)
+        body = nit_module.normalize(body)
+        dv = nit_module.normalize(dv_in)
+    else:
+        body, dv = digits, None
+    computed_dv = nit_module.compute_dv(body)
+    if dv is not None and dv and dv != computed_dv:
+        raise ValueError(f"DV inválido: ingresado {dv}, esperado {computed_dv}")
+    dv = dv or computed_dv
+
+    db_path = paths_module.empresa_db_path(body, razon_social)
+    storage_module.init_empresa_db(db_path, body, dv, razon_social)
+    return {"db_path": str(db_path), "nit": body, "dv": dv, "razon_social": razon_social}
+
+
+def _h_open_empresa(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    info = storage_module.read_empresa_info(db_path)
+    if info is None:
+        raise ValueError("empresa.db no inicializada")
+    return {"db_path": str(db_path), **info}
+
+
+def _h_set_default_folder(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    folder = params.get("folder")
+    if folder is not None and not isinstance(folder, str):
+        raise ValueError("folder debe ser string o null")
+    storage_module.set_default_folder(db_path, folder)
+    info = storage_module.read_empresa_info(db_path)
+    return {"db_path": str(db_path), **(info or {})}
+
+
+def _h_set_pdfs_folder(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    folder = params.get("folder")
+    if folder is not None and not isinstance(folder, str):
+        raise ValueError("folder debe ser string o null")
+    storage_module.set_pdfs_folder(db_path, folder)
+    info = storage_module.read_empresa_info(db_path)
+    return {"db_path": str(db_path), **(info or {})}
+
+
+def _h_update_empresa(params: dict) -> dict:
+    """E2 (D-041): solo razon_social es editable post-creación."""
+    db_path = Path(params["db_path"])
+    razon_social = params.get("razon_social")
+    if not isinstance(razon_social, str):
+        raise ValueError("razon_social requerida (string)")
+    storage_module.update_razon_social(db_path, razon_social)
+    info = storage_module.read_empresa_info(db_path)
+    return {"db_path": str(db_path), **(info or {})}
+
+
+def _h_archive_empresa(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    storage_module.set_archived(db_path, True)
+    info = storage_module.read_empresa_info(db_path)
+    return {"db_path": str(db_path), **(info or {})}
+
+
+def _h_unarchive_empresa(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    storage_module.set_archived(db_path, False)
+    info = storage_module.read_empresa_info(db_path)
+    return {"db_path": str(db_path), **(info or {})}
+
+
+def _h_backup_empresa(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    dest_folder = params.get("dest_folder")
+    if not isinstance(dest_folder, str) or not dest_folder.strip():
+        raise ValueError("dest_folder requerido (string)")
+    result = backup_module.backup_empresa(db_path, dest_folder)
+    return result.to_dict()
+
+
+def _h_restore_empresa(params: dict) -> dict:
+    zip_path = params.get("zip_path")
+    if not isinstance(zip_path, str) or not zip_path.strip():
+        raise ValueError("zip_path requerido (string)")
+    result = backup_module.restore_empresa(zip_path)
+    return result.to_dict()
+
+
+def _h_delete_empresa(params: dict) -> dict:
+    """D-042: hard delete. Requiere confirm_nit que coincida con el de la BD."""
+    db_path = Path(params["db_path"])
+    confirm_nit = params.get("confirm_nit")
+    if not isinstance(confirm_nit, str):
+        raise ValueError("confirm_nit requerido (string)")
+    return backup_module.delete_empresa_file(db_path, confirm_nit)
+
+
+def _h_list_pdfs_folder_files(params: dict) -> dict:
+    """List PDFs in the empresa's pdfs_folder, joined against the index cache.
+    Returns extraction status + CUFE count per file."""
+    from datetime import datetime
+
+    db_path = Path(params["db_path"])
+    info = storage_module.read_empresa_info(db_path)
+    if info is None:
+        raise ValueError("empresa.db no inicializada")
+    folder = (info.get("pdfs_folder") or "").strip()
+    if not folder:
+        return {"folder": None, "files": [], "indexed_cufe_count": 0, "error": None}
+
+    folder_path = Path(folder)
+    if not folder_path.is_dir():
+        return {
+            "folder": str(folder_path),
+            "files": [],
+            "indexed_cufe_count": 0,
+            "error": f"La carpeta no existe o no es accesible: {folder_path}",
+        }
+
+    conn = storage_module.connect(db_path)
+    try:
+        indexed_rows = pdf_cufe_module.list_indexed_pdfs(conn, folder_path)
+        indexed_by_path = {row["pdf_path"]: row for row in indexed_rows}
+        indexed_cufes = pdf_cufe_module.get_indexed_cufes(conn, folder_path)
+    finally:
+        conn.close()
+
+    files: list[dict] = []
+    try:
+        children = sorted(folder_path.iterdir(), key=lambda p: p.name.lower())
+    except PermissionError as exc:
+        return {
+            "folder": str(folder_path),
+            "files": [],
+            "indexed_cufe_count": 0,
+            "error": str(exc),
+        }
+
+    for p in children:
+        if not p.is_file() or p.suffix.lower() != ".pdf":
+            continue
+        if p.name.startswith("~"):
+            continue
+        st = p.stat()
+        full = str(p.resolve())
+        cached = indexed_by_path.get(full)
+        files.append({
+            "name": p.name,
+            "path": full,
+            "size_bytes": st.st_size,
+            "mtime": datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds"),
+            "extraction_status": cached["extraction_status"] if cached else None,
+            "cufe_count": cached["cufe_count"] if cached else 0,
+            "cufes": cached["cufes"] if cached else [],
+            "is_stale": cached is not None and (
+                cached["pdf_mtime"] != int(st.st_mtime) or
+                cached["pdf_size_bytes"] != st.st_size
+            ),
+        })
+
+    return {
+        "folder": str(folder_path),
+        "files": files,
+        "indexed_cufe_count": len(indexed_cufes),
+        "error": None,
+    }
+
+
+def _h_reindex_pdfs(params: dict) -> dict:
+    """Force a fresh incremental indexing of the empresa's pdfs_folder."""
+    db_path = Path(params["db_path"])
+    info = storage_module.read_empresa_info(db_path)
+    if info is None:
+        raise ValueError("empresa.db no inicializada")
+    folder = (info.get("pdfs_folder") or "").strip()
+    if not folder:
+        return {"folder": None, "stats": None, "error": "Carpeta de PDFs no configurada"}
+
+    conn = storage_module.connect(db_path)
+    try:
+        with storage_module.transaction(conn):
+            stats = pdf_cufe_module.index_folder(conn, folder)
+    finally:
+        conn.close()
+    return {"folder": stats.folder, "stats": stats.to_dict(), "error": None}
+
+
+def _h_import_excel(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    source_path = Path(params["source_path"])
+    loaded = excel_module.load_excel(source_path)
+    conn = storage_module.connect(db_path)
+    try:
+        load_id = excel_module.persist_load(conn, str(source_path), loaded)
+    finally:
+        conn.close()
+    return {
+        "load_id": load_id,
+        "sheet_name": loaded.sheet_name,
+        "total_rows": len(loaded.rows),
+        "columns": excel_module.DIAN_COLUMNS + excel_module.DERIVED_COLUMNS,
+    }
+
+
+def _h_list_loads(params: dict) -> list[dict]:
+    db_path = Path(params["db_path"])
+    conn = storage_module.connect(db_path)
+    try:
+        cur = conn.execute(
+            "SELECT id, source_name, loaded_at, total_rows, sheet_name "
+            "FROM excel_load ORDER BY id DESC"
+        )
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def _h_list_folder_files(params: dict) -> dict:
+    """List .xlsx files inside the empresa's default_folder. Each entry is
+    flagged with `imported=true` if there is an excel_load whose source_path
+    matches the file path verbatim."""
+    from datetime import datetime, timezone
+
+    db_path = Path(params["db_path"])
+    info = storage_module.read_empresa_info(db_path)
+    if info is None:
+        raise ValueError("empresa.db no inicializada")
+    folder = (info.get("default_folder") or "").strip()
+    if not folder:
+        return {"folder": None, "files": [], "error": None}
+
+    folder_path = Path(folder)
+    if not folder_path.is_dir():
+        return {
+            "folder": str(folder_path),
+            "files": [],
+            "error": f"La carpeta no existe o no es accesible: {folder_path}",
+        }
+
+    conn = storage_module.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT id, source_path FROM excel_load ORDER BY id DESC"
+        ).fetchall()
+    finally:
+        conn.close()
+    imported_by_path: dict[str, int] = {}
+    for r in rows:
+        sp = r["source_path"]
+        if sp and sp not in imported_by_path:
+            imported_by_path[sp] = r["id"]
+
+    files: list[dict] = []
+    try:
+        children = sorted(folder_path.iterdir(), key=lambda p: p.name.lower())
+    except PermissionError as exc:
+        return {"folder": str(folder_path), "files": [], "error": str(exc)}
+
+    for p in children:
+        if not p.is_file():
+            continue
+        if p.suffix.lower() not in (".xlsx", ".xls"):
+            continue
+        if p.name.startswith("~"):
+            continue
+        st = p.stat()
+        mtime_iso = datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds")
+        full = str(p)
+        files.append({
+            "name": p.name,
+            "path": full,
+            "size_bytes": st.st_size,
+            "mtime": mtime_iso,
+            "imported": full in imported_by_path,
+            "imported_as_load_id": imported_by_path.get(full),
+        })
+
+    return {"folder": str(folder_path), "files": files, "error": None}
+
+
+def _h_get_load_rows(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    load_id = int(params["load_id"])
+    offset = int(params.get("offset", 0))
+    limit = int(params.get("limit", 1000))
+    conn = storage_module.connect(db_path)
+    try:
+        rows = excel_module.fetch_load_rows(conn, load_id)
+        v3_overrides = sorted(storage_module.list_overrides(conn, load_id, "V3"))
+    finally:
+        conn.close()
+    total = len(rows)
+    page = rows[offset:offset + limit]
+    return {
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "columns": excel_module.DIAN_COLUMNS + excel_module.DERIVED_COLUMNS,
+        "rows": page,
+        "v3_overrides": v3_overrides,
+    }
+
+
+def _h_toggle_validation_override(params: dict) -> dict:
+    """D-046 — turn the manual override on/off for one (load, row, code).
+    On success returns the up-to-date list of overrides for that load."""
+    db_path = Path(params["db_path"])
+    load_id = int(params["load_id"])
+    row_index = int(params["row_index"])
+    code = str(params.get("code", "V3"))
+    active = bool(params.get("active", True))
+    conn = storage_module.connect(db_path)
+    try:
+        with storage_module.transaction(conn):
+            storage_module.toggle_override(conn, load_id, row_index, code, active)
+        return {
+            "load_id": load_id,
+            "row_index": row_index,
+            "code": code,
+            "active": active,
+            "v3_overrides": sorted(storage_module.list_overrides(conn, load_id, "V3")),
+        }
+    finally:
+        conn.close()
+
+
+def _resolve_indexed_cufes(conn, db_path: Path) -> tuple[set[str] | None, dict | None]:
+    """Index the PDFs folder if configured and return (cufes_set, stats).
+    Returns (None, None) if no pdfs_folder is configured. Caller manages connection."""
+    info = storage_module.read_empresa_info(db_path)
+    folder = (info or {}).get("pdfs_folder") if info else None
+    folder = (folder or "").strip()
+    if not folder:
+        return None, None
+    folder_path = Path(folder)
+    if not folder_path.is_dir():
+        return set(), {"folder": str(folder_path), "missing": True}
+    with storage_module.transaction(conn):
+        stats = pdf_cufe_module.index_folder(conn, folder_path)
+    cufes = pdf_cufe_module.get_indexed_cufes(conn, folder_path)
+    return cufes, stats.to_dict()
+
+
+def _h_run_validations(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    load_id = int(params["load_id"])
+    run_v3 = bool(params.get("run_v3", True))
+
+    info = storage_module.read_empresa_info(db_path) or {}
+    self_nit = info.get("nit")
+
+    conn = storage_module.connect(db_path)
+    try:
+        indexed_cufes, index_stats = _resolve_indexed_cufes(conn, db_path)
+        rows = excel_module.fetch_load_rows(conn, load_id)
+        v3_overrides = storage_module.list_overrides(conn, load_id, "V3")
+        overrides_by_row = {i: {"V3"} for i in v3_overrides}
+        tagged = validations_module.evaluate_rows(
+            rows,
+            run_v3=run_v3,
+            indexed_cufes=indexed_cufes,
+            overrides_by_row=overrides_by_row,
+            self_nit=self_nit,
+        )
+        failing = sum(1 for r in tagged if r)
+        notes = None
+        if index_stats and index_stats.get("missing"):
+            notes = f"Carpeta de PDFs no existe: {index_stats.get('folder')}"
+        elif index_stats:
+            no_cufe = index_stats.get("no_cufe", []) or []
+            if no_cufe:
+                notes = f"{len(no_cufe)} PDF(s) sin CUFE extraído"
+        failures = [
+            {
+                "row_index": i,
+                "reason": "; ".join(msg for _code, msg in row),
+                "codes": [code for code, _msg in row],
+            }
+            for i, row in enumerate(tagged) if row
+        ]
+        with storage_module.transaction(conn):
+            cur = conn.execute(
+                "INSERT INTO validation_run(load_id, finished_at, total_rows, failing_rows, notes) "
+                "VALUES (?, datetime('now'), ?, ?, ?)",
+                (load_id, len(rows), failing, notes),
+            )
+            run_id = cur.lastrowid
+            conn.executemany(
+                "INSERT INTO validation_failure(run_id, row_index, cufe_cude, reason) "
+                "VALUES (?, ?, ?, ?)",
+                [(run_id, f["row_index"], rows[f["row_index"]].get("CUFE/CUDE"), f["reason"]) for f in failures],
+            )
+        return {
+            "run_id": run_id,
+            "total_rows": len(rows),
+            "failing_rows": failing,
+            "v1_active": indexed_cufes is not None,
+            "indexed_cufe_count": len(indexed_cufes) if indexed_cufes is not None else 0,
+            "index_stats": index_stats,
+            "notes": notes,
+            "failures": failures,
+            "v3_overrides": sorted(v3_overrides),
+        }
+    finally:
+        conn.close()
+
+
+def _h_get_latest_run_failures(params: dict) -> dict:
+    """Return the failures of the most recent validation_run for this load_id.
+    Useful to render the table inline without re-running validations."""
+    db_path = Path(params["db_path"])
+    load_id = int(params["load_id"])
+    conn = storage_module.connect(db_path)
+    try:
+        run = conn.execute(
+            "SELECT id, total_rows, failing_rows, started_at, finished_at, notes "
+            "FROM validation_run WHERE load_id = ? "
+            "ORDER BY id DESC LIMIT 1",
+            (load_id,),
+        ).fetchone()
+        if run is None:
+            return {"run": None, "failures": []}
+        failures = conn.execute(
+            "SELECT row_index, reason FROM validation_failure "
+            "WHERE run_id = ? ORDER BY row_index",
+            (run["id"],),
+        ).fetchall()
+        return {
+            "run": dict(run),
+            "failures": [{"row_index": f["row_index"], "reason": f["reason"]} for f in failures],
+        }
+    finally:
+        conn.close()
+
+
+def _h_export_no_conformes(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    load_id = int(params["load_id"])
+    output_path = Path(params["output_path"])
+    run_v3 = bool(params.get("run_v3", True))
+
+    info = storage_module.read_empresa_info(db_path) or {}
+    self_nit = info.get("nit")
+
+    conn = storage_module.connect(db_path)
+    try:
+        indexed_cufes, _stats = _resolve_indexed_cufes(conn, db_path)
+        rows = excel_module.fetch_load_rows(conn, load_id)
+        v3_overrides = storage_module.list_overrides(conn, load_id, "V3")
+    finally:
+        conn.close()
+    overrides_by_row = {i: {"V3"} for i in v3_overrides}
+    tagged = validations_module.evaluate_rows(
+        rows, run_v3=run_v3, indexed_cufes=indexed_cufes,
+        overrides_by_row=overrides_by_row, self_nit=self_nit,
+    )
+    reasons = validations_module.failures_to_strings(tagged)
+    return export_module.export_no_conformes(rows, reasons, output_path)
+
+
+def _h_export_missing_supports(params: dict) -> dict:
+    """D-047 + D-048 — export rows that failed V1 (no PDF support match).
+
+    Output is the 5-column report (NIT Emisor, Nombre Emisor, # factura,
+    Fecha Emisión, Total). V3 overrides DO NOT affect this report — V1 status
+    is independent.
+
+    Rows where NIT Emisor matches the empresa's own NIT are skipped (D-048):
+    the company itself issued those documents, so no external support is
+    expected.
+    """
+    db_path = Path(params["db_path"])
+    load_id = int(params["load_id"])
+    output_path = Path(params["output_path"])
+
+    info = storage_module.read_empresa_info(db_path) or {}
+    self_nit = info.get("nit")
+
+    conn = storage_module.connect(db_path)
+    try:
+        indexed_cufes, _stats = _resolve_indexed_cufes(conn, db_path)
+        if indexed_cufes is None:
+            raise ValueError(
+                "Configura la carpeta de PDFs (soportes) antes de generar este reporte"
+            )
+        rows = excel_module.fetch_load_rows(conn, load_id)
+    finally:
+        conn.close()
+
+    missing: set[int] = set()
+    for i, row in enumerate(rows):
+        transformed = validations_module.apply_v2_inversion(row)
+        v1 = validations_module.evaluate_v1(transformed, indexed_cufes, self_nit=self_nit)
+        if v1 is not None:  # any V1 failure → row is "sin soporte"
+            missing.add(i)
+
+    return export_module.export_missing_supports(rows, missing, output_path)
+
+
+HANDLERS: dict[str, Callable[[dict], Any]] = {
+    "ping": _h_ping,
+    "list_empresas": _h_list_empresas,
+    "validate_nit": _h_validate_nit,
+    "create_empresa": _h_create_empresa,
+    "open_empresa": _h_open_empresa,
+    "set_default_folder": _h_set_default_folder,
+    "set_pdfs_folder": _h_set_pdfs_folder,
+    "update_empresa": _h_update_empresa,
+    "archive_empresa": _h_archive_empresa,
+    "unarchive_empresa": _h_unarchive_empresa,
+    "backup_empresa": _h_backup_empresa,
+    "restore_empresa": _h_restore_empresa,
+    "delete_empresa": _h_delete_empresa,
+    "list_pdfs_folder_files": _h_list_pdfs_folder_files,
+    "reindex_pdfs": _h_reindex_pdfs,
+    "import_excel": _h_import_excel,
+    "list_loads": _h_list_loads,
+    "list_folder_files": _h_list_folder_files,
+    "get_load_rows": _h_get_load_rows,
+    "run_validations": _h_run_validations,
+    "get_latest_run_failures": _h_get_latest_run_failures,
+    "toggle_validation_override": _h_toggle_validation_override,
+    "export_no_conformes": _h_export_no_conformes,
+    "export_missing_supports": _h_export_missing_supports,
+}
+
+
+# ---------- IPC loop ----------
+
+def handle_request(request: dict) -> dict:
+    request_id = request.get("id")
+    method = request.get("method")
+    params = request.get("params") or {}
+    handler = HANDLERS.get(method)
+    if handler is None:
+        return {"id": request_id, "error": {"code": "unknown_method", "message": method or ""}}
+    try:
+        result = handler(params)
+        return {"id": request_id, "result": result}
+    except Exception as exc:
+        return {
+            "id": request_id,
+            "error": {
+                "code": exc.__class__.__name__,
+                "message": str(exc),
+                "trace": traceback.format_exc(limit=4),
+            },
+        }
+
+
+def main(argv: list[str] | None = None) -> int:
+    for raw_line in sys.stdin:
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            req = json.loads(line)
+        except json.JSONDecodeError as exc:
+            response = {"id": None, "error": {"code": "invalid_json", "message": str(exc)}}
+        else:
+            response = handle_request(req)
+        sys.stdout.write(json.dumps(response, ensure_ascii=False, default=str) + "\n")
+        sys.stdout.flush()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

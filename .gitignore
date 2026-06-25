@@ -1,0 +1,59 @@
+# --- Node / Nuxt ---
+node_modules/
+.nuxt/
+.output/
+.nitro/
+.cache/
+dist/
+*.log
+.DS_Store
+
+# --- Tauri ---
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/WixTools/
+*.app
+*.dmg
+*.msi
+*.exe
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Datos de usuario (NUNCA commitear) ---
+# DBs reales de empresas — viven en %APPDATA%/Contab pero por si acaso
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+data/
+empresas/
+
+# Excels/PDFs reales del usuario
+*.xlsx
+*.xls
+*.pdf
+!docs/samples/**/*.xlsx
+!docs/samples/**/*.xls
+!docs/samples/**/*.pdf
+
+# --- IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Env ---
+.env
+.env.*
+!.env.example
