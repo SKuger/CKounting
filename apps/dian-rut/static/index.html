@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DIAN RUT Automator</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="background-orbs">
+        <div class="orb orb-1"></div>
+        <div class="orb orb-2"></div>
+        <div class="orb orb-3"></div>
+    </div>
+
+    <main class="container glass-panel">
+        <header>
+            <h1>DIAN RUT Automator</h1>
+            <p class="subtitle">Consulta masiva del estado del RUT de forma automatizada.</p>
+        </header>
+
+        <div class="browser-mode-panel glass-panel hidden-panel" id="browser-mode-panel">
+            <div class="mode-header">
+                <h3>Modo Navegador Humano</h3>
+                <span class="status-badge status-auto" id="mode-status-badge">🔴 Modo Automático</span>
+            </div>
+            <p class="mode-desc">Conecta tu navegador Chrome real para evadir los bloqueos de Cloudflare con un 100% de efectividad.</p>
+            <div class="mode-instructions">
+                <strong>Pasos para activar (Solo una vez):</strong>
+                <ol>
+                    <li>
+                        Busca la aplicación <strong>"Terminal"</strong> o <strong>"Consola"</strong> en tu computador y ábrela.
+                    </li>
+                    <li>
+                        Copia y pega el siguiente código en esa ventana negra y presiona <strong>ENTER</strong>:
+                        <div class="code-copy-container">
+                            <code id="terminal-command">google-chrome --remote-debugging-port=9222 --user-data-dir=$HOME/chrome-dian-profile</code>
+                            <button id="copy-command-btn" class="copy-icon-btn" title="Copiar código">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                            </button>
+                        </div>
+                    </li>
+                    <li>
+                        Se abrirá una ventana de Chrome. Entra a la página de la <strong>DIAN</strong> allí, resuelve el cuadro de "Soy humano" y déjala abierta.
+                    </li>
+                    <li>
+                        Finalmente, haz clic en el botón de abajo <strong>"Verificar Conexión"</strong>.
+                    </li>
+                </ol>
+            </div>
+            <button id="check-connection-btn" class="btn secondary-btn" style="margin-top: 15px;">🔍 Verificar Conexión</button>
+        </div>
+
+        <div class="upload-section" id="upload-section">
+            <div style="text-align: right; margin-bottom: 10px;">
+                <a href="/static/plantilla_rut.xlsx" download class="btn secondary-btn" style="width: auto; padding: 8px 16px; font-size: 0.9rem;">⬇️ Descargar Plantilla Excel</a>
+            </div>
+            <div class="file-drop-area" id="file-drop-area">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="17 8 12 3 7 8"></polyline>
+                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                </svg>
+                <p>Arrastra tu archivo Excel aquí o <span>haz clic para explorar</span></p>
+                <p class="hint">Solo archivos .xlsx con columna 'NIT'</p>
+                <input type="file" id="file-input" accept=".xlsx" hidden>
+            </div>
+            
+            <button id="start-btn" class="btn primary-btn" disabled>Iniciar Consultas</button>
+        </div>
+
+        <div class="progress-section hidden" id="progress-section">
+            <div class="progress-header">
+                <h3>Progreso de Consultas</h3>
+                <span id="progress-text">0%</span>
+            </div>
+            <div class="progress-track">
+                <div class="progress-fill" id="progress-fill"></div>
+            </div>
+            
+            <div class="status-message" id="status-message">Conectando...</div>
+            
+            <div class="log-terminal" id="log-terminal">
+                <!-- Logs will be injected here -->
+            </div>
+            
+            <div class="action-bar">
+                <a id="partial-download-btn" class="btn success-btn" href="#" download>⬇️ Descargar Excel parcial</a>
+                <a id="download-btn" class="btn success-btn hidden" href="#" download>Descargar Resultados Finales</a>
+                <button id="new-task-btn" class="btn secondary-btn hidden">Nueva Consulta</button>
+            </div>
+        </div>
+    </main>
+    <script src="/static/app.js"></script>
+</body>
+</html>

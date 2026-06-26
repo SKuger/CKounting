@@ -1,0 +1,19 @@
+# --- Python / venv ---
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+
+# --- Runtime del scraper (NUNCA commitear) ---
+# Perfil persistente del navegador: cookies/sesión de la DIAN
+browser_profile/
+# HTML de depuración: contiene PII real de terceros (cédulas/NITs)
+debug_html/
+# Datos de entrada/salida en runtime
+uploads/
+results/
+errors/
+*.log
+
+# La plantilla SÍ se versiona, aunque la regla global *.xlsx la excluya
+!static/plantilla_rut.xlsx
