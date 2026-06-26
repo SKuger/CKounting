@@ -2,11 +2,11 @@
 
 Roadmap por **Entregas** independientes y probables-de-usar. Cada entrega es una unidad funcional que se puede instalar/correr y probar antes de pasar a la siguiente.
 
-> **Estado global** (actualizado 2026-05-28)
+> **Estado global** (actualizado 2026-06-25)
 > - Entregas completadas: **E1 ✅**
-> - Avance del producto al cerrar E1: **~6 %** (incluye parte de E3/E4 fusionada)
-> - Entrega en curso: ninguna
-> - Próxima sugerida: **E2 — Catálogo de empresas robusto** o **E5 — Plan de cuentas / catálogo de terceros** (ver `## Próxima sesión`).
+> - Repo: subido a `SKuger/CKounting` (privado, **monorepo**). El segundo proyecto (scraper DIAN de terceros) quedó integrado como `apps/dian-rut/`.
+> - Entrega en curso: **E-DIAN — Consulta de terceros** (base funcional integrada; falta validar un scrape real end-to-end).
+> - Próxima sugerida: validar E-DIAN contra el portal real, o **E2 — Catálogo de empresas** / **E5 — PUC + terceros** (ver `## Próxima sesión`).
 
 ## Próxima sesión — arranque rápido
 
@@ -265,6 +265,26 @@ End-to-end sin intervención del desarrollador:
 
 - **D-E1-13** Behavior de R-V3 cuando IVA = 0. Default temporal: skip. Confirmar al implementar V3.
 - **D-E1-14** Qué columnas ocultar / qué filtros guardar como defaults. Se decide después de probar E1.
+
+---
+
+## E-DIAN — Consulta de terceros en la DIAN (scraper integrado) 🚧 En progreso
+
+**Estado**: 🚧 base funcional integrada — 2026-06-25. Falta validar un scrape real end-to-end y pulir la UI nativa.
+
+**Objetivo**: unificar en un solo aplicativo Contab + el scraper *"DIAN RUT Automator"* (consulta masiva del RUT/terceros en el portal Muisca), accesible desde el mismo frontend ("un gran aplicativo, no dos separados").
+
+**Arquitectura** (ver D-050..D-052 en `decisions.md`):
+- **Monorepo**: el scraper vive como `apps/dian-rut/` (FastAPI + Playwright), copia limpia del proyecto original `~/Documentos/proyects/Contabilidad_EXT` (que queda **intacto** fuera del repo).
+- **Backend = 2º sidecar**: uvicorn en puerto local `8756`, levantado on-demand por Nuxt (`server/utils/dianSidecar.ts`). No se fundió en el sidecar stdio de `apps/core` porque el scraping es asíncrono, largo y con progreso por WebSocket.
+- **Frontend nativo**: página Nuxt `/consulta-dian` (mismo tema), con nav que une "Empresas" y "Consulta DIAN".
+- **Conexión**: HTTP (subida/descarga/estado/plantilla) proxeado vía `/api/dian/*` para un solo origen; el WebSocket de progreso conecta directo a `ws://localhost:8756/ws/{id}`.
+
+**Verificado**: arranque del sidecar desde Nuxt, render de la página, rutas proxy (`session`, `upload`, `download`, `browser-status`, `template`) y handshake WebSocket. **Pendiente**: scrape real (golpea el portal DIAN en vivo), manejo de errores por NIT, pulido de UX (cancelación real, modo "Chrome humano" en :9222 para captchas/login).
+
+**Fuera de alcance (por ahora)**: persistir resultados por empresa, vincular el resultado al catálogo de terceros (conecta con E5), reconstrucción avanzada de la UI original.
+
+**Arranque en dev**: requiere venv propio en `apps/dian-rut/.venv` (`python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/playwright install chromium`). Nuxt levanta el sidecar solo al entrar a `/consulta-dian`.
 
 ---
 

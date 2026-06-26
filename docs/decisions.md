@@ -469,6 +469,28 @@ Sino, sea base_19 = IVA / 0.19
 
 ---
 
+## D-050 — Unificar Contab + scraper DIAN en un monorepo ✅
+
+**Decisión**: Los dos proyectos (Contab y el *"DIAN RUT Automator"*) viven en **un solo repo**, `SKuger/CKounting` (privado). El scraper entra como `apps/dian-rut/`, copia limpia del original `~/Documentos/proyects/Contabilidad_EXT` (que se conserva intacto fuera del repo).
+
+**Razón**: el usuario quiere "un gran aplicativo, no dos separados" y unificarlos a futuro. Contab ya usaba estructura `apps/`, así que el monorepo es la vía natural. Se ignoran del scraper: `venv/`, `browser_profile/` (cookies de sesión), `debug_html/` (PII real de terceros), `results/`, `uploads/`.
+
+**Nota de cuentas**: el repo vive bajo la cuenta `SKuger` (distinta de `SKuger01`, la sesión gh habitual).
+
+## D-051 — El scraper corre como 2º sidecar FastAPI, no fundido en el sidecar stdio ✅
+
+**Decisión**: `apps/dian-rut/` se mantiene como servicio FastAPI (uvicorn, puerto local `8756`), levantado on-demand por Nuxt (`server/utils/dianSidecar.ts`). **No** se reescribe para el sidecar stdio JSON-lines de `apps/core` (D-019).
+
+**Razón**: el scraping es asíncrono, de larga duración y reporta progreso en vivo por WebSocket — encaja con FastAPI, no con el modelo pregunta-respuesta corto del stdio sidecar. Reescribirlo perdería el streaming de progreso y sería una reescritura grande. Compatible con el Tauri futuro (E10), que gestiona varios sidecars.
+
+## D-052 — Unificación en el frontend: página nativa Nuxt + proxy `/api/dian/*` ✅
+
+**Decisión**: La UI de consulta se **reconstruye nativa en Nuxt** (página `/consulta-dian`, mismo tema), no se embebe la UI glassmorphism original. El frontend habla con el scraper así: HTTP (subida, descarga, estado, plantilla) **proxeado** vía rutas `/api/dian/*` para un solo origen; el WebSocket de progreso conecta **directo** a `ws://localhost:8756/ws/{id}` (Nitro no proxea WS cómodamente y es todo localhost).
+
+**Razón**: experiencia unificada de verdad (un solo estilo, una sola ventana) sin pelear con CORS en las llamadas HTTP.
+
+---
+
 ## Decisiones pendientes (a tomar más adelante)
 
 - **D-E1-13** ⏸ Behavior de R-V3 cuando IVA = 0 (default actual: skip). Confirmar si lo cambiamos a "marcar excluido" o "tarifa 0%".

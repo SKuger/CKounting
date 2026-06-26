@@ -72,6 +72,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeyDown))
     <header class="app-header">
       <NuxtLink to="/" class="logo">Contab</NuxtLink>
 
+      <nav class="app-nav">
+        <NuxtLink to="/" :class="{ active: route.path === '/' || route.path === '/empresa' || route.path === '/load' }">Empresas</NuxtLink>
+        <NuxtLink to="/consulta-dian" :class="{ active: route.path === '/consulta-dian' }">Consulta DIAN</NuxtLink>
+      </nav>
+
       <div class="empresa-switcher">
         <button
           class="switcher-trigger"
@@ -117,3 +122,20 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeyDown))
     <ToastContainer />
   </div>
 </template>
+
+<style scoped>
+.app-nav {
+  display: flex;
+  gap: 0.25rem;
+}
+.app-nav a {
+  padding: 0.32rem 0.65rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--muted);
+  transition: background 0.12s, color 0.12s;
+}
+.app-nav a:hover { color: var(--text); background: var(--panel-2); }
+.app-nav a.active { color: var(--text); background: var(--accent-soft); }
+</style>

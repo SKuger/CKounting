@@ -94,3 +94,34 @@ sqlite3 "$DB" "DELETE FROM pdf_cufe_index;"
 | **Tauri / E10** | Medio-alto | Necesario para distribuir como `.msi`. |
 | **Mejoras de UX sobre E1** | Bajo | `razon_falla` inline por fila, filtros guardados, columnas reordenables. |
 | **Backlog suelto** | Variable | Conciliación bancaria, recordatorios fiscales, dashboard ejecutivo. |
+
+---
+
+## Sesión 2 — 2026-06-25: repo en GitHub + integración del scraper DIAN
+
+**Resultado**: el proyecto quedó versionado en GitHub y se inició la unificación con el segundo proyecto (scraper de terceros DIAN) en un monorepo.
+
+### Fases
+
+1. **Subida a GitHub**
+   - Contab no tenía git. Se inició repo, commit inicial y push a `SKuger/CKounting` (**privado**).
+   - Detalle de cuentas: `gh` estaba como `SKuger01`; el repo vive bajo `SKuger` (cuenta distinta), así que hubo que reautenticar. `gh` 2.4.0 no soporta multi-cuenta.
+   - El `.gitignore` existente ya excluía `.venv`, `*.db`, Excel/PDF reales (salvo `docs/samples/`) y `.env`.
+
+2. **Integración del scraper DIAN (E-DIAN, en progreso)** — ver D-050..D-052.
+   - Se localizó el segundo proyecto: `~/Documentos/proyects/Contabilidad_EXT` (*"DIAN RUT Automator"*, FastAPI + Playwright). Copia limpia a `apps/dian-rut/` (original intacto). 92 KB versionados; runtime/PII ignorados.
+   - Backend como **2º sidecar** uvicorn (puerto 8756), levantado on-demand por Nuxt (`server/utils/dianSidecar.ts`).
+   - Frontend: página nativa Nuxt `/consulta-dian` + nav que une "Empresas" y "Consulta DIAN". Proxy HTTP en `/api/dian/*`; WebSocket directo a localhost.
+   - **Verificado**: venv recreado, uvicorn arranca y responde; Nuxt compila, levanta el sidecar, sirve la página y las rutas proxy (`session`, `browser-status`, `template`); handshake WebSocket OK.
+   - **Pendiente**: scrape real contra el portal DIAN (en vivo, con NITs reales), manejo de errores por NIT, pulido de UX (cancelación real, modo "Chrome humano" :9222).
+
+3. **Preferencia registrada**: sin trailer `Co-Authored-By` en los commits de este repo (los dos primeros commits se reescribieron para quitarlo).
+
+### Próxima sesión — candidatos
+
+| Opción | Esfuerzo | Valor |
+|---|---|---|
+| **Validar E-DIAN end-to-end** | Bajo-medio | Confirmar el scrape real con un Excel de NITs y pulir errores. |
+| **E2** — Backup/restore, edición de empresa | Medio | Alto si el usuario empieza a usarlo en serio. |
+| **E5** — PUC + catálogo de terceros | Alto | Conecta naturalmente con los resultados del scraper DIAN. |
+| **Tauri / E10** | Medio-alto | Empaquetar como `.msi` gestionando ambos sidecars. |
