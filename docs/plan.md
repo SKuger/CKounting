@@ -280,7 +280,7 @@ End-to-end sin intervención del desarrollador:
 - **Frontend nativo**: página Nuxt `/consulta-dian` (mismo tema), con nav que une "Empresas" y "Consulta DIAN".
 - **Conexión**: HTTP (subida/descarga/estado/plantilla) proxeado vía `/api/dian/*` para un solo origen; el WebSocket de progreso conecta directo a `ws://localhost:8756/ws/{id}`.
 
-**Verificado**: arranque del sidecar desde Nuxt, render de la página, rutas proxy (`session`, `upload`, `download`, `browser-status`, `template`) y handshake WebSocket. **Pendiente**: scrape real (golpea el portal DIAN en vivo), manejo de errores por NIT, pulido de UX (cancelación real, modo "Chrome humano" en :9222 para captchas/login).
+**Verificado**: arranque del sidecar desde Nuxt, render de la página, rutas proxy (`session`, `upload`, `download`, `browser-status`, `template`), handshake WebSocket, y **paridad con el original confirmada por auditoría** — `scraper.py`/`main.py` byte-idénticos, modo "Chrome humano" (CDP :9222) presente en la UI nativa con su comando de lanzamiento, copiar y "Verificar conexión". **Pendiente**: scrape real (golpea el portal DIAN en vivo) y manejo fino de errores por NIT. Diferencias cosméticas intencionales vs el original (orbs/branding) por coherencia con el tema de Contab.
 
 **Fuera de alcance (por ahora)**: persistir resultados por empresa, vincular el resultado al catálogo de terceros (conecta con E5), reconstrucción avanzada de la UI original.
 

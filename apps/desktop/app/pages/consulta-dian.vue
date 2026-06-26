@@ -2,6 +2,9 @@
 type LogEntry = { type: string; msg: string; time: string }
 type ServerData = { message?: string; percent?: number; download_url?: string; trace?: string }
 
+// Comando verbatim del original para lanzar Chrome en modo dev (CDP :9222).
+const CHROME_CMD = 'google-chrome --remote-debugging-port=9222 --user-data-dir=$HOME/chrome-dian-profile'
+
 const file = ref<File | null>(null)
 const dragging = ref(false)
 const running = ref(false)
@@ -12,11 +15,20 @@ const logs = ref<LogEntry[]>([])
 const fileId = ref<string | null>(null)
 const downloadUrl = ref<string | null>(null)
 const browserMode = ref<'unknown' | 'human' | 'auto'>('unknown')
+const checking = ref(false)
+const copied = ref(false)
 const logBox = ref<HTMLElement | null>(null)
 
 let ws: WebSocket | null = null
 
 const partialUrl = computed(() => (fileId.value ? `/api/dian/download/current/${fileId.value}` : null))
+
+const verifyLabel = computed(() => {
+  if (checking.value) return 'Verificando…'
+  if (browserMode.value === 'human') return '✓ Conectado a Chrome real'
+  if (browserMode.value === 'auto') return '🔄 Reintentar conexión'
+  return '🔍 Verificar conexión'
+})
 
 function appendLog(type: string, msg: string) {
   const time = new Date().toLocaleTimeString('es-CO', { hour12: false })
@@ -47,11 +59,24 @@ function onDrop(e: DragEvent) {
 }
 
 async function checkBrowserMode() {
+  checking.value = true
   try {
     const r = await $fetch<{ status: string }>('/api/dian/browser-status')
     browserMode.value = r.status === 'human_connected' ? 'human' : 'auto'
   } catch {
     browserMode.value = 'auto'
+  } finally {
+    checking.value = false
+  }
+}
+
+async function copyCommand() {
+  try {
+    await navigator.clipboard.writeText(CHROME_CMD)
+    copied.value = true
+    setTimeout(() => (copied.value = false), 2000)
+  } catch {
+    /* clipboard no disponible */
   }
 }
 
@@ -166,11 +191,47 @@ onBeforeUnmount(() => ws?.close())
       <span
         class="badge"
         :class="browserMode === 'human' ? 'ok' : browserMode === 'auto' ? 'warn' : ''"
-        :title="browserMode === 'human' ? 'Conectado a un Chrome real (modo humano)' : 'Modo automático (fallback)'"
       >
-        {{ browserMode === 'human' ? '● chrome real' : browserMode === 'auto' ? '● modo automático' : '○ verificando…' }}
+        {{ browserMode === 'human' ? '🟢 chrome real' : browserMode === 'auto' ? '🔴 modo automático' : '○ verificando…' }}
       </span>
     </div>
+
+    <!-- Modo Navegador Humano (CDP :9222) -->
+    <details class="card mode-panel" :open="browserMode !== 'human'">
+      <summary>
+        <span class="mode-title">Modo Navegador Humano</span>
+        <span
+          class="badge"
+          :class="browserMode === 'human' ? 'ok' : browserMode === 'auto' ? 'warn' : ''"
+        >
+          {{ browserMode === 'human' ? '🟢 Conectado a Chrome real' : browserMode === 'auto' ? '🔴 Modo Automático' : '○ verificando…' }}
+        </span>
+      </summary>
+
+      <p class="muted small mode-desc">
+        Conecta tu navegador Chrome real para evadir los bloqueos de Cloudflare con un 100 % de efectividad.
+        El scraper se "pega" a tu Chrome por el puerto de depuración (9222) y reutiliza tu sesión de la DIAN.
+      </p>
+
+      <ol class="mode-steps small">
+        <li>Abre la aplicación <strong>"Terminal"</strong> o <strong>"Consola"</strong> de tu computador.</li>
+        <li>
+          Copia y pega este comando, y presiona <strong>ENTER</strong>:
+          <div class="cmd-row">
+            <code class="mono">{{ CHROME_CMD }}</code>
+            <button class="ghost cmd-copy" type="button" @click="copyCommand">
+              {{ copied ? '¡Copiado!' : 'Copiar' }}
+            </button>
+          </div>
+        </li>
+        <li>Se abrirá Chrome. Entra a la página de la <strong>DIAN</strong> allí, resuelve el "Soy humano" y déjala abierta.</li>
+        <li>Haz clic en <strong>"Verificar conexión"</strong>.</li>
+      </ol>
+
+      <button class="secondary" type="button" :disabled="checking" @click="checkBrowserMode">
+        {{ verifyLabel }}
+      </button>
+    </details>
 
     <!-- Paso 1: cargar archivo -->
     <div v-if="!running && !finished" class="card col">
@@ -228,6 +289,42 @@ onBeforeUnmount(() => ws?.close())
 <style scoped>
 .dian-page { max-width: 860px; }
 
+.mode-panel { padding: 0; }
+.mode-panel > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 1.1rem;
+  user-select: none;
+}
+.mode-panel > summary::-webkit-details-marker { display: none; }
+.mode-title { font-weight: 600; }
+.mode-panel[open] > summary { border-bottom: 1px solid var(--border); }
+.mode-desc { padding: 0.8rem 1.1rem 0; }
+.mode-steps { margin: 0.6rem 0; padding: 0 1.1rem 0 2.2rem; display: flex; flex-direction: column; gap: 0.45rem; }
+.mode-panel > button { margin: 0 1.1rem 1.1rem; }
+
+.cmd-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+}
+.cmd-row code {
+  flex: 1;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.45rem 0.6rem;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-size: 0.78rem;
+}
+.cmd-copy { white-space: nowrap; }
+
 .drop-area {
   border: 1.5px dashed var(--border-strong);
   border-radius: var(--radius);
@@ -268,7 +365,7 @@ onBeforeUnmount(() => ws?.close())
 }
 .log-line { white-space: pre-wrap; word-break: break-word; }
 .log-error { color: var(--danger); }
-.log-done { color: var(--ok); }
+.log-done, .log-success { color: var(--ok); }
 .log-info { color: var(--text-soft); }
 .log-progress { color: var(--muted); }
 </style>
