@@ -142,8 +142,18 @@ sqlite3 "$DB" "DELETE FROM pdf_cufe_index;"
 5. **Tema horneado** — `.theme-orbita` (índigo `#2b1dc3`) + `data-*` en `<html>`.
 6-8. **Lockup + trampas + QA** — verificado en vivo con Playwright: claro/oscuro índigo (sin verdoso), ⌘K filtra/navega, toggle persiste, cero hex crudo en el shell, cero errores de consola.
 
-### Pendiente (diferido a propósito — decisión del usuario)
-- **Re-tematizar las páginas** (Empresas, Carga, Consulta DIAN, DirectoryPicker, ToastContainer): siguen con el CSS propio viejo y se ven crudas. Solo se migró el shell en esta entrega.
+### Re-tematización de páginas (hecho el mismo día)
+Tras el shell, se re-tematizaron **todas** las páginas a shadcn/tokens (D-054 actualizada):
+`index` (Empresas), `empresa`, `load` (tabla `@tanstack` con CSS scoped basado en tokens),
+`consulta-dian`, + `DirectoryPicker` (→ `Dialog`) y `ToastContainer`. Regla de oro verificada
+(0 hex crudo / 0 paleta / 0 tokens viejos), claro y oscuro OK, cero errores. Fase 8 del issue
+cumplida en toda la app.
+
+### Design system (repo hermano) — issues abiertos
+Surgieron 2 mejoras que van en `SKuger/DandeLyon-DesignSystem` (no en Contab):
+- **#1** MakerCredit → «Creado por: SKuger · V<version>» (sin corchetes, centrado). Ya aplicado
+  **localmente** en Contab como stopgap; el issue sigue abierto para la fuente compartida.
+- **#2** SidebarUser editable (perfil/correo) + preferencias reales.
 
 ### Próxima sesión — candidatos
 

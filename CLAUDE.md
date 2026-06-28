@@ -20,7 +20,7 @@ El primer flujo concreto, implementado en E1, es el **cruce DIAN ↔ soportes**:
 - **Desktop shell**: Tauri (Rust) — pendiente para E10. Hoy corremos en navegador.
 - **Frontend**: Nuxt 4 (Vue + TypeScript) en `apps/desktop/`, `ssr: false`.
   - **Design system Dandelyon · Órbita** (D-053): tokens shadcn + Tailwind v4 + reka-ui + shadcn-nuxt + @nuxt/fonts. Look horneado con `.theme-orbita` + `data-*` en `<html>`; composable `useBrand()` reemplaza el store del playground. Contrato de tokens en [`apps/desktop/app/assets/css/main.css`](apps/desktop/app/assets/css/main.css). Regla de oro: solo tokens semánticos en `.vue`/`.ts`, nada de hex crudo (salvo SVGs de marca).
-  - **Shell migrado, páginas pendientes** (D-054): el layout (sidebar + topbar Órbita) usa el design system; las páginas (Empresas, Carga, Consulta DIAN) y `DirectoryPicker`/`ToastContainer` siguen con CSS viejo y se re-tematizan en una sesión de seguimiento.
+  - **Toda la app migrada** (D-054): shell (sidebar + topbar Órbita) **y** páginas (Empresas, Carga, Consulta DIAN) + `DirectoryPicker`/`ToastContainer`, todo sobre tokens/shadcn (cero hex crudo salvo SVGs de marca).
   - `@tanstack/vue-table` (tabla headless). `DirectoryPicker` propio (modal navegable server-side via `/api/list-dir`).
 - **Backend / lógica de negocio**: Python 3.10+ como *sidecar* en `apps/core/`.
   - IPC stdio JSON-lines (D-019).
