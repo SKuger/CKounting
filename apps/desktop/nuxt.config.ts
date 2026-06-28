@@ -15,7 +15,7 @@ export default defineNuxtConfig({
     // Pre-bundle these so Vite doesn't discover them at runtime and force full-page reloads
     // (the dep-discovery churn that makes nav look like it "re-renders the whole page").
     optimizeDeps: {
-      include: ['reka-ui', 'lucide-vue-next', '@vueuse/core', 'class-variance-authority', 'clsx', 'tailwind-merge'],
+      include: ['reka-ui', 'lucide-vue-next', '@lucide/vue', '@vueuse/core', 'class-variance-authority', 'clsx', 'tailwind-merge', '@tanstack/vue-table'],
     },
   },
   shadcn: { prefix: '', componentDir: './app/components/ui' },
