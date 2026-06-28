@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { ArrowLeft, Copy, Download, UploadCloud } from 'lucide-vue-next'
+
 type LogEntry = { type: string; msg: string; time: string }
 type ServerData = { message?: string; percent?: number; download_url?: string; trace?: string }
 
@@ -29,6 +31,21 @@ const verifyLabel = computed(() => {
   if (browserMode.value === 'auto') return '🔄 Reintentar conexión'
   return '🔍 Verificar conexión'
 })
+
+const modeBadgeClass = computed(() =>
+  browserMode.value === 'human'
+    ? 'bg-status-success-bg text-status-success'
+    : browserMode.value === 'auto'
+      ? 'bg-status-error-bg text-status-error'
+      : 'bg-muted text-muted-foreground',
+)
+
+function logClass(type: string): string {
+  if (type === 'error') return 'text-status-error'
+  if (type === 'done' || type === 'success') return 'text-status-success'
+  if (type === 'progress') return 'text-muted-foreground'
+  return 'text-foreground'
+}
 
 function appendLog(type: string, msg: string) {
   const time = new Date().toLocaleTimeString('es-CO', { hour12: false })
@@ -177,195 +194,116 @@ onBeforeUnmount(() => ws?.close())
 </script>
 
 <template>
-  <div class="dian-page col">
-    <NuxtLink to="/" class="back-link">← Empresas</NuxtLink>
+  <div class="mx-auto flex w-full max-w-3xl flex-col gap-4">
+    <NuxtLink to="/" class="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground">
+      <ArrowLeft class="size-3.5" /> Empresas
+    </NuxtLink>
 
-    <div class="panel-head">
+    <div class="flex items-start justify-between gap-3">
       <div>
-        <h1>Consulta DIAN · Terceros</h1>
-        <p class="muted small">
-          Sube un Excel con la columna <span class="mono">NIT</span> y consulta el RUT de cada tercero
+        <h1 class="font-heading text-2xl font-medium tracking-tight">Consulta DIAN · Terceros</h1>
+        <p class="text-sm text-muted-foreground">
+          Sube un Excel con la columna <span class="font-mono">NIT</span> y consulta el RUT de cada tercero
           en el portal de la DIAN. El resultado se descarga como Excel con los datos combinados.
         </p>
       </div>
-      <span
-        class="badge"
-        :class="browserMode === 'human' ? 'ok' : browserMode === 'auto' ? 'warn' : ''"
-      >
+      <span class="shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium" :class="modeBadgeClass">
         {{ browserMode === 'human' ? '🟢 chrome real' : browserMode === 'auto' ? '🔴 modo automático' : '○ verificando…' }}
       </span>
     </div>
 
     <!-- Modo Navegador Humano (CDP :9222) -->
-    <details class="card mode-panel" :open="browserMode !== 'human'">
-      <summary>
-        <span class="mode-title">Modo Navegador Humano</span>
-        <span
-          class="badge"
-          :class="browserMode === 'human' ? 'ok' : browserMode === 'auto' ? 'warn' : ''"
-        >
+    <details class="overflow-hidden rounded-lg border border-border bg-card" :open="browserMode !== 'human'">
+      <summary class="flex cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 select-none [&::-webkit-details-marker]:hidden">
+        <span class="font-medium">Modo Navegador Humano</span>
+        <span class="rounded-full px-2 py-0.5 text-xs font-medium" :class="modeBadgeClass">
           {{ browserMode === 'human' ? '🟢 Conectado a Chrome real' : browserMode === 'auto' ? '🔴 Modo Automático' : '○ verificando…' }}
         </span>
       </summary>
 
-      <p class="muted small mode-desc">
-        Conecta tu navegador Chrome real para evadir los bloqueos de Cloudflare con un 100 % de efectividad.
-        El scraper se "pega" a tu Chrome por el puerto de depuración (9222) y reutiliza tu sesión de la DIAN.
-      </p>
+      <div class="border-t border-border px-4 pb-4 pt-3">
+        <p class="text-sm text-muted-foreground">
+          Conecta tu navegador Chrome real para evadir los bloqueos de Cloudflare con un 100 % de efectividad.
+          El scraper se "pega" a tu Chrome por el puerto de depuración (9222) y reutiliza tu sesión de la DIAN.
+        </p>
 
-      <ol class="mode-steps small">
-        <li>Abre la aplicación <strong>"Terminal"</strong> o <strong>"Consola"</strong> de tu computador.</li>
-        <li>
-          Copia y pega este comando, y presiona <strong>ENTER</strong>:
-          <div class="cmd-row">
-            <code class="mono">{{ CHROME_CMD }}</code>
-            <button class="ghost cmd-copy" type="button" @click="copyCommand">
-              {{ copied ? '¡Copiado!' : 'Copiar' }}
-            </button>
-          </div>
-        </li>
-        <li>Se abrirá Chrome. Entra a la página de la <strong>DIAN</strong> allí, resuelve el "Soy humano" y déjala abierta.</li>
-        <li>Haz clic en <strong>"Verificar conexión"</strong>.</li>
-      </ol>
+        <ol class="my-3 flex list-decimal flex-col gap-2 pl-5 text-sm">
+          <li>Abre la aplicación <strong>"Terminal"</strong> o <strong>"Consola"</strong> de tu computador.</li>
+          <li>
+            Copia y pega este comando, y presiona <strong>ENTER</strong>:
+            <div class="mt-1.5 flex items-stretch gap-2">
+              <code class="flex-1 overflow-x-auto whitespace-nowrap rounded-md border border-border bg-muted px-2.5 py-2 font-mono text-xs">{{ CHROME_CMD }}</code>
+              <Button variant="ghost" size="sm" type="button" @click="copyCommand">
+                <Copy class="size-3.5" /> {{ copied ? '¡Copiado!' : 'Copiar' }}
+              </Button>
+            </div>
+          </li>
+          <li>Se abrirá Chrome. Entra a la página de la <strong>DIAN</strong> allí, resuelve el "Soy humano" y déjala abierta.</li>
+          <li>Haz clic en <strong>"Verificar conexión"</strong>.</li>
+        </ol>
 
-      <button class="secondary" type="button" :disabled="checking" @click="checkBrowserMode">
-        {{ verifyLabel }}
-      </button>
+        <Button variant="secondary" type="button" :disabled="checking" @click="checkBrowserMode">
+          {{ verifyLabel }}
+        </Button>
+      </div>
     </details>
 
     <!-- Paso 1: cargar archivo -->
-    <div v-if="!running && !finished" class="card col">
-      <div
-        class="drop-area"
-        :class="{ dragover: dragging }"
-        @dragenter.prevent="dragging = true"
-        @dragover.prevent="dragging = true"
-        @dragleave.prevent="dragging = false"
-        @drop.prevent="onDrop"
-      >
-        <p v-if="file">Archivo cargado: <span class="mono">{{ file.name }}</span></p>
-        <p v-else class="muted">Arrastra aquí tu Excel <span class="mono">.xlsx</span> o selecciónalo</p>
-        <label class="file-picker">
-          <span class="button-like">Elegir archivo</span>
-          <input type="file" accept=".xlsx" hidden @change="pickFile(($event.target as HTMLInputElement).files)" />
-        </label>
-      </div>
-      <div class="row">
-        <button :disabled="!file" @click="start">Consultar terceros</button>
-        <a class="muted small" href="/api/dian/template" download>Descargar plantilla</a>
-      </div>
-    </div>
+    <Card v-if="!running && !finished">
+      <CardContent class="flex flex-col gap-4">
+        <div
+          class="flex flex-col items-center gap-3 rounded-lg border-[1.5px] border-dashed px-4 py-7 text-center transition-colors"
+          :class="dragging ? 'border-primary bg-primary/5' : 'border-input'"
+          @dragenter.prevent="dragging = true"
+          @dragover.prevent="dragging = true"
+          @dragleave.prevent="dragging = false"
+          @drop.prevent="onDrop"
+        >
+          <UploadCloud class="size-7 text-muted-foreground" />
+          <p v-if="file">Archivo cargado: <span class="font-mono">{{ file.name }}</span></p>
+          <p v-else class="text-muted-foreground">Arrastra aquí tu Excel <span class="font-mono">.xlsx</span> o selecciónalo</p>
+          <Button as-child variant="outline" size="sm">
+            <label class="cursor-pointer">
+              Elegir archivo
+              <input type="file" accept=".xlsx" hidden @change="pickFile(($event.target as HTMLInputElement).files)">
+            </label>
+          </Button>
+        </div>
+        <div class="flex items-center gap-3">
+          <Button :disabled="!file" @click="start">Consultar terceros</Button>
+          <a class="text-sm text-muted-foreground hover:text-foreground hover:underline" href="/api/dian/template" download>Descargar plantilla</a>
+        </div>
+      </CardContent>
+    </Card>
 
     <!-- Paso 2/3: progreso + resultado -->
-    <div v-else class="card col">
-      <div class="progress-wrap">
-        <div class="progress-track">
-          <div class="progress-fill" :style="{ width: percent + '%' }" />
+    <Card v-else>
+      <CardContent class="flex flex-col gap-3">
+        <div class="flex items-center gap-3">
+          <div class="h-2 flex-1 overflow-hidden rounded-full bg-muted">
+            <div class="h-full bg-primary transition-[width] duration-300" :style="{ width: percent + '%' }" />
+          </div>
+          <span class="font-mono text-sm">{{ percent }}%</span>
         </div>
-        <span class="mono small">{{ percent }}%</span>
-      </div>
-      <p class="small" :class="finished ? 'ok-text' : 'muted'">{{ statusMsg }}</p>
+        <p class="text-sm" :class="finished ? 'text-status-success' : 'text-muted-foreground'">{{ statusMsg }}</p>
 
-      <div ref="logBox" class="log-terminal mono">
-        <div v-for="(l, i) in logs" :key="i" class="log-line" :class="'log-' + l.type">
-          <span class="muted">[{{ l.time }}]</span> {{ l.msg }}
+        <div ref="logBox" class="h-60 overflow-auto rounded-md border border-border bg-muted px-3 py-2.5 font-mono text-xs leading-relaxed">
+          <div v-for="(l, i) in logs" :key="i" class="whitespace-pre-wrap break-words" :class="logClass(l.type)">
+            <span class="text-muted-foreground">[{{ l.time }}]</span> {{ l.msg }}
+          </div>
         </div>
-      </div>
 
-      <div class="row">
-        <a v-if="downloadUrl" class="file-picker" :href="downloadUrl" download>
-          <span class="button-like">Descargar resultado</span>
-        </a>
-        <a v-else-if="partialUrl" :href="partialUrl" download>
-          <button class="secondary" type="button">Descargar avance parcial</button>
-        </a>
-        <button v-if="finished" class="ghost" @click="reset">Nueva consulta</button>
-        <button v-else-if="!running" class="ghost" @click="reset">Cancelar</button>
-      </div>
-    </div>
+        <div class="flex items-center gap-3">
+          <Button v-if="downloadUrl" as-child>
+            <a :href="downloadUrl" download><Download class="size-4" /> Descargar resultado</a>
+          </Button>
+          <Button v-else-if="partialUrl" as-child variant="secondary">
+            <a :href="partialUrl" download><Download class="size-4" /> Descargar avance parcial</a>
+          </Button>
+          <Button v-if="finished" variant="ghost" @click="reset">Nueva consulta</Button>
+          <Button v-else-if="!running" variant="ghost" @click="reset">Cancelar</Button>
+        </div>
+      </CardContent>
+    </Card>
   </div>
 </template>
-
-<style scoped>
-.dian-page { max-width: 860px; }
-
-.mode-panel { padding: 0; }
-.mode-panel > summary {
-  list-style: none;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0.85rem 1.1rem;
-  user-select: none;
-}
-.mode-panel > summary::-webkit-details-marker { display: none; }
-.mode-title { font-weight: 600; }
-.mode-panel[open] > summary { border-bottom: 1px solid var(--border); }
-.mode-desc { padding: 0.8rem 1.1rem 0; }
-.mode-steps { margin: 0.6rem 0; padding: 0 1.1rem 0 2.2rem; display: flex; flex-direction: column; gap: 0.45rem; }
-.mode-panel > button { margin: 0 1.1rem 1.1rem; }
-
-.cmd-row {
-  display: flex;
-  align-items: stretch;
-  gap: 0.4rem;
-  margin-top: 0.4rem;
-}
-.cmd-row code {
-  flex: 1;
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 0.45rem 0.6rem;
-  overflow-x: auto;
-  white-space: nowrap;
-  font-size: 0.78rem;
-}
-.cmd-copy { white-space: nowrap; }
-
-.drop-area {
-  border: 1.5px dashed var(--border-strong);
-  border-radius: var(--radius);
-  padding: 1.6rem 1rem;
-  text-align: center;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.7rem;
-  transition: border-color 0.15s, background 0.15s;
-}
-.drop-area.dragover { border-color: var(--accent); background: var(--accent-soft); }
-
-.progress-wrap { display: flex; align-items: center; gap: 0.6rem; }
-.progress-track {
-  flex: 1;
-  height: 8px;
-  background: var(--panel-3);
-  border-radius: 999px;
-  overflow: hidden;
-}
-.progress-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #7480e0, var(--accent));
-  transition: width 0.25s ease;
-}
-.ok-text { color: var(--ok); }
-
-.log-terminal {
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 0.6rem 0.75rem;
-  height: 240px;
-  overflow: auto;
-  font-size: 0.75rem;
-  line-height: 1.6;
-}
-.log-line { white-space: pre-wrap; word-break: break-word; }
-.log-error { color: var(--danger); }
-.log-done, .log-success { color: var(--ok); }
-.log-info { color: var(--text-soft); }
-.log-progress { color: var(--muted); }
-</style>
