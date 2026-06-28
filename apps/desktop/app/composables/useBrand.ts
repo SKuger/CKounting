@@ -35,6 +35,15 @@ const brand = reactive({
   // ── Live system-health beacon (accent-independent status palette) ──
   systemStatus: 'ok' as SystemStatus,
 
+  // ── Theme (claro/oscuro). The FOUC script in nuxt.config paints .dark pre-hydration;
+  //    initTheme() syncs this field from the real DOM state so the toggle icon is correct. ──
+  theme: 'light' as 'light' | 'dark',
+
+  initTheme() {
+    if (import.meta.client) {
+      brand.theme = document.documentElement.classList.contains('dark') ? 'dark' : 'light'
+    }
+  },
   setSystemStatus(s: SystemStatus) {
     brand.systemStatus = s
     if (import.meta.client) document.documentElement.setAttribute('data-status', s)
@@ -42,6 +51,7 @@ const brand = reactive({
   toggleTheme() {
     if (!import.meta.client) return
     const dark = document.documentElement.classList.toggle('dark')
+    brand.theme = dark ? 'dark' : 'light'
     localStorage.setItem(THEME_KEY, dark ? 'dark' : 'light')
   },
 })
