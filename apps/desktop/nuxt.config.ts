@@ -29,7 +29,23 @@ export default defineNuxtConfig({
   app: {
     head: {
       title: 'Contab',
-      htmlAttrs: { lang: 'es' },
+      // Baked Órbita look (consume-plan §5): the sub-brand theme class + the data-* skins
+      // (solar rail spine, faro concept, radio Definido, densidad Media, acento Sutil, cosmos
+      // Alto/acento, beacon ok, Fraunces + beam). The FOUC script toggles .dark alongside.
+      htmlAttrs: {
+        'lang': 'es',
+        'class': 'theme-orbita',
+        'data-concept': 'faro',
+        'data-spine': 'beacon',
+        'data-strength': 'definido',
+        'data-density': 'media',
+        'data-accent-spread': 'sutil',
+        'data-swell': 'alto',
+        'data-ocean-tint': 'accent',
+        'data-status': 'ok',
+        'data-fraunces': 'on',
+        'data-beam': 'on',
+      },
       // Browser tab: the Dandelyon mark (RFC 0008 — favicon = brand mark). SVG first, PNG
       // fallbacks. ?v bump = cache-bust (Chrome caches favicons by URL across hard-reload).
       link: [

@@ -118,6 +118,22 @@
   --chart-5: #60A5FA;
 }
 
+/* ── theme-orbita — sub-marca Contabilidad (acento horneado, RFC 0008) ──
+   Reemplaza las perillas runtime del playground: acento personalizado índigo #2b1dc3
+   (claro y oscuro) + sol de marca #FDB813. El resto del sistema (estado, gráficas, neutros)
+   es independiente del acento por diseño y NO se mueve. */
+.theme-orbita {
+  --primary: #2b1dc3; --ring: #2b1dc3; --sidebar-primary: #2b1dc3; --sidebar-ring: #2b1dc3;
+  --primary-foreground: #ffffff; --sidebar-primary-foreground: #ffffff;
+  --pg-cosmos-accent: #2b1dc3;            /* tinte del cosmos = acento */
+  --pg-sun: #FDB813;                      /* sol de marca */
+}
+.dark.theme-orbita {
+  --primary: #2b1dc3; --ring: #2b1dc3; --sidebar-primary: #2b1dc3; --sidebar-ring: #2b1dc3;
+  --primary-foreground: #ffffff; --sidebar-primary-foreground: #ffffff;
+  --pg-cosmos-accent: #2b1dc3;
+}
+
 /* ---- map runtime vars -> Tailwind v4 utilities ---- */
 @theme inline {
   --color-background: var(--background);
