@@ -125,3 +125,56 @@ sqlite3 "$DB" "DELETE FROM pdf_cufe_index;"
 | **E2** — Backup/restore, edición de empresa | Medio | Alto si el usuario empieza a usarlo en serio. |
 | **E5** — PUC + catálogo de terceros | Alto | Conecta naturalmente con los resultados del scraper DIAN. |
 | **Tauri / E10** | Medio-alto | Empaquetar como `.msi` gestionando ambos sidecars. |
+
+---
+
+## Sesión 3 — 2026-06-28: design system Dandelyon (sub-marca Órbita)
+
+**Resultado**: el **shell** de `apps/desktop` adopta el design system Dandelyon (Órbita) siguiendo el issue `SKuger/CKounting#1` (8 fases). Rama `feat/design-system-orbita`, un commit por fase. El frontend pasó de un dark-theme propio a tokens shadcn + Tailwind v4 + reka-ui, con el look Órbita horneado (riel solar índigo). Ver D-053/D-054.
+
+### Fases (todas conciliadas + commiteadas)
+
+0. **Deps** — pinia, reka-ui, shadcn-nuxt, @nuxt/fonts, cva, clsx, tailwind-merge, lucide-vue-next, @vueuse/core, tailwindcss v4. (+`@lucide/vue` y `typescript`, que los componentes `ui/` verbatim requieren y el issue no listó.)
+1. **Tokens** — `main.css` = contrato del design system (verbatim salvo 3 bloques solo-playground: Apax @font-face, `.fonts-preload`, letterbox).
+2. **nuxt.config** — `ssr:false`, plugin Tailwind v4, `optimizeDeps`, fuentes fijas (Fraunces/Inter/IBM Plex Mono), FOUC con clave `contab-theme`, favicon de marca.
+3. **Componentes** — `ui/` (97 archivos) + 7 de marca, verbatim; `useBrand()` reemplaza el store `usePlayground()`.
+4. **Shell** — `layouts/default.vue`: sidebar (lockup + nav real Empresas/Consulta DIAN + cosmos + MakerCredit) + topbar (breadcrumb, ⌘K, beacon, notificaciones, toggle de tema). Nav navega (patrón `SidebarMenuButton as-child > NuxtLink`).
+5. **Tema horneado** — `.theme-orbita` (índigo `#2b1dc3`) + `data-*` en `<html>`.
+6-8. **Lockup + trampas + QA** — verificado en vivo con Playwright: claro/oscuro índigo (sin verdoso), ⌘K filtra/navega, toggle persiste, cero hex crudo en el shell, cero errores de consola.
+
+### Re-tematización de páginas (hecho el mismo día)
+Tras el shell, se re-tematizaron **todas** las páginas a shadcn/tokens (D-054 actualizada):
+`index` (Empresas), `empresa`, `load` (tabla `@tanstack` con CSS scoped basado en tokens),
+`consulta-dian`, + `DirectoryPicker` (→ `Dialog`) y `ToastContainer`. Regla de oro verificada
+(0 hex crudo / 0 paleta / 0 tokens viejos), claro y oscuro OK, cero errores. Fase 8 del issue
+cumplida en toda la app.
+
+### Pase de UX (densidad + viewport) — D-055
+El usuario reportó "mucho scroll, espacio desperdiciado". Auditoría UX con workflow (5 críticas
+paralelas + síntesis) → raíz: torre de espaciado de catálogo + caps de ancho. Se implementó:
+densidad como palanca real (gap var + interior de Card) horneada en `compacta`, superficies de
+trabajo full-width, scroll en panel (carga con altura flex que mata el doble scroll), y patrones
+nuevos (landing con stats + Nueva empresa en Dialog; detalle empresa maestro-detalle + menú ⋯).
+Verificado en claro/oscuro, cero errores.
+
+### Design system (repo hermano) — issues abiertos
+Surgieron 2 mejoras que van en `SKuger/DandeLyon-DesignSystem` (no en Contab):
+- **#1** MakerCredit → «Creado por: SKuger · V<version>» (sin corchetes, centrado). Ya aplicado
+  **localmente** en Contab como stopgap; el issue sigue abierto para la fuente compartida.
+- **#2** SidebarUser editable (perfil/correo) + preferencias reales.
+
+### Consumo en CKounting de SidebarUser + preferencias — D-056 (issue CKounting #2)
+El DS implementó el estándar (DS #2 / PR #4); se **consumió** en Contab por etapas (commit por
+etapa): composables `useUser`/`usePrefs` (claves propias, sin demo, density default compacta) →
+efectos CSS reduce-motion/contraste → `SidebarUser` (usePlayground→useBrand) → cableado
+(usePrefs = fuente única de tema/densidad/escala; topbar + ⌘K + panel unificados; notif→campana).
+Verificado en vivo: todas las preferencias con efecto + CRUD de cuentas; cero errores. Sin auth
+(D-004) → localStorage es la fuente real, una cuenta neutra editable.
+
+### Próxima sesión — candidatos
+
+| Opción | Esfuerzo | Valor |
+|---|---|---|
+| **Re-tematizar páginas a tokens/shadcn** | Medio-alto | Cierra la migración del design system (Fase 8 "cero hex crudo" en todo). |
+| **PR de la rama** `feat/design-system-orbita` → cerrar issue #1 | Bajo | Mergear el shell. |
+| **Validar E-DIAN end-to-end** | Bajo-medio | Pendiente de la sesión 2. |

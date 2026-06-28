@@ -18,10 +18,10 @@ El primer flujo concreto, implementado en E1, es el **cruce DIAN ↔ soportes**:
 ## Stack final
 
 - **Desktop shell**: Tauri (Rust) — pendiente para E10. Hoy corremos en navegador.
-- **Frontend**: Nuxt 4 (Vue + TypeScript) en `apps/desktop/`.
-  - `@tanstack/vue-table` (tabla headless).
-  - Dark theme propio (sin librería UI) — tokens en [`apps/desktop/app/assets/css/main.css`](apps/desktop/app/assets/css/main.css).
-  - `DirectoryPicker` propio (modal navegable server-side via `/api/list-dir`).
+- **Frontend**: Nuxt 4 (Vue + TypeScript) en `apps/desktop/`, `ssr: false`.
+  - **Design system Dandelyon · Órbita** (D-053): tokens shadcn + Tailwind v4 + reka-ui + shadcn-nuxt + @nuxt/fonts. Look horneado con `.theme-orbita` + `data-*` en `<html>`; composable `useBrand()` reemplaza el store del playground. Contrato de tokens en [`apps/desktop/app/assets/css/main.css`](apps/desktop/app/assets/css/main.css). Regla de oro: solo tokens semánticos en `.vue`/`.ts`, nada de hex crudo (salvo SVGs de marca).
+  - **Toda la app migrada** (D-054): shell (sidebar + topbar Órbita) **y** páginas (Empresas, Carga, Consulta DIAN) + `DirectoryPicker`/`ToastContainer`, todo sobre tokens/shadcn (cero hex crudo salvo SVGs de marca).
+  - `@tanstack/vue-table` (tabla headless). `DirectoryPicker` propio (modal navegable server-side via `/api/list-dir`).
 - **Backend / lógica de negocio**: Python 3.10+ como *sidecar* en `apps/core/`.
   - IPC stdio JSON-lines (D-019).
   - Deps: `openpyxl`, `xlsxwriter`, `pypdfium2`, `opencv-python-headless`, `numpy`, `Pillow`.

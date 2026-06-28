@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { ArrowUp, House, Folder, Check } from 'lucide-vue-next'
+
 type DirEntry = { name: string; is_dir: true }
 type DirResponse = {
   ok: boolean
@@ -113,54 +115,52 @@ function pick() {
 </script>
 
 <template>
-  <div v-if="open" class="modal-backdrop" @click.self="emit('close')">
-    <div class="modal">
-      <header class="modal-header">
-        <h2 style="margin: 0">{{ title }}</h2>
-        <button class="ghost" style="padding: 0.3rem 0.6rem" @click="emit('close')">✕</button>
-      </header>
+  <Dialog :open="open" @update:open="(v) => { if (!v) emit('close') }">
+    <DialogContent class="flex max-h-[80vh] flex-col gap-0 p-0 sm:max-w-2xl">
+      <DialogHeader class="border-b border-border px-4 py-3">
+        <DialogTitle>{{ title }}</DialogTitle>
+        <DialogDescription class="sr-only">Navega y elige una carpeta del sistema de archivos.</DialogDescription>
+      </DialogHeader>
 
-      <div class="modal-toolbar">
-        <button class="secondary" :disabled="!parent" @click="goParent">↑ Subir</button>
-        <button class="secondary" @click="goHome">🏠 Inicio</button>
-        <label class="muted" style="display: flex; align-items: center; gap: 0.3rem">
-          <input v-model="showHidden" type="checkbox" /> Ocultas
+      <div class="flex items-center gap-2 border-b border-border px-4 py-2">
+        <Button variant="secondary" size="sm" :disabled="!parent" @click="goParent"><ArrowUp class="size-4" /> Subir</Button>
+        <Button variant="secondary" size="sm" @click="goHome"><House class="size-4" /> Inicio</Button>
+        <label class="flex cursor-pointer items-center gap-1.5 text-sm text-muted-foreground">
+          <input v-model="showHidden" type="checkbox" class="size-3.5 accent-primary"> Ocultas
         </label>
-        <span class="spacer" />
       </div>
 
-      <div class="breadcrumbs">
+      <div class="flex flex-wrap items-center gap-1 border-b border-border px-4 py-2 text-xs">
         <template v-for="(c, i) in breadcrumbs" :key="i">
-          <button class="ghost crumb" @click="loadPath(c.path)">{{ c.label || 'raíz' }}</button>
-          <span v-if="i < breadcrumbs.length - 1" class="muted">{{ separator }}</span>
+          <button type="button" class="rounded px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" @click="loadPath(c.path)">{{ c.label || 'raíz' }}</button>
+          <span v-if="i < breadcrumbs.length - 1" class="text-muted-foreground">{{ separator }}</span>
         </template>
       </div>
 
-      <div class="modal-body">
-        <div v-if="loading" class="muted">Cargando…</div>
-        <div v-else-if="errorMsg" class="alert error">{{ errorMsg }}</div>
-        <div v-else-if="!entries.length" class="muted">Sin subcarpetas.</div>
-        <ul v-else class="dir-list">
+      <div class="min-h-0 flex-1 overflow-auto px-3 py-2">
+        <p v-if="loading" class="px-1 py-2 text-sm text-muted-foreground">Cargando…</p>
+        <div v-else-if="errorMsg" class="rounded-md border border-status-error/30 bg-status-error-bg px-3 py-2 text-sm text-status-error">{{ errorMsg }}</div>
+        <p v-else-if="!entries.length" class="px-1 py-2 text-sm text-muted-foreground">Sin subcarpetas.</p>
+        <ul v-else class="flex flex-col gap-0.5">
           <li
             v-for="e in entries"
             :key="e.name"
-            class="dir-item"
+            class="flex cursor-pointer select-none items-center gap-2 rounded-md px-2.5 py-2 text-sm transition-colors hover:bg-accent"
             @dblclick="enter(e.name)"
             @click="enter(e.name)"
           >
-            📁 {{ e.name }}
+            <Folder class="size-4 shrink-0 text-muted-foreground" /> {{ e.name }}
           </li>
         </ul>
       </div>
 
-      <footer class="modal-footer">
-        <div class="muted mono" style="font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis">
-          {{ currentPath || '—' }}
+      <DialogFooter class="flex items-center gap-2 border-t border-border px-4 py-3 sm:justify-between">
+        <div class="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">{{ currentPath || '—' }}</div>
+        <div class="flex shrink-0 gap-2">
+          <Button variant="secondary" @click="emit('close')">Cancelar</Button>
+          <Button :disabled="!currentPath" @click="pick"><Check class="size-4" /> Seleccionar esta carpeta</Button>
         </div>
-        <span class="spacer" />
-        <button class="secondary" @click="emit('close')">Cancelar</button>
-        <button :disabled="!currentPath" @click="pick">Seleccionar esta carpeta</button>
-      </footer>
-    </div>
-  </div>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
 </template>

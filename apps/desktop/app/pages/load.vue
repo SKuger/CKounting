@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Search, ArrowLeft, FolderOpen } from 'lucide-vue-next'
 import {
   FlexRender,
   createColumnHelper,
@@ -420,91 +421,87 @@ watch(loadId, refresh)
 </script>
 
 <template>
-  <div class="load-page">
-    <header class="empresa-hero">
-      <div>
-        <NuxtLink :to="{ path: '/empresa', query: { db: dbPath } }" class="back-link">
-          ← {{ empresaInfo?.razon_social || 'Empresa' }}
-        </NuxtLink>
-        <h1>Carga #{{ loadId }}</h1>
-        <div class="muted small">
-          <template v-if="data">{{ data.total }} filas · {{ data.columns.length }} columnas</template>
-          <template v-if="hasValidationRun">
-            <span class="dot">·</span>
-            <span :class="failingCount > 0 ? 'text-danger' : 'text-ok'">
-              <strong>{{ failingCount }} / {{ totalCount }}</strong> no conformes
-            </span>
-          </template>
-        </div>
-      </div>
+  <div class="flex h-full min-h-0 flex-col">
+    <header class="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+      <NuxtLink :to="{ path: '/empresa', query: { db: dbPath } }" class="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground">
+        <ArrowLeft class="size-3.5" /> {{ empresaInfo?.razon_social || 'Empresa' }}
+      </NuxtLink>
+      <span class="text-border">/</span>
+      <h1 class="font-heading text-xl font-medium tracking-tight">Carga #{{ loadId }}</h1>
+      <p class="text-sm text-muted-foreground">
+        <template v-if="data">{{ data.total }} filas · {{ data.columns.length }} columnas</template>
+        <template v-if="hasValidationRun">
+          <span class="mx-1.5 text-border">·</span>
+          <span :class="failingCount > 0 ? 'text-status-error' : 'text-status-success'">
+            <strong>{{ failingCount }} / {{ totalCount }}</strong> no conformes
+          </span>
+        </template>
+      </p>
     </header>
 
-    <section class="load-toolbar">
-      <div class="load-toolbar-row">
-        <div class="search-wrap">
-          <span class="search-icon">⌕</span>
-          <input
+    <section class="flex flex-col gap-2 rounded-lg border border-border bg-card p-2">
+      <div class="flex flex-wrap items-center gap-2">
+        <div class="relative min-w-48 flex-1">
+          <Search class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
             v-model="globalFilter"
+            class="pl-8"
             placeholder="Buscar en todas las columnas…  (/)"
             data-role="global-search"
           />
         </div>
-        <button
-          class="secondary"
-          :class="{ 'pressed': onlyFailing }"
+        <Button
+          :variant="onlyFailing ? 'default' : 'outline'"
           :disabled="!hasValidationRun"
-          @click="onlyFailing = !onlyFailing"
           title="Atajo: f"
+          @click="onlyFailing = !onlyFailing"
         >
           {{ onlyFailing ? '✓ Solo no conformes' : 'Solo no conformes' }}
-          <span v-if="hasValidationRun" class="badge-count">{{ failingCount }}</span>
-        </button>
-        <div style="position: relative">
-          <button class="secondary" @click="showColumnsPanel = !showColumnsPanel">
-            Columnas · {{ visibleCount }}/{{ data?.columns.length ?? 0 }}
-          </button>
-          <div v-if="showColumnsPanel" class="columns-panel">
-            <div class="row" style="justify-content: space-between; margin-bottom: 0.4rem; gap: 0.4rem">
-              <input v-model="columnsSearch" placeholder="Buscar columna…" style="flex: 1" />
-              <button class="ghost" @click="showAllColumns">Todo</button>
-              <button class="ghost" @click="resetColumnsToDefault">Restaurar</button>
-              <button class="ghost" @click="showColumnsPanel = false">✕</button>
+          <span v-if="hasValidationRun" class="ml-1 inline-flex items-center rounded-full bg-status-error-bg px-1.5 text-[10px] font-bold text-status-error">{{ failingCount }}</span>
+        </Button>
+        <Popover v-model:open="showColumnsPanel">
+          <PopoverTrigger as-child>
+            <Button variant="outline">Columnas · {{ visibleCount }}/{{ data?.columns.length ?? 0 }}</Button>
+          </PopoverTrigger>
+          <PopoverContent align="start" :side-offset="6" class="w-96 p-2">
+            <div class="mb-2 flex items-center gap-2">
+              <Input v-model="columnsSearch" placeholder="Buscar columna…" class="h-8 flex-1" />
+              <Button variant="ghost" size="sm" @click="showAllColumns">Todo</Button>
+              <Button variant="ghost" size="sm" @click="resetColumnsToDefault">Restaurar</Button>
             </div>
-            <div class="columns-groups">
-              <div v-for="g in columnsForPanel" :key="g.group" class="column-group">
-                <div class="column-group-head">
+            <div class="flex max-h-[50vh] flex-col gap-1.5 overflow-y-auto">
+              <div v-for="g in columnsForPanel" :key="g.group" class="rounded-md border border-border bg-muted/40 px-2 py-1.5">
+                <div class="mb-1 flex items-center justify-between font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
                   <span>{{ g.group }}</span>
-                  <div class="row" style="gap: 0.2rem">
-                    <button class="ghost" style="padding: 0.1rem 0.3rem; font-size: 0.7rem"
-                      @click="toggleGroup(g.columns.map(c => c.name), true)">+</button>
-                    <button class="ghost" style="padding: 0.1rem 0.3rem; font-size: 0.7rem"
-                      @click="toggleGroup(g.columns.map(c => c.name), false)">−</button>
+                  <div class="flex gap-1">
+                    <button type="button" class="rounded px-1.5 text-sm hover:bg-accent" @click="toggleGroup(g.columns.map(c => c.name), true)">+</button>
+                    <button type="button" class="rounded px-1.5 text-sm hover:bg-accent" @click="toggleGroup(g.columns.map(c => c.name), false)">−</button>
                   </div>
                 </div>
-                <div class="columns-grid-2">
-                  <label v-for="col in g.columns" :key="col.name" class="column-toggle">
-                    <input type="checkbox" :checked="col.visible" @change="toggleColumn(col.name)" />
-                    <span>{{ col.name }}</span>
+                <div class="grid grid-cols-2 gap-x-2 gap-y-0.5">
+                  <label v-for="col in g.columns" :key="col.name" class="flex cursor-pointer items-center gap-1.5 rounded px-1 py-0.5 text-sm hover:bg-accent">
+                    <input type="checkbox" class="size-3.5 accent-primary" :checked="col.visible" @change="toggleColumn(col.name)">
+                    <span class="truncate">{{ col.name }}</span>
                   </label>
                 </div>
               </div>
             </div>
-          </div>
-        </div>
-        <span class="spacer" />
-        <button :disabled="validating || !data" @click="ejecutarValidaciones()" title="Atajo: v">
+          </PopoverContent>
+        </Popover>
+        <span class="flex-1" />
+        <Button :disabled="validating || !data" title="Atajo: v" @click="ejecutarValidaciones()">
           {{ validating ? 'Validando…' : 'Validar' }}
-        </button>
-        <button class="secondary" @click="exportPickerOpen = true">
-          📂 {{ exportFolder ? 'Cambiar salida' : 'Carpeta de salida' }}
-        </button>
-        <button :disabled="exporting || !exportPath" @click="exportar">
+        </Button>
+        <Button variant="secondary" @click="exportPickerOpen = true">
+          <FolderOpen class="size-4" /> {{ exportFolder ? 'Cambiar salida' : 'Carpeta de salida' }}
+        </Button>
+        <Button :disabled="exporting || !exportPath" @click="exportar">
           {{ exporting ? 'Exportando…' : 'Exportar faltantes de soporte' }}
-        </button>
+        </Button>
       </div>
-      <div v-if="exportPath" class="muted mono small">
+      <p v-if="exportPath" class="break-all font-mono text-xs text-muted-foreground">
         Se guardará en: {{ exportPath }}
-      </div>
+      </p>
     </section>
 
     <DirectoryPicker
@@ -515,26 +512,26 @@ watch(loadId, refresh)
       @close="exportPickerOpen = false"
     />
 
-    <section v-if="loading && !data" class="table-card">
+    <section v-if="loading && !data" class="min-h-0 flex-1 overflow-hidden rounded-lg border border-border bg-card">
       <div class="data-table-wrapper">
         <table class="data">
           <thead>
-            <tr><th v-for="n in 8" :key="n" class="skel-cell">···</th></tr>
+            <tr><th v-for="n in 8" :key="n">···</th></tr>
           </thead>
           <tbody>
-            <tr v-for="r in 8" :key="r"><td v-for="c in 8" :key="c" class="skel-cell"><span class="skel-bar" /></td></tr>
+            <tr v-for="r in 8" :key="r"><td v-for="c in 8" :key="c"><span class="skel-bar" /></td></tr>
           </tbody>
         </table>
       </div>
     </section>
 
-    <section v-else-if="data && !data.rows.length" class="card center empty-state">
-      <div class="empty-icon">📭</div>
-      <h3 style="color: var(--text); margin-top: 0.5rem">Carga vacía</h3>
-      <p class="muted small">El Excel no tiene filas de datos.</p>
+    <section v-else-if="data && !data.rows.length" class="rounded-lg border border-border bg-card py-10 text-center">
+      <div class="text-4xl opacity-40">📭</div>
+      <h3 class="mt-2 font-heading text-lg text-foreground">Carga vacía</h3>
+      <p class="text-sm text-muted-foreground">El Excel no tiene filas de datos.</p>
     </section>
 
-    <section v-else-if="data" class="table-card">
+    <section v-else-if="data" class="min-h-0 flex-1 overflow-hidden rounded-lg border border-border bg-card">
       <div class="data-table-wrapper">
         <table class="data">
           <thead>
@@ -562,12 +559,12 @@ watch(loadId, refresh)
               <td class="status-col">
                 <template v-if="failuresByRow.has(Number(row.id))">
                   <span
-                    class="chip nc status-chip"
+                    class="inline-flex items-center justify-center rounded-full bg-status-error-bg px-1.5 text-status-error"
                     :title="failuresByRow.get(Number(row.id))"
                   >⚠</span>
                 </template>
                 <template v-else-if="hasValidationRun">
-                  <span class="status-ok" title="Pasa todas las validaciones">✓</span>
+                  <span class="font-bold text-status-success opacity-70" title="Pasa todas las validaciones">✓</span>
                 </template>
               </td>
               <td
@@ -576,27 +573,28 @@ watch(loadId, refresh)
                 :class="{ num: numericColumns.has(cell.column.id) }"
               >
                 <template v-if="cell.column.id === 'Tipo de documento' && isNotaCredito(row.original as Row)">
-                  <span class="chip nc" style="margin-right: 6px">NC</span>
+                  <span class="mr-1.5 inline-flex items-center rounded-full bg-status-error-bg px-1.5 text-[10px] font-medium text-status-error">NC</span>
                 </template>
                 <FlexRender :render="cell.column.columnDef.cell" :props="cell.getContext()" />
               </td>
               <td class="approve-col">
                 <template v-if="v3FailingRows.has(Number(row.id)) || v3Overrides.has(Number(row.id))">
-                  <label class="approve-check" :title="v3Overrides.has(Number(row.id)) ? 'Aprobado: V3 ignorado para esta fila' : 'Aprobar V3 manualmente'">
+                  <label class="inline-flex cursor-pointer items-center justify-center rounded p-1 hover:bg-accent" :title="v3Overrides.has(Number(row.id)) ? 'Aprobado: V3 ignorado para esta fila' : 'Aprobar V3 manualmente'">
                     <input
                       type="checkbox"
+                      class="size-4 cursor-pointer accent-primary"
                       :checked="v3Overrides.has(Number(row.id))"
                       :disabled="togglingOverride === Number(row.id)"
                       @change="toggleOverride(Number(row.id))"
-                    />
+                    >
                   </label>
                 </template>
               </td>
             </tr>
             <tr v-if="onlyFailing && table.getRowModel().rows.length === 0">
-              <td :colspan="visibleCount + 2" class="empty muted">
+              <td :colspan="visibleCount + 2" class="py-6 text-center text-sm text-muted-foreground">
                 Sin filas no conformes con el filtro actual.
-                <button class="ghost" style="margin-left: 0.4rem" @click="onlyFailing = false">Mostrar todas</button>
+                <Button variant="ghost" size="sm" class="ml-1" @click="onlyFailing = false">Mostrar todas</Button>
               </td>
             </tr>
           </tbody>
@@ -607,87 +605,57 @@ watch(loadId, refresh)
 </template>
 
 <style scoped>
-.search-wrap { position: relative; flex: 1 1 18rem; min-width: 12rem; }
-.search-wrap input { padding-left: 1.7rem; width: 100%; }
-.search-icon { position: absolute; left: 0.5rem; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 0.85rem; }
-
-.text-danger { color: var(--chip-nc-fg); }
-.text-ok { color: var(--chip-ok-fg); }
-
-.badge-count {
-  background: var(--chip-nc-bg);
-  color: var(--chip-nc-fg);
-  border: 1px solid var(--chip-nc-border);
-  padding: 1px 6px;
-  border-radius: 999px;
-  font-size: 0.7rem;
-  margin-left: 0.4rem;
-  font-weight: 700;
+/* Data grid — token-based (no raw hex / palette utilities). The wrapper fills its flex parent
+   (height:100%) so ONLY the table scrolls — the page itself never grows (no double scroll). */
+.data-table-wrapper { overflow: auto; height: 100%; }
+table.data {
+  border-collapse: separate; border-spacing: 0;
+  width: max-content; min-width: 100%;
+  font-size: 0.8rem; font-variant-numeric: tabular-nums;
 }
-.secondary.pressed {
-  background: var(--accent-soft);
-  border-color: rgba(94,106,210,0.35);
-  color: var(--accent-hover);
-  font-weight: 600;
+table.data th, table.data td {
+  padding: 0.3rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap; vertical-align: middle;
 }
+table.data th {
+  background: var(--muted);
+  position: sticky; top: 0; z-index: 1;
+  text-align: left; font-weight: 600;
+  color: var(--muted-foreground);
+  font-size: 0.72rem;
+}
+table.data td.num, table.data th.num { text-align: right; }
+table.data tbody tr:hover td { background: color-mix(in oklab, var(--primary) 5%, transparent); }
 
 .status-col {
-  width: 32px;
-  text-align: center !important;
-  padding: 0.35rem 0.4rem !important;
-  position: sticky;
-  left: 0;
-  background: var(--panel-2);
-  z-index: 2;
+  width: 34px; text-align: center !important;
+  padding: 0.25rem 0.4rem !important;
+  position: sticky; left: 0; z-index: 2;
+  background: var(--muted);
   border-right: 1px solid var(--border);
 }
-table.data tbody tr:hover .status-col { background: var(--panel-3); }
-.status-chip { display: inline-flex; align-items: center; justify-content: center; cursor: help; padding: 1px 6px; }
-.status-ok { color: var(--ok); font-weight: 700; opacity: 0.7; }
-.row-failing td:not(.status-col):not(.approve-col) {
-  background: rgba(214, 40, 40, 0.05) !important;
-}
-.row-failing:hover td:not(.status-col):not(.approve-col) {
-  background: rgba(214, 40, 40, 0.10) !important;
-}
-.row-overridden td:not(.status-col):not(.approve-col) {
-  background: rgba(16, 185, 129, 0.05) !important;
-}
-.row-overridden:hover td:not(.status-col):not(.approve-col) {
-  background: rgba(16, 185, 129, 0.10) !important;
-}
+table.data tbody tr:hover .status-col { background: color-mix(in oklab, var(--primary) 8%, var(--muted)); }
 
 .approve-col {
-  width: 80px;
-  text-align: center !important;
-  padding: 0.35rem 0.5rem !important;
-  position: sticky;
-  right: 0;
-  background: var(--panel-2);
+  width: 84px; text-align: center !important;
+  padding: 0.25rem 0.5rem !important;
+  position: sticky; right: 0; z-index: 2;
+  background: var(--muted);
   border-left: 1px solid var(--border);
-  z-index: 2;
-  font-size: 0.7rem;
-  color: var(--muted);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-size: 0.68rem; color: var(--muted-foreground);
+  font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
 }
-table.data tbody tr:hover .approve-col { background: var(--panel-3); }
-.approve-check {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  padding: 0.2rem;
-  border-radius: 4px;
-}
-.approve-check input { accent-color: var(--ok); width: 16px; height: 16px; cursor: pointer; }
-.approve-check:hover { background: var(--accent-soft); }
+table.data tbody tr:hover .approve-col { background: color-mix(in oklab, var(--primary) 8%, var(--muted)); }
 
-.skel-cell { height: 32px; }
+.row-failing td:not(.status-col):not(.approve-col) { background: color-mix(in oklab, var(--status-error) 8%, transparent) !important; }
+.row-failing:hover td:not(.status-col):not(.approve-col) { background: color-mix(in oklab, var(--status-error) 14%, transparent) !important; }
+.row-overridden td:not(.status-col):not(.approve-col) { background: color-mix(in oklab, var(--status-success) 8%, transparent) !important; }
+.row-overridden:hover td:not(.status-col):not(.approve-col) { background: color-mix(in oklab, var(--status-success) 14%, transparent) !important; }
+
 .skel-bar {
   display: block; height: 0.7rem; width: 70%; border-radius: 4px;
-  background: linear-gradient(90deg, var(--panel-2), var(--panel-3), var(--panel-2));
+  background: linear-gradient(90deg, var(--muted), var(--accent), var(--muted));
   background-size: 200% 100%;
   animation: skel-shimmer 1.4s linear infinite;
 }
@@ -695,22 +663,4 @@ table.data tbody tr:hover .approve-col { background: var(--panel-3); }
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
 }
-
-.empty-state { padding: 2rem 1rem; }
-.empty-icon { font-size: 2.5rem; opacity: 0.4; }
-
-.columns-groups { display: flex; flex-direction: column; gap: 0.4rem; }
-.column-group {
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 0.35rem 0.5rem;
-}
-.column-group-head {
-  display: flex; align-items: center; justify-content: space-between;
-  font-size: 0.72rem; color: var(--muted); font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.04em;
-  margin-bottom: 0.3rem;
-}
-.columns-grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.1rem 0.4rem; }
 </style>

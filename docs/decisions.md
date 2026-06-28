@@ -491,6 +491,47 @@ Sino, sea base_19 = IVA / 0.19
 
 ---
 
+## D-053 — El frontend adopta el design system Dandelyon (sub-marca Órbita) ✅
+**Fecha**: 2026-06-28
+**Decisión**: `apps/desktop` deja su dark-theme propio y **consume el design system Dandelyon**, sub-marca **Órbita (Contabilidad)**, vía *copy-in* desde el repo hermano `design-studio` (`SKuger/DandeLyon-DesignSystem`). Stack: tokens shadcn + Tailwind v4 (`@tailwindcss/vite`) + reka-ui + shadcn-nuxt + @nuxt/fonts, `ssr:false`. Look horneado con `.theme-orbita` (acento índigo `#2b1dc3`, sol `#FDB813`) + `data-*` en `<html>` (concept=faro, spine=beacon, strength=definido, density=media, accent-spread=sutil, swell=alto, ocean-tint=accent, fraunces/beam=on). El store `usePlayground()` se reemplaza por el composable mínimo `app/composables/useBrand.ts`; NO se copia el panel "Control de marca" ni los componentes solo-playground.
+**Razón**: issue `SKuger/CKounting#1`. Unifica la identidad visual con el resto de la familia Dandelyon y aporta un shell maduro (sidebar + topbar + ⌘K + beacon).
+**Regla de oro**: en `.vue`/`.ts` solo tokens semánticos (`bg-primary`, `text-status-error`), nunca hex crudo ni utilidades de paleta; los hex viven en `main.css` y en SVGs de marca.
+**Implicación**: deps nuevas incluyen `@lucide/vue` y `typescript`, que los componentes `ui/` verbatim requieren aunque el issue no los listó. Trabajado en la rama `feat/design-system-orbita` (commit por fase, sin trailer de co-autoría).
+
+## D-054 — La migración del design system se hizo solo en el shell; las páginas quedan diferidas ✅
+**Fecha**: 2026-06-28
+**Decisión**: En esta entrega solo se migró el **shell** (layout: sidebar + topbar). Las **páginas** reales (Empresas, Carga, Consulta DIAN) y los componentes `DirectoryPicker`/`ToastContainer` **conservan su CSS propio viejo** y se ven crudas temporalmente; se re-tematizan a tokens/shadcn en una sesión de seguimiento.
+**Razón**: elección explícita del usuario ("solo shell, páginas después") para ver el shell Órbita rápido sin rehacer todas las páginas de una vez. Cierra la Fase 8 del issue a nivel shell; el "cero hex crudo" total queda pendiente para las páginas.
+**Implicación**: hasta re-tematizar, el interior de las páginas no usa tokens. El `main.css` viejo se reemplazó completo, así que las clases bespoke (`.card`, `table.data`, `.chip`, etc.) ya no existen — el follow-up debe reconstruir esas vistas con componentes `ui/`.
+**Actualización 2026-06-28 (mismo día)**: el follow-up se hizo enseguida. **Todas** las páginas (`index`, `empresa`, `load`, `consulta-dian`) y los componentes `DirectoryPicker` (→ `Dialog`) y `ToastContainer` se re-tematizaron a shadcn/tokens. Regla de oro verificada (0 hex crudo / 0 utilidades de paleta / 0 tokens viejos). La tabla `@tanstack` de `load.vue` mantiene CSS scoped pero **basado en tokens** (`--muted`, `--border`, `--status-*`, `color-mix`) para las columnas sticky y los tints de fila. Fase 8 del issue cumplida en toda la app. Aparte: el crédito `MakerCredit` se actualizó a «Creado por: SKuger · V<version>» localmente como stopgap (design-system issue #1 sigue abierto para la fuente compartida).
+
+---
+
+## D-055 — Densidad de "instrumento" + mejor uso del viewport (pase UX) ✅
+**Fecha**: 2026-06-28
+**Decisión**: Tras una auditoría UX (queja del usuario: "mucho scroll, espacio desperdiciado"), se ajusta el sistema de densidad y los layouts de las páginas para una herramienta densa, no una landing:
+- **Densidad como única palanca real** (en `main.css`): `--pg-section-gap` por densidad (consumida por el concepto faro, resolviendo la colisión de especificidad que clavaba el gap), padding de `[data-pg-content]`, y reglas que comprimen el **interior de las Card** (`[data-slot=card|card-header|card-content|card-footer]`), colocadas tras los concept-skins para ganar el desempate. Una palanca mueve todo el aire.
+- **Densidad horneada = `compacta`** (era `media`) en `nuxt.config.ts` (`<html data-density>`). Solo afecta el contenido (`[data-pg-content]`), no el shell.
+- **Superficies de trabajo full-width** (`max-w-[120rem]`); solo flujos de lectura conservan cap (Consulta DIAN `max-w-5xl`).
+- **Scroll en el panel, no en la página**: `load.vue` con altura flex (root `flex h-full min-h-0` → tabla `flex-1` → wrapper `height:100%`), elimina el doble scroll; listas largas (PDFs) con `max-h` + overflow interno.
+- **Patrones**: Empresas = franja de stats/accesos + lista grid + "Nueva empresa" en `Dialog`. Detalle empresa = maestro-detalle (Archivos+Cargas angosto | PDFs ancho) + acciones de mantenimiento en un menú ⋯ (Popover).
+**Razón**: petición directa del usuario; auditoría confirmó que la raíz era la "torre de espaciado" de catálogo shadcn + caps de ancho que tiraban 25-30% del viewport.
+**Implicación**: el design system de Contab queda con densidad `compacta`; si una sub-marca/consumidor quiere más aire, la palanca `data-density` lo gobierna sin tocar componentes.
+
+---
+
+## D-056 — SidebarUser: gestor de cuenta + preferencias reales (consumo del DS, issue #2) ✅
+**Fecha**: 2026-06-28
+**Decisión**: Se consume del DS (`SKuger/DandeLyon-DesignSystem#2` / PR #4) el estándar *dual-source* de `SidebarUser`: composables `useUser` (multi-cuenta: editar/añadir/eliminar — nunca la última; persistido) + `usePrefs` (preferencias reales aplicadas al DOM) + efectos CSS (`data-reduce-motion`, `data-contrast`). En Contab:
+- **`usePrefs` es la ÚNICA fuente de tema/densidad/escala.** El toggle del topbar y la acción ⌘K enrutan por `usePrefs`; `useBrand` pierde su manejo de tema. La densidad horneada (D-055, `compacta`) pasa a ser el **default** de `usePrefs.density` (el usuario puede cambiarla y persiste).
+- **Sin backend de sesión (D-004 single-user)**: no hay auth que inyectar, así que el `localStorage` (`contab-user-accounts`, `contab-user-prefs`) ES la fuente real. Se siembra **una cuenta neutra editable** ("Mi cuenta"); se eliminan los perfiles demo del DS (Carlos Kuger/Ana Ríos).
+- **Notificaciones** (preferencia) controlan el badge de la campana del topbar.
+**Razón**: issue `SKuger/CKounting#2`. El DS define que los componentes compartidos son dual-source con features reales (no mocks).
+**Conciliación (en vivo)**: tema/densidad/escala/reduce-motion/alto-contraste se aplican al togglearlos; editar perfil se refleja; añadir/eliminar cuenta persiste; sin datos demo; cero errores. Hecho por etapas (composables → css → componente → cableado), commit por etapa.
+**Pendiente menor**: `region`/`notifications` quedan persistidas; cablear `region` al formato de números de las tablas es incremental (no bloquea la aceptación).
+
+---
+
 ## Decisiones pendientes (a tomar más adelante)
 
 - **D-E1-13** ⏸ Behavior de R-V3 cuando IVA = 0 (default actual: skip). Confirmar si lo cambiamos a "marcar excluido" o "tarifa 0%".
