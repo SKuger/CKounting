@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { Upload, ChevronRight } from 'lucide-vue-next'
+
 type Empresa = {
   db_path: string
   filename: string
@@ -126,127 +128,106 @@ onMounted(refresh)
 </script>
 
 <template>
-  <div class="home-page">
-    <header class="home-hero">
-      <h1>Empresas</h1>
-      <div class="muted small">Cada empresa = un archivo SQLite independiente.</div>
+  <div class="mx-auto flex w-full max-w-5xl flex-col gap-6">
+    <header>
+      <h1 class="font-heading text-2xl font-medium tracking-tight">Empresas</h1>
+      <p class="text-sm text-muted-foreground">Cada empresa = un archivo SQLite independiente.</p>
     </header>
 
-    <div class="home-grid">
-      <section class="card panel">
-        <div class="panel-head">
-          <h2>Tus empresas</h2>
-          <div class="row" style="gap: 0.5rem">
-            <label class="muted small" style="display: flex; align-items: center; gap: 0.3rem">
-              <input v-model="includeArchived" type="checkbox" />
+    <div class="grid gap-4 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+      <Card>
+        <CardHeader>
+          <CardTitle>Tus empresas</CardTitle>
+          <CardAction class="flex items-center gap-3">
+            <label class="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
+              <Checkbox v-model="includeArchived" />
               Mostrar archivadas
             </label>
-            <label class="file-picker">
-              <input
-                ref="restoreInputRef"
-                type="file"
-                accept=".zip,application/zip"
-                :disabled="restoring"
-                @change="handleRestorePicked"
-                style="display: none"
-              />
-              <span class="button-like" style="padding: 0.32rem 0.7rem; font-size: 0.78rem">
-                ⤴ Restaurar
-              </span>
-            </label>
-          </div>
-        </div>
-
-        <div v-if="loadingList" class="empty muted">Cargando…</div>
-        <div v-else-if="!empresas.length" class="empty muted">
-          Sin empresas aún. Crea la primera al lado →
-        </div>
-        <template v-else>
-          <ul class="empresa-list">
-            <li
-              v-for="e in activos"
-              :key="e.db_path"
-              class="empresa-item"
-              @click="navigateTo({ path: '/empresa', query: { db: e.db_path } })"
-            >
-              <div>
-                <div style="font-weight: 600">{{ e.razon_social || '(sin nombre)' }}</div>
-                <div class="muted mono small">{{ e.nit || '—' }} · {{ e.filename }}</div>
-              </div>
-              <span class="muted small mono">→</span>
-            </li>
-          </ul>
-          <div v-if="archivados.length && includeArchived" class="archived-section">
-            <h3>Archivadas</h3>
-            <ul class="empresa-list">
-              <li
-                v-for="e in archivados"
-                :key="e.db_path"
-                class="empresa-item archived"
-              >
-                <div @click="navigateTo({ path: '/empresa', query: { db: e.db_path } })" style="flex:1; cursor: pointer">
-                  <div style="font-weight: 600">
-                    {{ e.razon_social || '(sin nombre)' }}
-                    <span class="chip warn">archivada</span>
-                  </div>
-                  <div class="muted mono small">{{ e.nit || '—' }} · {{ e.filename }}</div>
-                </div>
-                <button
-                  class="ghost"
-                  :disabled="unarchiving === e.db_path"
-                  @click.stop="unarchive(e)"
+            <Button as-child variant="outline" size="sm" :disabled="restoring">
+              <label class="cursor-pointer">
+                <input
+                  ref="restoreInputRef"
+                  type="file"
+                  accept=".zip,application/zip"
+                  :disabled="restoring"
+                  class="hidden"
+                  @change="handleRestorePicked"
                 >
-                  {{ unarchiving === e.db_path ? 'Restaurando…' : 'Desarchivar' }}
+                <Upload class="size-3.5" />
+                Restaurar
+              </label>
+            </Button>
+          </CardAction>
+        </CardHeader>
+        <CardContent>
+          <p v-if="loadingList" class="py-8 text-center text-sm text-muted-foreground">Cargando…</p>
+          <p v-else-if="!empresas.length" class="py-8 text-center text-sm text-muted-foreground">
+            Sin empresas aún. Crea la primera al lado →
+          </p>
+          <template v-else>
+            <ul class="flex flex-col gap-2">
+              <li v-for="e in activos" :key="e.db_path">
+                <button
+                  type="button"
+                  class="flex w-full items-center justify-between gap-3 rounded-md border border-border bg-card px-3 py-2.5 text-left transition-colors hover:bg-accent"
+                  @click="navigateTo({ path: '/empresa', query: { db: e.db_path } })"
+                >
+                  <span class="min-w-0">
+                    <span class="block truncate font-medium">{{ e.razon_social || '(sin nombre)' }}</span>
+                    <span class="block truncate font-mono text-xs text-muted-foreground">{{ e.nit || '—' }} · {{ e.filename }}</span>
+                  </span>
+                  <ChevronRight class="size-4 shrink-0 text-muted-foreground" />
                 </button>
               </li>
             </ul>
-          </div>
-        </template>
-        <div v-if="restoring" class="muted small" style="margin-top: 0.4rem">Restaurando empresa…</div>
-      </section>
 
-      <section class="card panel">
-        <div class="panel-head">
-          <h2>Nueva empresa</h2>
-        </div>
-        <div class="form-grid">
-          <div class="form-field">
-            <label>NIT (sin DV)</label>
-            <input v-model="newNit" placeholder="900181831" inputmode="numeric" />
-            <div v-if="dvHint?.valid" class="muted small">
-              DV calculado: <strong style="color: var(--text)">{{ dvHint.computed_dv }}</strong>
+            <div v-if="archivados.length && includeArchived" class="mt-4 border-t border-border pt-3">
+              <h3 class="mb-2 font-mono text-xs uppercase tracking-wide text-muted-foreground">Archivadas</h3>
+              <ul class="flex flex-col gap-2">
+                <li
+                  v-for="e in archivados"
+                  :key="e.db_path"
+                  class="flex items-center justify-between gap-3 rounded-md border border-border bg-card px-3 py-2.5 opacity-70 transition-opacity hover:opacity-100"
+                >
+                  <button type="button" class="min-w-0 flex-1 cursor-pointer text-left" @click="navigateTo({ path: '/empresa', query: { db: e.db_path } })">
+                    <span class="flex items-center gap-2">
+                      <span class="truncate font-medium">{{ e.razon_social || '(sin nombre)' }}</span>
+                      <Badge variant="secondary">archivada</Badge>
+                    </span>
+                    <span class="block truncate font-mono text-xs text-muted-foreground">{{ e.nit || '—' }} · {{ e.filename }}</span>
+                  </button>
+                  <Button variant="ghost" size="sm" :disabled="unarchiving === e.db_path" @click.stop="unarchive(e)">
+                    {{ unarchiving === e.db_path ? 'Restaurando…' : 'Desarchivar' }}
+                  </Button>
+                </li>
+              </ul>
             </div>
+          </template>
+          <p v-if="restoring" class="mt-2 text-sm text-muted-foreground">Restaurando empresa…</p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Nueva empresa</CardTitle>
+        </CardHeader>
+        <CardContent class="flex flex-col gap-4">
+          <div class="flex flex-col gap-1.5">
+            <Label for="new-nit">NIT (sin DV)</Label>
+            <Input id="new-nit" v-model="newNit" placeholder="900181831" inputmode="numeric" />
+            <p v-if="dvHint?.valid" class="text-sm text-muted-foreground">
+              DV calculado: <strong class="text-foreground">{{ dvHint.computed_dv }}</strong>
+            </p>
           </div>
-          <div class="form-field">
-            <label>Razón social</label>
-            <input v-model="newRazonSocial" placeholder="REAL Seguros Ltda." />
+          <div class="flex flex-col gap-1.5">
+            <Label for="new-rs">Razón social</Label>
+            <Input id="new-rs" v-model="newRazonSocial" placeholder="REAL Seguros Ltda." />
           </div>
-          <button
-            :disabled="!newNit || !newRazonSocial || creating"
-            @click="crearEmpresa"
-          >
+          <Button :disabled="!newNit || !newRazonSocial || creating" @click="crearEmpresa">
             {{ creating ? 'Creando…' : 'Crear empresa' }}
-          </button>
-        </div>
-      </section>
+          </Button>
+        </CardContent>
+      </Card>
     </div>
   </div>
 </template>
-
-<style scoped>
-.home-page { display: flex; flex-direction: column; gap: 1rem; max-width: 1100px; margin: 0 auto; }
-.home-hero { padding: 0.2rem 0.2rem 0.5rem; }
-.home-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
-  gap: 0.95rem;
-}
-@media (max-width: 800px) { .home-grid { grid-template-columns: 1fr; } }
-.form-grid { display: flex; flex-direction: column; gap: 0.7rem; }
-.form-field { display: flex; flex-direction: column; gap: 0.3rem; }
-.form-field label { font-size: 0.78rem; color: var(--muted); }
-.archived-section { margin-top: 1rem; padding-top: 0.7rem; border-top: 1px dashed var(--border); }
-.archived-section h3 { font-size: 0.78rem; color: var(--muted); margin-bottom: 0.5rem; }
-.empresa-item.archived { opacity: 0.7; }
-.empresa-item.archived:hover { opacity: 1; }
-</style>
