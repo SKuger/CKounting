@@ -125,3 +125,30 @@ sqlite3 "$DB" "DELETE FROM pdf_cufe_index;"
 | **E2** — Backup/restore, edición de empresa | Medio | Alto si el usuario empieza a usarlo en serio. |
 | **E5** — PUC + catálogo de terceros | Alto | Conecta naturalmente con los resultados del scraper DIAN. |
 | **Tauri / E10** | Medio-alto | Empaquetar como `.msi` gestionando ambos sidecars. |
+
+---
+
+## Sesión 3 — 2026-06-28: design system Dandelyon (sub-marca Órbita)
+
+**Resultado**: el **shell** de `apps/desktop` adopta el design system Dandelyon (Órbita) siguiendo el issue `SKuger/CKounting#1` (8 fases). Rama `feat/design-system-orbita`, un commit por fase. El frontend pasó de un dark-theme propio a tokens shadcn + Tailwind v4 + reka-ui, con el look Órbita horneado (riel solar índigo). Ver D-053/D-054.
+
+### Fases (todas conciliadas + commiteadas)
+
+0. **Deps** — pinia, reka-ui, shadcn-nuxt, @nuxt/fonts, cva, clsx, tailwind-merge, lucide-vue-next, @vueuse/core, tailwindcss v4. (+`@lucide/vue` y `typescript`, que los componentes `ui/` verbatim requieren y el issue no listó.)
+1. **Tokens** — `main.css` = contrato del design system (verbatim salvo 3 bloques solo-playground: Apax @font-face, `.fonts-preload`, letterbox).
+2. **nuxt.config** — `ssr:false`, plugin Tailwind v4, `optimizeDeps`, fuentes fijas (Fraunces/Inter/IBM Plex Mono), FOUC con clave `contab-theme`, favicon de marca.
+3. **Componentes** — `ui/` (97 archivos) + 7 de marca, verbatim; `useBrand()` reemplaza el store `usePlayground()`.
+4. **Shell** — `layouts/default.vue`: sidebar (lockup + nav real Empresas/Consulta DIAN + cosmos + MakerCredit) + topbar (breadcrumb, ⌘K, beacon, notificaciones, toggle de tema). Nav navega (patrón `SidebarMenuButton as-child > NuxtLink`).
+5. **Tema horneado** — `.theme-orbita` (índigo `#2b1dc3`) + `data-*` en `<html>`.
+6-8. **Lockup + trampas + QA** — verificado en vivo con Playwright: claro/oscuro índigo (sin verdoso), ⌘K filtra/navega, toggle persiste, cero hex crudo en el shell, cero errores de consola.
+
+### Pendiente (diferido a propósito — decisión del usuario)
+- **Re-tematizar las páginas** (Empresas, Carga, Consulta DIAN, DirectoryPicker, ToastContainer): siguen con el CSS propio viejo y se ven crudas. Solo se migró el shell en esta entrega.
+
+### Próxima sesión — candidatos
+
+| Opción | Esfuerzo | Valor |
+|---|---|---|
+| **Re-tematizar páginas a tokens/shadcn** | Medio-alto | Cierra la migración del design system (Fase 8 "cero hex crudo" en todo). |
+| **PR de la rama** `feat/design-system-orbita` → cerrar issue #1 | Bajo | Mergear el shell. |
+| **Validar E-DIAN end-to-end** | Bajo-medio | Pendiente de la sesión 2. |

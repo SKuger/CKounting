@@ -491,6 +491,21 @@ Sino, sea base_19 = IVA / 0.19
 
 ---
 
+## D-053 — El frontend adopta el design system Dandelyon (sub-marca Órbita) ✅
+**Fecha**: 2026-06-28
+**Decisión**: `apps/desktop` deja su dark-theme propio y **consume el design system Dandelyon**, sub-marca **Órbita (Contabilidad)**, vía *copy-in* desde el repo hermano `design-studio` (`SKuger/DandeLyon-DesignSystem`). Stack: tokens shadcn + Tailwind v4 (`@tailwindcss/vite`) + reka-ui + shadcn-nuxt + @nuxt/fonts, `ssr:false`. Look horneado con `.theme-orbita` (acento índigo `#2b1dc3`, sol `#FDB813`) + `data-*` en `<html>` (concept=faro, spine=beacon, strength=definido, density=media, accent-spread=sutil, swell=alto, ocean-tint=accent, fraunces/beam=on). El store `usePlayground()` se reemplaza por el composable mínimo `app/composables/useBrand.ts`; NO se copia el panel "Control de marca" ni los componentes solo-playground.
+**Razón**: issue `SKuger/CKounting#1`. Unifica la identidad visual con el resto de la familia Dandelyon y aporta un shell maduro (sidebar + topbar + ⌘K + beacon).
+**Regla de oro**: en `.vue`/`.ts` solo tokens semánticos (`bg-primary`, `text-status-error`), nunca hex crudo ni utilidades de paleta; los hex viven en `main.css` y en SVGs de marca.
+**Implicación**: deps nuevas incluyen `@lucide/vue` y `typescript`, que los componentes `ui/` verbatim requieren aunque el issue no los listó. Trabajado en la rama `feat/design-system-orbita` (commit por fase, sin trailer de co-autoría).
+
+## D-054 — La migración del design system se hizo solo en el shell; las páginas quedan diferidas ✅
+**Fecha**: 2026-06-28
+**Decisión**: En esta entrega solo se migró el **shell** (layout: sidebar + topbar). Las **páginas** reales (Empresas, Carga, Consulta DIAN) y los componentes `DirectoryPicker`/`ToastContainer` **conservan su CSS propio viejo** y se ven crudas temporalmente; se re-tematizan a tokens/shadcn en una sesión de seguimiento.
+**Razón**: elección explícita del usuario ("solo shell, páginas después") para ver el shell Órbita rápido sin rehacer todas las páginas de una vez. Cierra la Fase 8 del issue a nivel shell; el "cero hex crudo" total queda pendiente para las páginas.
+**Implicación**: hasta re-tematizar, el interior de las páginas no usa tokens. El `main.css` viejo se reemplazó completo, así que las clases bespoke (`.card`, `table.data`, `.chip`, etc.) ya no existen — el follow-up debe reconstruir esas vistas con componentes `ui/`.
+
+---
+
 ## Decisiones pendientes (a tomar más adelante)
 
 - **D-E1-13** ⏸ Behavior de R-V3 cuando IVA = 0 (default actual: skip). Confirmar si lo cambiamos a "marcar excluido" o "tarifa 0%".
