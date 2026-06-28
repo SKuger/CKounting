@@ -194,24 +194,21 @@ onBeforeUnmount(() => ws?.close())
 </script>
 
 <template>
-  <div class="mx-auto flex w-full max-w-3xl flex-col gap-4">
+  <div class="mx-auto flex w-full max-w-5xl flex-col">
     <NuxtLink to="/" class="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground">
       <ArrowLeft class="size-3.5" /> Empresas
     </NuxtLink>
 
-    <div class="flex items-start justify-between gap-3">
-      <div>
-        <h1 class="font-heading text-2xl font-medium tracking-tight">Consulta DIAN · Terceros</h1>
-        <p class="text-sm text-muted-foreground">
-          Sube un Excel con la columna <span class="font-mono">NIT</span> y consulta el RUT de cada tercero
-          en el portal de la DIAN. El resultado se descarga como Excel con los datos combinados.
-        </p>
-      </div>
-      <span class="shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium" :class="modeBadgeClass">
-        {{ browserMode === 'human' ? '🟢 chrome real' : browserMode === 'auto' ? '🔴 modo automático' : '○ verificando…' }}
-      </span>
+    <div>
+      <h1 class="font-heading text-2xl font-medium tracking-tight">Consulta DIAN · Terceros</h1>
+      <p class="text-sm text-muted-foreground">
+        Sube un Excel con la columna <span class="font-mono">NIT</span> y consulta el RUT de cada tercero
+        en el portal de la DIAN. El resultado se descarga como Excel con los datos combinados.
+      </p>
     </div>
 
+    <!-- instrucciones (modo) | acción (carga/progreso) -->
+    <div class="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,0.85fr)]">
     <!-- Modo Navegador Humano (CDP :9222) -->
     <details class="overflow-hidden rounded-lg border border-border bg-card" :open="browserMode !== 'human'">
       <summary class="flex cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 select-none [&::-webkit-details-marker]:hidden">
@@ -252,14 +249,14 @@ onBeforeUnmount(() => ws?.close())
     <Card v-if="!running && !finished">
       <CardContent class="flex flex-col gap-4">
         <div
-          class="flex flex-col items-center gap-3 rounded-lg border-[1.5px] border-dashed px-4 py-7 text-center transition-colors"
+          class="flex flex-col items-center gap-2 rounded-lg border-[1.5px] border-dashed px-4 py-5 text-center transition-colors"
           :class="dragging ? 'border-primary bg-primary/5' : 'border-input'"
           @dragenter.prevent="dragging = true"
           @dragover.prevent="dragging = true"
           @dragleave.prevent="dragging = false"
           @drop.prevent="onDrop"
         >
-          <UploadCloud class="size-7 text-muted-foreground" />
+          <UploadCloud class="size-6 text-muted-foreground" />
           <p v-if="file">Archivo cargado: <span class="font-mono">{{ file.name }}</span></p>
           <p v-else class="text-muted-foreground">Arrastra aquí tu Excel <span class="font-mono">.xlsx</span> o selecciónalo</p>
           <Button as-child variant="outline" size="sm">
@@ -305,5 +302,6 @@ onBeforeUnmount(() => ws?.close())
         </div>
       </CardContent>
     </Card>
+    </div>
   </div>
 </template>

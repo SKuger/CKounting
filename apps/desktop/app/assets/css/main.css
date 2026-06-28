@@ -202,11 +202,15 @@
 :root[data-strength="equilibrado"] { --radius: 0.5rem; }   /* 8px */
 :root[data-strength="definido"]    { --radius: 0.25rem; }  /* 4px */
 :root[data-strength="nitido"]      { --radius: 0.125rem; } /* 2px (default) */
-:root[data-density="amplia"]   [data-pg-content] { padding: 2.5rem; }
-:root[data-density="media"]    [data-pg-content] { padding: 1.5rem; }
-:root[data-density="compacta"] [data-pg-content] { padding: 0.875rem; }
-:root[data-density="amplia"]   [data-pg-content] > div { gap: 2.5rem; }
-:root[data-density="compacta"] [data-pg-content] > div { gap: 0.875rem; }
+/* Density drives BOTH the content padding AND the inter-section gap (via --pg-section-gap,
+   consumed by the concept rule below) AND the interior of the cards (block further down, after
+   the concept skins so it wins same-specificity ties). One lever moves all the app's air. */
+:root[data-density="amplia"]   { --pg-section-gap: 2.25rem; }
+:root[data-density="media"]    { --pg-section-gap: 1.1rem; }
+:root[data-density="compacta"] { --pg-section-gap: 0.7rem; }
+:root[data-density="amplia"]   [data-pg-content] { padding: 2rem; }
+:root[data-density="media"]    [data-pg-content] { padding: 1.1rem; }
+:root[data-density="compacta"] [data-pg-content] { padding: 0.75rem; }
 
 /* ── Accent application INTENSITY (#5): how far the active accent (--primary) bleeds into the
    normally-NEUTRAL surfaces. Per-sub-brand, keyed by :root[data-accent-spread]; separate light/dark
@@ -294,7 +298,7 @@
   border-radius: 0 9999px 9999px 0; background: var(--primary);
   box-shadow: 0 0 8px color-mix(in oklab, var(--primary) 55%, transparent);
 }
-:root[data-concept="faro"] [data-pg-content] > div { display: flex; flex-direction: column; gap: 1.75rem; }
+:root[data-concept="faro"] [data-pg-content] > div { display: flex; flex-direction: column; gap: var(--pg-section-gap, 1.25rem); }
 :root[data-concept="faro"] [data-slot="card"] {
   border: 1px solid var(--border); border-radius: calc(var(--radius) + 2px); box-shadow: none; background: var(--card);
 }
@@ -700,6 +704,25 @@
   :root[data-motion="vivo"] [data-pg-content] [data-slot="card"] { transition: none; }
   :root[data-motion="vivo"] [data-pg-content] [data-slot="card"]:hover { transform: none; }
 }
+
+/* ════════ Density → CARD interior (placed AFTER the concept skins so it wins same-specificity
+   ties over the faro card padding). This is what makes the density lever actually compress the
+   ~96px of catalogue air inside each shadcn card — the bulk of the "wasted space". Lengths only
+   (token-safe). Tool density, not landing density. ════════ */
+:root[data-density="media"] [data-pg-content] [data-slot="card"] { padding-block: 1.1rem; gap: 1.1rem; }
+:root[data-density="media"] [data-pg-content] [data-slot="card-header"] { padding-inline: 1.1rem; padding-bottom: 0.7rem; }
+:root[data-density="media"] [data-pg-content] [data-slot="card-content"] { padding-inline: 1.1rem; }
+:root[data-density="media"] [data-pg-content] [data-slot="card-footer"] { padding-inline: 1.1rem; }
+
+:root[data-density="compacta"] [data-pg-content] [data-slot="card"] { padding-block: 0.8rem; gap: 0.75rem; }
+:root[data-density="compacta"] [data-pg-content] [data-slot="card-header"] { padding-inline: 0.8rem; padding-bottom: 0.6rem; }
+:root[data-density="compacta"] [data-pg-content] [data-slot="card-content"] { padding-inline: 0.8rem; }
+:root[data-density="compacta"] [data-pg-content] [data-slot="card-footer"] { padding-inline: 0.8rem; }
+
+:root[data-density="amplia"] [data-pg-content] [data-slot="card"] { padding-block: 1.75rem; gap: 1.5rem; }
+:root[data-density="amplia"] [data-pg-content] [data-slot="card-header"] { padding-inline: 1.75rem; }
+:root[data-density="amplia"] [data-pg-content] [data-slot="card-content"] { padding-inline: 1.75rem; }
+:root[data-density="amplia"] [data-pg-content] [data-slot="card-footer"] { padding-inline: 1.75rem; }
 
 /* ════════ Scrollbars — thin, rounded, translucent, theme-aware (replaces the ugly defaults) ════════ */
 /* Firefox / standard */

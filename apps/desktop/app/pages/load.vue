@@ -421,12 +421,13 @@ watch(loadId, refresh)
 </script>
 
 <template>
-  <div class="flex flex-col gap-4">
-    <header>
-      <NuxtLink :to="{ path: '/empresa', query: { db: dbPath } }" class="mb-1 inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground">
+  <div class="flex h-full min-h-0 flex-col">
+    <header class="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+      <NuxtLink :to="{ path: '/empresa', query: { db: dbPath } }" class="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground">
         <ArrowLeft class="size-3.5" /> {{ empresaInfo?.razon_social || 'Empresa' }}
       </NuxtLink>
-      <h1 class="font-heading text-2xl font-medium tracking-tight">Carga #{{ loadId }}</h1>
+      <span class="text-border">/</span>
+      <h1 class="font-heading text-xl font-medium tracking-tight">Carga #{{ loadId }}</h1>
       <p class="text-sm text-muted-foreground">
         <template v-if="data">{{ data.total }} filas · {{ data.columns.length }} columnas</template>
         <template v-if="hasValidationRun">
@@ -438,7 +439,7 @@ watch(loadId, refresh)
       </p>
     </header>
 
-    <section class="flex flex-col gap-2 rounded-lg border border-border bg-card p-3">
+    <section class="flex flex-col gap-2 rounded-lg border border-border bg-card p-2">
       <div class="flex flex-wrap items-center gap-2">
         <div class="relative min-w-48 flex-1">
           <Search class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -511,7 +512,7 @@ watch(loadId, refresh)
       @close="exportPickerOpen = false"
     />
 
-    <section v-if="loading && !data" class="overflow-hidden rounded-lg border border-border bg-card">
+    <section v-if="loading && !data" class="min-h-0 flex-1 overflow-hidden rounded-lg border border-border bg-card">
       <div class="data-table-wrapper">
         <table class="data">
           <thead>
@@ -530,7 +531,7 @@ watch(loadId, refresh)
       <p class="text-sm text-muted-foreground">El Excel no tiene filas de datos.</p>
     </section>
 
-    <section v-else-if="data" class="overflow-hidden rounded-lg border border-border bg-card">
+    <section v-else-if="data" class="min-h-0 flex-1 overflow-hidden rounded-lg border border-border bg-card">
       <div class="data-table-wrapper">
         <table class="data">
           <thead>
@@ -604,15 +605,16 @@ watch(loadId, refresh)
 </template>
 
 <style scoped>
-/* Data grid — token-based (no raw hex / palette utilities). */
-.data-table-wrapper { overflow: auto; max-height: calc(100vh - 250px); }
+/* Data grid — token-based (no raw hex / palette utilities). The wrapper fills its flex parent
+   (height:100%) so ONLY the table scrolls — the page itself never grows (no double scroll). */
+.data-table-wrapper { overflow: auto; height: 100%; }
 table.data {
   border-collapse: separate; border-spacing: 0;
   width: max-content; min-width: 100%;
   font-size: 0.8rem; font-variant-numeric: tabular-nums;
 }
 table.data th, table.data td {
-  padding: 0.45rem 0.7rem;
+  padding: 0.3rem 0.6rem;
   border-bottom: 1px solid var(--border);
   white-space: nowrap; vertical-align: middle;
 }
@@ -628,7 +630,7 @@ table.data tbody tr:hover td { background: color-mix(in oklab, var(--primary) 5%
 
 .status-col {
   width: 34px; text-align: center !important;
-  padding: 0.35rem 0.4rem !important;
+  padding: 0.25rem 0.4rem !important;
   position: sticky; left: 0; z-index: 2;
   background: var(--muted);
   border-right: 1px solid var(--border);
@@ -637,7 +639,7 @@ table.data tbody tr:hover .status-col { background: color-mix(in oklab, var(--pr
 
 .approve-col {
   width: 84px; text-align: center !important;
-  padding: 0.35rem 0.5rem !important;
+  padding: 0.25rem 0.5rem !important;
   position: sticky; right: 0; z-index: 2;
   background: var(--muted);
   border-left: 1px solid var(--border);

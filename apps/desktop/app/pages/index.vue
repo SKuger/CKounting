@@ -128,13 +128,13 @@ onMounted(refresh)
 </script>
 
 <template>
-  <div class="mx-auto flex w-full max-w-5xl flex-col gap-6">
+  <div class="mx-auto flex w-full max-w-[120rem] flex-col">
     <header>
       <h1 class="font-heading text-2xl font-medium tracking-tight">Empresas</h1>
       <p class="text-sm text-muted-foreground">Cada empresa = un archivo SQLite independiente.</p>
     </header>
 
-    <div class="grid gap-4 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+    <div class="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
       <Card>
         <CardHeader>
           <CardTitle>Tus empresas</CardTitle>
@@ -165,7 +165,7 @@ onMounted(refresh)
             Sin empresas aún. Crea la primera al lado →
           </p>
           <template v-else>
-            <ul class="flex flex-col gap-2">
+            <ul class="grid gap-2 sm:grid-cols-2 2xl:grid-cols-3">
               <li v-for="e in activos" :key="e.db_path">
                 <button
                   type="button"
@@ -183,7 +183,7 @@ onMounted(refresh)
 
             <div v-if="archivados.length && includeArchived" class="mt-4 border-t border-border pt-3">
               <h3 class="mb-2 font-mono text-xs uppercase tracking-wide text-muted-foreground">Archivadas</h3>
-              <ul class="flex flex-col gap-2">
+              <ul class="grid gap-2 sm:grid-cols-2 2xl:grid-cols-3">
                 <li
                   v-for="e in archivados"
                   :key="e.db_path"

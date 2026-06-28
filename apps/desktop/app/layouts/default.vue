@@ -151,7 +151,7 @@ onMounted(() => { pg.initTheme() })
 
       <!-- content -->
       <div class="min-h-0 flex-1 overflow-hidden">
-        <div data-pg-content class="h-full min-w-0 overflow-y-auto p-6">
+        <div data-pg-content class="h-full min-w-0 overflow-y-auto">
           <slot />
         </div>
       </div>

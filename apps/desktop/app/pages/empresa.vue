@@ -380,7 +380,7 @@ watch(dbPath, refresh)
 </script>
 
 <template>
-  <div class="mx-auto flex w-full max-w-6xl flex-col gap-5">
+  <div class="mx-auto flex w-full max-w-[120rem] flex-col">
     <header v-if="info" class="flex flex-wrap items-end justify-between gap-3">
       <div class="min-w-0 flex-1">
         <NuxtLink to="/" class="mb-1 inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground">
@@ -468,7 +468,7 @@ watch(dbPath, refresh)
             La carpeta está vacía. Pon tus reportes <span class="font-mono">.xlsx</span> ahí.
           </p>
 
-          <ul v-if="folderListing.files.length" class="flex flex-col gap-2">
+          <ul v-if="folderListing.files.length" class="flex max-h-[calc(100svh-26rem)] flex-col gap-2 overflow-y-auto pr-1">
             <li
               v-for="f in folderListing.files"
               :key="f.path"
@@ -552,7 +552,7 @@ watch(dbPath, refresh)
             <span v-if="indexStats.failed.length"> · {{ indexStats.failed.length }} con error</span>
           </div>
 
-          <ul v-if="pdfsListing.files.length" class="flex flex-col gap-2">
+          <ul v-if="pdfsListing.files.length" class="flex max-h-[calc(100svh-24rem)] flex-col gap-2 overflow-y-auto pr-1">
             <li v-for="f in pdfsListing.files" :key="f.path" class="flex flex-col rounded-md border border-border bg-card px-3 py-2.5">
               <div class="flex items-center gap-3">
                 <FileText class="size-5 shrink-0 text-muted-foreground" />
