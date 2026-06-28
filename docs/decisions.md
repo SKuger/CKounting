@@ -507,6 +507,19 @@ Sino, sea base_19 = IVA / 0.19
 
 ---
 
+## D-055 — Densidad de "instrumento" + mejor uso del viewport (pase UX) ✅
+**Fecha**: 2026-06-28
+**Decisión**: Tras una auditoría UX (queja del usuario: "mucho scroll, espacio desperdiciado"), se ajusta el sistema de densidad y los layouts de las páginas para una herramienta densa, no una landing:
+- **Densidad como única palanca real** (en `main.css`): `--pg-section-gap` por densidad (consumida por el concepto faro, resolviendo la colisión de especificidad que clavaba el gap), padding de `[data-pg-content]`, y reglas que comprimen el **interior de las Card** (`[data-slot=card|card-header|card-content|card-footer]`), colocadas tras los concept-skins para ganar el desempate. Una palanca mueve todo el aire.
+- **Densidad horneada = `compacta`** (era `media`) en `nuxt.config.ts` (`<html data-density>`). Solo afecta el contenido (`[data-pg-content]`), no el shell.
+- **Superficies de trabajo full-width** (`max-w-[120rem]`); solo flujos de lectura conservan cap (Consulta DIAN `max-w-5xl`).
+- **Scroll en el panel, no en la página**: `load.vue` con altura flex (root `flex h-full min-h-0` → tabla `flex-1` → wrapper `height:100%`), elimina el doble scroll; listas largas (PDFs) con `max-h` + overflow interno.
+- **Patrones**: Empresas = franja de stats/accesos + lista grid + "Nueva empresa" en `Dialog`. Detalle empresa = maestro-detalle (Archivos+Cargas angosto | PDFs ancho) + acciones de mantenimiento en un menú ⋯ (Popover).
+**Razón**: petición directa del usuario; auditoría confirmó que la raíz era la "torre de espaciado" de catálogo shadcn + caps de ancho que tiraban 25-30% del viewport.
+**Implicación**: el design system de Contab queda con densidad `compacta`; si una sub-marca/consumidor quiere más aire, la palanca `data-density` lo gobierna sin tocar componentes.
+
+---
+
 ## Decisiones pendientes (a tomar más adelante)
 
 - **D-E1-13** ⏸ Behavior de R-V3 cuando IVA = 0 (default actual: skip). Confirmar si lo cambiamos a "marcar excluido" o "tarifa 0%".

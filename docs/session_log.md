@@ -149,6 +149,14 @@ Tras el shell, se re-tematizaron **todas** las páginas a shadcn/tokens (D-054 a
 (0 hex crudo / 0 paleta / 0 tokens viejos), claro y oscuro OK, cero errores. Fase 8 del issue
 cumplida en toda la app.
 
+### Pase de UX (densidad + viewport) — D-055
+El usuario reportó "mucho scroll, espacio desperdiciado". Auditoría UX con workflow (5 críticas
+paralelas + síntesis) → raíz: torre de espaciado de catálogo + caps de ancho. Se implementó:
+densidad como palanca real (gap var + interior de Card) horneada en `compacta`, superficies de
+trabajo full-width, scroll en panel (carga con altura flex que mata el doble scroll), y patrones
+nuevos (landing con stats + Nueva empresa en Dialog; detalle empresa maestro-detalle + menú ⋯).
+Verificado en claro/oscuro, cero errores.
+
 ### Design system (repo hermano) — issues abiertos
 Surgieron 2 mejoras que van en `SKuger/DandeLyon-DesignSystem` (no en Contab):
 - **#1** MakerCredit → «Creado por: SKuger · V<version>» (sin corchetes, centrado). Ya aplicado
