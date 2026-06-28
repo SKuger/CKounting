@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { ArrowLeft, Pencil, FolderOpen, RefreshCw, FileText, Copy, Trash2, Archive, Download, ChevronRight } from 'lucide-vue-next'
+
 type EmpresaInfo = {
   db_path: string
   nit: string
@@ -378,53 +380,57 @@ watch(dbPath, refresh)
 </script>
 
 <template>
-  <div class="empresa-page">
-    <header v-if="info" class="empresa-hero">
-      <div style="flex: 1; min-width: 0">
-        <NuxtLink to="/" class="back-link">← Empresas</NuxtLink>
-        <div class="razon-row">
+  <div class="mx-auto flex w-full max-w-6xl flex-col gap-5">
+    <header v-if="info" class="flex flex-wrap items-end justify-between gap-3">
+      <div class="min-w-0 flex-1">
+        <NuxtLink to="/" class="mb-1 inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground">
+          <ArrowLeft class="size-3.5" /> Empresas
+        </NuxtLink>
+        <div class="flex flex-wrap items-center gap-2">
           <template v-if="editingRazon">
-            <input
+            <Input
               v-model="razonDraft"
               :disabled="savingRazon"
-              style="font-size: 1.4rem; padding: 0.3rem 0.55rem; min-width: 14rem"
+              class="h-10 max-w-sm text-lg"
               @keyup.enter="saveRazon"
               @keyup.escape="editingRazon = false"
             />
-            <button class="secondary" :disabled="savingRazon || !razonDraft.trim()" @click="saveRazon">
+            <Button variant="secondary" :disabled="savingRazon || !razonDraft.trim()" @click="saveRazon">
               {{ savingRazon ? 'Guardando…' : 'Guardar' }}
-            </button>
-            <button class="ghost" :disabled="savingRazon" @click="editingRazon = false">Cancelar</button>
+            </Button>
+            <Button variant="ghost" :disabled="savingRazon" @click="editingRazon = false">Cancelar</Button>
           </template>
           <template v-else>
-            <h1>{{ info.razon_social }}</h1>
-            <button class="ghost" style="padding: 0.2rem 0.5rem; font-size: 0.78rem" title="Editar razón social" @click="startEditingRazon">
-              ✎ Editar
-            </button>
+            <h1 class="font-heading text-2xl font-medium tracking-tight">{{ info.razon_social }}</h1>
+            <Button variant="ghost" size="sm" title="Editar razón social" @click="startEditingRazon">
+              <Pencil class="size-3.5" /> Editar
+            </Button>
           </template>
         </div>
-        <div class="muted">
-          NIT <strong>{{ info.nit }}{{ info.dv ? `-${info.dv}` : '' }}</strong>
-          <span class="muted small" style="margin-left: 0.5rem">(inmutable)</span>
-          <span class="dot">·</span>
-          <span v-if="info.default_folder" class="mono small">{{ info.default_folder }}</span>
-          <span v-else class="muted">sin carpeta configurada</span>
-        </div>
+        <p class="text-sm text-muted-foreground">
+          NIT <strong class="text-foreground">{{ info.nit }}{{ info.dv ? `-${info.dv}` : '' }}</strong>
+          <span class="ml-1 text-xs">(inmutable)</span>
+          <span class="mx-1.5 text-border">·</span>
+          <span v-if="info.default_folder" class="font-mono text-xs">{{ info.default_folder }}</span>
+          <span v-else>sin carpeta configurada</span>
+        </p>
       </div>
-      <div class="hero-actions">
-        <button class="secondary" :disabled="savingFolder" @click="folderPickerOpen = true">
-          📂 {{ info.default_folder ? 'Cambiar carpeta' : 'Elegir carpeta' }}
-        </button>
-        <button v-if="info.default_folder" class="ghost" :disabled="savingFolder" @click="clearFolder">
-          Quitar
-        </button>
+      <div class="flex gap-2">
+        <Button variant="secondary" :disabled="savingFolder" @click="folderPickerOpen = true">
+          <FolderOpen class="size-4" /> {{ info.default_folder ? 'Cambiar carpeta' : 'Elegir carpeta' }}
+        </Button>
+        <Button v-if="info.default_folder" variant="ghost" :disabled="savingFolder" @click="clearFolder">Quitar</Button>
       </div>
     </header>
 
-    <section v-else-if="loading" class="card center muted">Cargando empresa…</section>
-    <section v-else class="card">
-      <div class="alert error">Empresa no encontrada. <NuxtLink to="/">Volver</NuxtLink></div>
-    </section>
+    <Card v-else-if="loading"><CardContent class="py-10 text-center text-muted-foreground">Cargando empresa…</CardContent></Card>
+    <Card v-else>
+      <CardContent class="py-6">
+        <div class="rounded-md border border-status-error/30 bg-status-error-bg px-3 py-2 text-sm text-status-error">
+          Empresa no encontrada. <NuxtLink to="/" class="underline">Volver</NuxtLink>
+        </div>
+      </CardContent>
+    </Card>
 
     <DirectoryPicker
       :open="folderPickerOpen"
@@ -434,165 +440,144 @@ watch(dbPath, refresh)
       @close="folderPickerOpen = false"
     />
 
-    <div v-if="info" class="empresa-grid">
-      <section class="card panel files-panel">
-        <div class="panel-head">
-          <div>
-            <h2>Archivos en la carpeta</h2>
-            <div class="muted small" v-if="folderListing.folder">
+    <div v-if="info" class="grid items-start gap-4 md:grid-cols-2">
+      <Card>
+        <CardHeader>
+          <CardTitle>Archivos en la carpeta</CardTitle>
+          <CardDescription>
+            <template v-if="folderListing.folder">
               {{ folderListing.files.length }} archivo(s)
               <span v-if="pendingFiles.length">· {{ pendingFiles.length }} sin importar</span>
-            </div>
-            <div v-else class="muted small">Configura una carpeta para ver tus Excels aquí.</div>
-          </div>
-          <div class="row" v-if="info.default_folder">
-            <button class="ghost" :disabled="loading" @click="refreshFolderListing">↻</button>
-            <button
-              v-if="pendingFiles.length > 1"
-              :disabled="importing"
-              @click="importarPendientes"
-            >
+            </template>
+            <template v-else>Configura una carpeta para ver tus Excels aquí.</template>
+          </CardDescription>
+          <CardAction v-if="info.default_folder" class="flex items-center gap-2">
+            <Button variant="ghost" size="icon-sm" :disabled="loading" title="Refrescar" @click="refreshFolderListing">
+              <RefreshCw class="size-4" />
+            </Button>
+            <Button v-if="pendingFiles.length > 1" size="sm" :disabled="importing" @click="importarPendientes">
               Importar pendientes ({{ pendingFiles.length }})
-            </button>
+            </Button>
+          </CardAction>
+        </CardHeader>
+        <CardContent class="flex flex-col gap-3">
+          <div v-if="folderListing.error" class="rounded-md border border-status-warning/30 bg-status-warning-bg px-3 py-2 text-sm text-status-warning">
+            {{ folderListing.error }}
           </div>
-        </div>
+          <p v-if="info.default_folder && !folderListing.files.length && !folderListing.error" class="py-6 text-center text-sm text-muted-foreground">
+            La carpeta está vacía. Pon tus reportes <span class="font-mono">.xlsx</span> ahí.
+          </p>
 
-        <div v-if="folderListing.error" class="alert warn" style="margin-top: 0.6rem">
-          {{ folderListing.error }}
-        </div>
-
-        <div v-if="info.default_folder && !folderListing.files.length && !folderListing.error"
-          class="empty muted">
-          La carpeta está vacía. Pon tus reportes <span class="mono">.xlsx</span> ahí.
-        </div>
-
-        <ul v-if="folderListing.files.length" class="file-list">
-          <li
-            v-for="f in folderListing.files"
-            :key="f.path"
-            class="file-row"
-            :class="{ 'is-imported': f.imported, 'is-importing': importingPath === f.path }"
-          >
-            <div class="file-icon">📄</div>
-            <div class="file-meta">
-              <div class="file-name">
-                {{ f.name }}
-                <span v-if="f.imported" class="chip ok">importado</span>
-              </div>
-              <div class="muted small">
-                {{ fmtSize(f.size_bytes) }} · {{ fmtDate(f.mtime) }}
-                <NuxtLink
-                  v-if="f.imported_as_load_id"
-                  :to="{ path: '/load', query: { db: dbPath, id: f.imported_as_load_id } }"
-                  class="small"
-                  style="margin-left: 0.4rem"
-                >
-                  ver carga →
-                </NuxtLink>
-              </div>
-            </div>
-            <button
-              class="file-action"
-              :disabled="importing"
-              @click="importarPath(f.path)"
+          <ul v-if="folderListing.files.length" class="flex flex-col gap-2">
+            <li
+              v-for="f in folderListing.files"
+              :key="f.path"
+              class="flex items-center gap-3 rounded-md border px-3 py-2.5 transition-colors"
+              :class="importingPath === f.path ? 'border-primary bg-primary/5' : f.imported ? 'border-border bg-card opacity-90' : 'border-border bg-card'"
             >
-              {{
-                importingPath === f.path
-                  ? 'Importando…'
-                  : f.imported ? 'Re-importar' : 'Importar'
-              }}
-            </button>
-          </li>
-        </ul>
-
-        <details class="upload-secondary" :open="showUpload">
-          <summary @click="showUpload = !showUpload">Importar desde otra ubicación…</summary>
-          <p class="muted small">Sube un Excel que no esté en la carpeta de la empresa.</p>
-          <label class="file-picker">
-            <input
-              ref="fileInputRef"
-              type="file"
-              accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
-              :disabled="importing"
-              @change="handleExcelPicked"
-              style="display: none"
-            />
-            <span class="button-like">📂 Elegir archivo…</span>
-          </label>
-        </details>
-
-        <div v-if="lastImportMsg" class="alert ok" style="margin-top: 0.7rem">{{ lastImportMsg }}</div>
-      </section>
-
-      <section class="card panel pdfs-panel">
-        <div class="panel-head">
-          <div>
-            <h2>Soportes PDF</h2>
-            <div class="muted small" v-if="pdfsListing.folder">
-              {{ pdfsListing.files.length }} PDF(s) · {{ pdfsListing.indexed_cufe_count }} CUFE indexados
-            </div>
-            <div v-else class="muted small">Carpeta para la Validación 1 (CUFE en PDFs).</div>
-          </div>
-          <div class="row" v-if="info.pdfs_folder">
-            <button class="ghost" :disabled="reindexing" @click="reindexPdfs">
-              {{ reindexing ? 'Indexando…' : '↻ Re-indexar' }}
-            </button>
-          </div>
-        </div>
-        <div class="row" style="margin-top: 0.5rem">
-          <button class="secondary" :disabled="savingPdfsFolder" @click="pdfsPickerOpen = true">
-            📂 {{ info.pdfs_folder ? 'Cambiar carpeta' : 'Elegir carpeta de PDFs' }}
-          </button>
-          <button v-if="info.pdfs_folder" class="ghost" :disabled="savingPdfsFolder" @click="clearPdfsFolder">
-            Quitar
-          </button>
-        </div>
-        <div v-if="info.pdfs_folder" class="muted mono small" style="margin-top: 0.4rem">
-          {{ info.pdfs_folder }}
-        </div>
-
-        <div v-if="pdfsListing.error" class="alert warn" style="margin-top: 0.6rem">{{ pdfsListing.error }}</div>
-
-        <div v-if="indexStats" class="alert ok" style="margin-top: 0.6rem">
-          {{ indexStats.indexed_now }} nuevo(s), {{ indexStats.cached }} en caché
-          <span v-if="indexStats.no_cufe.length"> · {{ indexStats.no_cufe.length }} sin CUFE</span>
-          <span v-if="indexStats.failed.length"> · {{ indexStats.failed.length }} con error</span>
-        </div>
-
-        <ul v-if="pdfsListing.files.length" class="file-list" style="margin-top: 0.6rem">
-          <li v-for="f in pdfsListing.files" :key="f.path" class="pdf-row">
-            <div class="pdf-row-top">
-              <div class="file-icon">📄</div>
-              <div class="file-meta">
-                <div class="file-name">
-                  {{ f.name }}
-                  <span v-if="f.extraction_status === 'ok' && f.cufes.length" class="chip ok">
-                    {{ f.cufes[0].label || 'CUFE' }} encontrado
-                  </span>
-                  <span v-else-if="f.extraction_status === 'no_text'" class="chip warn">sin CUFE</span>
-                  <span v-else-if="f.extraction_status === 'error'" class="chip nc">error</span>
-                  <span v-else class="chip warn">sin indexar</span>
-                  <span v-if="f.is_stale" class="chip warn">modificado</span>
+              <FileText class="size-5 shrink-0 text-muted-foreground" />
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2">
+                  <span class="truncate font-medium">{{ f.name }}</span>
+                  <span v-if="f.imported" class="inline-flex shrink-0 items-center rounded-full bg-status-success-bg px-2 py-0.5 text-[10px] font-medium text-status-success">importado</span>
                 </div>
-                <div class="muted small">{{ fmtSize(f.size_bytes) }} · {{ fmtDate(f.mtime) }}</div>
+                <div class="text-xs text-muted-foreground">
+                  {{ fmtSize(f.size_bytes) }} · {{ fmtDate(f.mtime) }}
+                  <NuxtLink
+                    v-if="f.imported_as_load_id"
+                    :to="{ path: '/load', query: { db: dbPath, id: f.imported_as_load_id } }"
+                    class="ml-1 text-primary hover:underline"
+                  >ver carga →</NuxtLink>
+                </div>
               </div>
-            </div>
-            <div v-if="f.cufes.length" class="pdf-cufe-line mono">
-              <span class="muted small">{{ f.cufes[0].label || 'CUFE' }}:</span>
-              <span class="cufe-hex" :title="f.cufes[0].value">{{ f.cufes[0].value }}</span>
-              <button
-                class="ghost"
-                style="padding: 0.1rem 0.4rem; font-size: 0.7rem"
-                @click="copyToClipboard(f.cufes[0].value)"
-                title="Copiar"
-              >⧉</button>
-            </div>
-          </li>
-        </ul>
-        <div v-else-if="info.pdfs_folder && !pdfsListing.error" class="empty muted">
-          Sin PDFs en esta carpeta.
-        </div>
-      </section>
+              <Button size="sm" :variant="f.imported ? 'outline' : 'default'" :disabled="importing" @click="importarPath(f.path)">
+                {{ importingPath === f.path ? 'Importando…' : f.imported ? 'Re-importar' : 'Importar' }}
+              </Button>
+            </li>
+          </ul>
+
+          <details class="border-t border-border pt-3" :open="showUpload">
+            <summary class="cursor-pointer text-sm text-muted-foreground hover:text-foreground" @click="showUpload = !showUpload">
+              Importar desde otra ubicación…
+            </summary>
+            <p class="mt-1 text-xs text-muted-foreground">Sube un Excel que no esté en la carpeta de la empresa.</p>
+            <Button as-child variant="outline" size="sm" class="mt-2" :disabled="importing">
+              <label class="cursor-pointer">
+                <input
+                  ref="fileInputRef"
+                  type="file"
+                  accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                  :disabled="importing"
+                  class="hidden"
+                  @change="handleExcelPicked"
+                >
+                <FolderOpen class="size-4" /> Elegir archivo…
+              </label>
+            </Button>
+          </details>
+
+          <div v-if="lastImportMsg" class="rounded-md border border-status-success/30 bg-status-success-bg px-3 py-2 text-sm text-status-success">{{ lastImportMsg }}</div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Soportes PDF</CardTitle>
+          <CardDescription>
+            <template v-if="pdfsListing.folder">
+              {{ pdfsListing.files.length }} PDF(s) · {{ pdfsListing.indexed_cufe_count }} CUFE indexados
+            </template>
+            <template v-else>Carpeta para la Validación 1 (CUFE en PDFs).</template>
+          </CardDescription>
+          <CardAction v-if="info.pdfs_folder">
+            <Button variant="ghost" size="sm" :disabled="reindexing" @click="reindexPdfs">
+              <RefreshCw class="size-4" :class="reindexing ? 'animate-spin' : ''" /> {{ reindexing ? 'Indexando…' : 'Re-indexar' }}
+            </Button>
+          </CardAction>
+        </CardHeader>
+        <CardContent class="flex flex-col gap-3">
+          <div class="flex flex-wrap items-center gap-2">
+            <Button variant="secondary" size="sm" :disabled="savingPdfsFolder" @click="pdfsPickerOpen = true">
+              <FolderOpen class="size-4" /> {{ info.pdfs_folder ? 'Cambiar carpeta' : 'Elegir carpeta de PDFs' }}
+            </Button>
+            <Button v-if="info.pdfs_folder" variant="ghost" size="sm" :disabled="savingPdfsFolder" @click="clearPdfsFolder">Quitar</Button>
+          </div>
+          <div v-if="info.pdfs_folder" class="break-all font-mono text-xs text-muted-foreground">{{ info.pdfs_folder }}</div>
+
+          <div v-if="pdfsListing.error" class="rounded-md border border-status-warning/30 bg-status-warning-bg px-3 py-2 text-sm text-status-warning">{{ pdfsListing.error }}</div>
+
+          <div v-if="indexStats" class="rounded-md border border-status-success/30 bg-status-success-bg px-3 py-2 text-sm text-status-success">
+            {{ indexStats.indexed_now }} nuevo(s), {{ indexStats.cached }} en caché
+            <span v-if="indexStats.no_cufe.length"> · {{ indexStats.no_cufe.length }} sin CUFE</span>
+            <span v-if="indexStats.failed.length"> · {{ indexStats.failed.length }} con error</span>
+          </div>
+
+          <ul v-if="pdfsListing.files.length" class="flex flex-col gap-2">
+            <li v-for="f in pdfsListing.files" :key="f.path" class="flex flex-col rounded-md border border-border bg-card px-3 py-2.5">
+              <div class="flex items-center gap-3">
+                <FileText class="size-5 shrink-0 text-muted-foreground" />
+                <div class="min-w-0 flex-1">
+                  <div class="flex flex-wrap items-center gap-1.5">
+                    <span class="truncate font-medium">{{ f.name }}</span>
+                    <span v-if="f.extraction_status === 'ok' && f.cufes.length" class="inline-flex shrink-0 items-center rounded-full bg-status-success-bg px-2 py-0.5 text-[10px] font-medium text-status-success">{{ f.cufes[0].label || 'CUFE' }} encontrado</span>
+                    <span v-else-if="f.extraction_status === 'no_text'" class="inline-flex shrink-0 items-center rounded-full bg-status-warning-bg px-2 py-0.5 text-[10px] font-medium text-status-warning">sin CUFE</span>
+                    <span v-else-if="f.extraction_status === 'error'" class="inline-flex shrink-0 items-center rounded-full bg-status-error-bg px-2 py-0.5 text-[10px] font-medium text-status-error">error</span>
+                    <span v-else class="inline-flex shrink-0 items-center rounded-full bg-status-warning-bg px-2 py-0.5 text-[10px] font-medium text-status-warning">sin indexar</span>
+                    <span v-if="f.is_stale" class="inline-flex shrink-0 items-center rounded-full bg-status-warning-bg px-2 py-0.5 text-[10px] font-medium text-status-warning">modificado</span>
+                  </div>
+                  <div class="text-xs text-muted-foreground">{{ fmtSize(f.size_bytes) }} · {{ fmtDate(f.mtime) }}</div>
+                </div>
+              </div>
+              <div v-if="f.cufes.length" class="mt-2 flex items-center gap-2 border-t border-dashed border-border pt-2 font-mono text-xs">
+                <span class="shrink-0 text-muted-foreground">{{ f.cufes[0].label || 'CUFE' }}:</span>
+                <span class="min-w-0 flex-1 truncate text-foreground" :title="f.cufes[0].value">{{ f.cufes[0].value }}</span>
+                <Button variant="ghost" size="icon-sm" title="Copiar" @click="copyToClipboard(f.cufes[0].value)"><Copy class="size-3.5" /></Button>
+              </div>
+            </li>
+          </ul>
+          <p v-else-if="info.pdfs_folder && !pdfsListing.error" class="py-6 text-center text-sm text-muted-foreground">Sin PDFs en esta carpeta.</p>
+        </CardContent>
+      </Card>
       <DirectoryPicker
         :open="pdfsPickerOpen"
         :initial-path="info?.pdfs_folder || ''"
@@ -601,57 +586,54 @@ watch(dbPath, refresh)
         @close="pdfsPickerOpen = false"
       />
 
-      <section class="card panel loads-panel">
-        <div class="panel-head">
-          <div>
-            <h2>Cargas</h2>
-            <div class="muted small">Historial de importaciones de esta empresa.</div>
-          </div>
-        </div>
-        <div v-if="!cargas.length" class="empty muted">Aún no hay cargas.</div>
-        <ul v-else class="loads-list">
-          <li
-            v-for="c in cargas"
-            :key="c.id"
-            class="load-row"
-            @click="navigateTo({ path: '/load', query: { db: dbPath, id: c.id } })"
-          >
-            <div class="load-id mono">#{{ c.id }}</div>
-            <div class="load-meta">
-              <div class="load-name">{{ c.source_name }}</div>
-              <div class="muted small">
-                {{ c.total_rows }} filas · {{ c.loaded_at }}
-              </div>
-            </div>
-            <div class="muted small mono">→</div>
-          </li>
-        </ul>
-      </section>
+      <Card>
+        <CardHeader>
+          <CardTitle>Cargas</CardTitle>
+          <CardDescription>Historial de importaciones de esta empresa.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <p v-if="!cargas.length" class="py-6 text-center text-sm text-muted-foreground">Aún no hay cargas.</p>
+          <ul v-else class="flex flex-col gap-2">
+            <li v-for="c in cargas" :key="c.id">
+              <button
+                type="button"
+                class="flex w-full items-center gap-3 rounded-md border border-border bg-card px-3 py-2.5 text-left transition-colors hover:bg-accent"
+                @click="navigateTo({ path: '/load', query: { db: dbPath, id: c.id } })"
+              >
+                <span class="shrink-0 font-mono text-sm text-muted-foreground">#{{ c.id }}</span>
+                <span class="min-w-0 flex-1">
+                  <span class="block truncate font-medium">{{ c.source_name }}</span>
+                  <span class="block text-xs text-muted-foreground">{{ c.total_rows }} filas · {{ c.loaded_at }}</span>
+                </span>
+                <ChevronRight class="size-4 shrink-0 text-muted-foreground" />
+              </button>
+            </li>
+          </ul>
+        </CardContent>
+      </Card>
 
-      <section class="card panel actions-panel">
-        <div class="panel-head">
-          <div>
-            <h2>Acciones</h2>
-            <div class="muted small">Backup, archivar o eliminar esta empresa.</div>
+      <Card class="md:col-span-2">
+        <CardHeader>
+          <CardTitle>Acciones</CardTitle>
+          <CardDescription>Backup, archivar o eliminar esta empresa.</CardDescription>
+        </CardHeader>
+        <CardContent class="flex flex-col gap-3">
+          <div class="flex flex-wrap items-center gap-2">
+            <Button variant="secondary" :disabled="backingUp" @click="backupPickerOpen = true">
+              <Download class="size-4" /> {{ backingUp ? 'Generando…' : 'Hacer backup' }}
+            </Button>
+            <Button variant="ghost" :disabled="archiving" @click="archiveEmpresa">
+              <Archive class="size-4" /> {{ archiving ? 'Archivando…' : 'Archivar' }}
+            </Button>
+            <span class="flex-1" />
+            <Button variant="destructive" @click="openDeleteModal"><Trash2 class="size-4" /> Eliminar permanentemente</Button>
           </div>
-        </div>
-        <div class="row" style="margin-top: 0.6rem">
-          <button class="secondary" :disabled="backingUp" @click="backupPickerOpen = true">
-            {{ backingUp ? 'Generando…' : '💾 Hacer backup' }}
-          </button>
-          <button class="ghost" :disabled="archiving" @click="archiveEmpresa">
-            {{ archiving ? 'Archivando…' : '📦 Archivar' }}
-          </button>
-          <span class="spacer" />
-          <button class="danger" @click="openDeleteModal">🗑 Eliminar permanentemente</button>
-        </div>
-        <div v-if="backupResult" class="alert ok" style="margin-top: 0.7rem">
-          Backup creado: <span class="mono">{{ backupResult.path }}</span>
-          ({{ fmtSizeBytes(backupResult.size_bytes) }},
-          {{ backupResult.excels_included }} Excels,
-          {{ backupResult.pdfs_included }} PDFs).
-        </div>
-      </section>
+          <div v-if="backupResult" class="rounded-md border border-status-success/30 bg-status-success-bg px-3 py-2 text-sm text-status-success">
+            Backup creado: <span class="font-mono">{{ backupResult.path }}</span>
+            ({{ fmtSizeBytes(backupResult.size_bytes) }}, {{ backupResult.excels_included }} Excels, {{ backupResult.pdfs_included }} PDFs).
+          </div>
+        </CardContent>
+      </Card>
     </div>
 
     <DirectoryPicker
@@ -662,45 +644,29 @@ watch(dbPath, refresh)
       @close="backupPickerOpen = false"
     />
 
-    <div v-if="deleteModalOpen" class="modal-backdrop" @click.self="deleteModalOpen = false">
-      <div class="modal" style="max-width: 480px">
-        <header class="modal-header">
-          <h2 style="margin: 0">Eliminar empresa</h2>
-          <button class="ghost" style="padding: 0.3rem 0.6rem" @click="deleteModalOpen = false">✕</button>
-        </header>
-        <div class="modal-body" style="padding: 1rem 1.1rem">
-          <div class="alert error" style="margin-bottom: 0.7rem">
+    <Dialog v-model:open="deleteModalOpen">
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Eliminar empresa</DialogTitle>
+          <DialogDescription>Confirma la eliminación permanente de esta empresa.</DialogDescription>
+        </DialogHeader>
+        <div class="flex flex-col gap-3">
+          <div class="rounded-md border border-status-error/30 bg-status-error-bg px-3 py-2 text-sm text-status-error">
             Esta acción es <strong>irreversible</strong>. El archivo .db se borra permanentemente.
             Si quieres conservar la información, archiva la empresa o haz backup primero.
           </div>
-          <p class="muted small" style="margin-bottom: 0.5rem">
-            Escribe el NIT <strong style="color: var(--text)">{{ info?.nit }}</strong> para confirmar:
-          </p>
-          <input
-            v-model="deleteConfirmNit"
-            :placeholder="info?.nit"
-            style="width: 100%"
-            inputmode="numeric"
-          />
+          <div class="flex flex-col gap-1.5">
+            <Label for="del-nit">Escribe el NIT <strong class="text-foreground">{{ info?.nit }}</strong> para confirmar:</Label>
+            <Input id="del-nit" v-model="deleteConfirmNit" :placeholder="info?.nit" inputmode="numeric" />
+          </div>
         </div>
-        <footer class="modal-footer">
-          <span class="spacer" />
-          <button class="secondary" @click="deleteModalOpen = false">Cancelar</button>
-          <button
-            class="danger"
-            :disabled="deleting || deleteConfirmNit.trim() !== info?.nit"
-            @click="confirmDelete"
-          >
+        <DialogFooter>
+          <Button variant="secondary" @click="deleteModalOpen = false">Cancelar</Button>
+          <Button variant="destructive" :disabled="deleting || deleteConfirmNit.trim() !== info?.nit" @click="confirmDelete">
             {{ deleting ? 'Eliminando…' : 'Eliminar permanentemente' }}
-          </button>
-        </footer>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>
-
-<style scoped>
-.razon-row { display: flex; align-items: center; gap: 0.5rem; margin: 0.1rem 0; flex-wrap: wrap; }
-.razon-row h1 { margin: 0; }
-.actions-panel { grid-column: 1 / -1; }
-</style>
