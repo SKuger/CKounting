@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>Dandelyon</title>
+  <!-- The Dandelyon mark: the "D" with the sun inside it. A black tile carries a blue "D"
+       whose counter cradles a small blue sun. The tile gives its own contrast, so the mark
+       holds on any tab chrome (light or dark) and stays a legible, ownable letter-mark down
+       to 16px — unlike a free-floating sun, which read as generic and vanished at favicon size. -->
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="#000000"/>
+  <path d="M14,11 H31 A20.5,20.5 0 0 1 31,52 H14 Z M22,19 H30 A12.5,12.5 0 0 1 30,44 H22 Z"
+        fill="#4F8DF7" fill-rule="evenodd"/>
+  <g stroke="#4F8DF7" stroke-width="1.6" stroke-linecap="round">
+    <line x1="31" y1="26" x2="31" y2="23"/>
+    <line x1="34.89" y1="27.61" x2="37.01" y2="25.49"/>
+    <line x1="36.5" y1="31.5" x2="39.5" y2="31.5"/>
+    <line x1="34.89" y1="35.39" x2="37.01" y2="37.51"/>
+    <line x1="31" y1="37" x2="31" y2="40"/>
+    <line x1="27.11" y1="35.39" x2="24.99" y2="37.51"/>
+    <line x1="25.5" y1="31.5" x2="22.5" y2="31.5"/>
+    <line x1="27.11" y1="27.61" x2="24.99" y2="25.49"/>
+  </g>
+  <circle cx="31" cy="31.5" r="4.5" fill="#4F8DF7"/>
+</svg>
