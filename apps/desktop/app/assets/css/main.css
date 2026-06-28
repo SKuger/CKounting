@@ -1,554 +1,714 @@
-/* === Tokens (modo claro) === */
+/* Dandelyon brand playground — LEAN token contract (RFC 0008 Q4/Q5/Q7) */
+@import "tailwindcss";
+@import "tw-animate-css";
+@custom-variant dark (&:is(.dark *));
+
+/* ---- Brand primitives -> Tailwind color utilities (bg-dandelyon-sun, etc.) ---- */
+/* Dandelyon = the dandelion-as-sun → cosmos. Solar gold core + planet/nebula spectrum. */
+@theme {
+  --color-dandelyon-sun: #FDB813;
+  --color-dandelyon-gold: #B26B00;
+  --color-dandelyon-amber: #C2410C;
+  --color-dandelyon-nebula: #6D28D9;
+  --color-dandelyon-cyan: #0E7490;
+  --color-dandelyon-indigo: #1E1B4B;
+  --color-dandelyon-mars: #B91C1C;
+}
+
+/* ---- LIGHT: shadcn contract + accent-independent status + charts ---- */
 :root {
-  --bg: #f7f8fa;
-  --panel: #ffffff;
-  --panel-2: #f2f4f8;
-  --panel-3: #e7eaf0;
-  --border: #e3e6ed;
-  --border-strong: #c9cdd6;
-  --text: #0c0f17;
-  --text-soft: #353944;
-  --muted: #6b7280;
-  --accent: #5e6ad2;
-  --accent-hover: #4954bd;
-  --accent-soft: rgba(94, 106, 210, 0.10);
-  --danger: #d62828;
-  --warn: #b76a05;
-  --ok: #047857;
-  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
-  --shadow-md: 0 10px 28px rgba(15, 23, 42, 0.10);
-  --radius-sm: 6px;
-  --radius: 8px;
-  --radius-lg: 12px;
+  color-scheme: light;
+  --radius: 0.5rem;
 
-  /* Chip / alert tints */
-  --chip-ok-bg: rgba(16, 185, 129, 0.12);
-  --chip-ok-fg: #047857;
-  --chip-ok-border: rgba(4, 120, 87, 0.30);
-  --chip-nc-bg: rgba(214, 40, 40, 0.10);
-  --chip-nc-fg: #b91c1c;
-  --chip-nc-border: rgba(185, 28, 28, 0.30);
-  --chip-warn-bg: rgba(183, 106, 5, 0.12);
-  --chip-warn-fg: #92400e;
-  --chip-warn-border: rgba(146, 64, 14, 0.30);
-}
+  /* Physical device-frame bezel for the /mobile preview — a fixed near-black,
+     theme-independent (it's a phone chassis, not a UI surface). Token so the
+     no-hex gate stays clean. */
+  --pg-device-bezel: #0b0f14;
 
-/* === Reset === */
-*, *::before, *::after { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; height: 100%; }
-body {
-  background:
-    radial-gradient(ellipse 90vw 55vh at 50% -10%, rgba(94, 106, 210, 0.06), transparent 65%),
-    var(--bg);
-  color: var(--text);
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  font-size: 13.5px;
-  line-height: 1.5;
-  font-feature-settings: 'cv11', 'ss03';
-  letter-spacing: -0.005em;
-  -webkit-font-smoothing: antialiased;
-}
-#__nuxt { min-height: 100%; }
+  --background: #ffffff;
+  --foreground: #1a1d21;
+  --card: #ffffff;
+  --card-foreground: #1a1d21;
+  --popover: #ffffff;
+  --popover-foreground: #1a1d21;
+  --primary: #003A70;          /* brand accent (ERP=Navy default) — overridden at runtime */
+  --primary-foreground: #ffffff;
+  --secondary: #eeeeed;
+  --secondary-foreground: #1a1d21;
+  --muted: #f7f7f6;
+  --muted-foreground: #6b6e70;
+  --accent: #eeeeed;           /* shadcn neutral hover bg — NOT the brand accent */
+  --accent-foreground: #1a1d21;
+  --destructive: #8b1a2b;
+  --destructive-foreground: #ffffff;
+  --border: #e2e2e1;
+  --input: #e2e2e1;
+  --ring: #003A70;             /* focus ring follows the brand accent */
 
-a { color: var(--text-soft); text-decoration: none; }
-a:hover { color: var(--text); }
-.back-link { font-size: 0.8rem; color: var(--muted); display: inline-block; margin-bottom: 0.3rem; }
-.back-link:hover { color: var(--text); }
+  --sidebar: #f7f7f6;
+  --sidebar-foreground: #1a1d21;
+  --sidebar-primary: #003A70;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #eeeeed;
+  --sidebar-accent-foreground: #1a1d21;
+  --sidebar-border: #e2e2e1;
+  --sidebar-ring: #003A70;
 
-h1, h2, h3 { margin: 0; letter-spacing: -0.015em; font-weight: 600; }
-h1 { font-size: 1.5rem; line-height: 1.2; }
-h2 { font-size: 1.05rem; }
-h3 { font-size: 0.9rem; color: var(--muted); font-weight: 500; }
-p { margin: 0; }
+  /* ACCENT-INDEPENDENT STATUS PALETTE — never moves when the accent changes */
+  --status-success: #1b6b5a; --status-success-bg: #e8f5f1;
+  --status-warning: #7a5d00; --status-warning-bg: #fef6dc;
+  --status-error:   #8b1a2b; --status-error-bg:   #fceaee;
+  --status-info:    #003a70; --status-info-bg:    #e4edf7;
 
-.mono { font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 0.85em; }
-.muted { color: var(--muted); }
-.small { font-size: 0.78rem; }
-.dot { margin: 0 0.4rem; color: var(--border-strong); }
+  /* numbered chart palette (brand-derived — Dandelyon cosmos spectrum) */
+  --chart-1: #B26B00;
+  --chart-2: #0E7490;
+  --chart-3: #6D28D9;
+  --chart-4: #BE185D;
+  --chart-5: #1D4ED8;
 
-/* === Buttons === */
-button {
-  background: linear-gradient(180deg, #7480e0 0%, var(--accent) 100%);
-  color: white;
-  border: 0;
-  padding: 0.45rem 0.85rem;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-size: 0.82rem;
-  font-weight: 500;
-  font-family: inherit;
-  letter-spacing: -0.005em;
-  transition: transform 0.08s ease, filter 0.15s ease, background 0.15s ease;
-  box-shadow: 0 1px 0 rgba(255,255,255,0.18) inset, var(--shadow-sm);
-}
-button:hover:not(:disabled) { filter: brightness(0.96); }
-button:active:not(:disabled) { transform: translateY(1px); }
-button:disabled { opacity: 0.5; cursor: not-allowed; }
-
-button.secondary {
-  background: var(--panel);
-  color: var(--text);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-sm);
-}
-button.secondary:hover:not(:disabled) { background: var(--panel-2); border-color: var(--border-strong); }
-
-button.ghost {
-  background: transparent;
-  color: var(--muted);
-  border: 1px solid transparent;
-  padding: 0.35rem 0.65rem;
-  box-shadow: none;
-}
-button.ghost:hover:not(:disabled) { color: var(--text); background: var(--panel-2); border-color: var(--border); }
-
-button.danger {
-  background: linear-gradient(180deg, #e54a4a 0%, var(--danger) 100%);
+  /* font stacks — overridable at runtime (the pickers write these) */
+  --font-heading-stack: "Fraunces", "Times New Roman", serif;
+  --font-sans-stack: "Inter", system-ui, sans-serif;
+  --font-mono-stack: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-data-stack: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
-/* === Inputs === */
-input[type="text"], input[type="search"], input:not([type]), select {
-  background: var(--panel-2);
-  color: var(--text);
-  border: 1px solid var(--border);
-  padding: 0.45rem 0.7rem;
-  border-radius: var(--radius-sm);
-  font-size: 0.85rem;
-  font-family: inherit;
-  outline: none;
-  transition: border-color 0.15s ease, background 0.15s ease;
-}
-input:focus, select:focus { border-color: var(--accent); background: var(--panel-3); }
-input::placeholder { color: var(--muted); }
+/* ---- DARK overrides (.dark class) ---- */
+.dark {
+  color-scheme: dark;
+  --background: #0a0b1a;
+  --foreground: #e8eef5;
+  --card: #14152b;
+  --card-foreground: #e8eef5;
+  --popover: #14152b;
+  --popover-foreground: #e8eef5;
+  --primary: #A0D1CA;          /* ERP accent shifts to teal in dark */
+  --primary-foreground: #06121f;
+  --secondary: #1d1d3c;
+  --secondary-foreground: #e8eef5;
+  --muted: #15162e;
+  --muted-foreground: #9bb0c6;
+  --accent: #1d1d3c;
+  --accent-foreground: #e8eef5;
+  --destructive: #f4a0b0;
+  --destructive-foreground: #2a0a10;
+  --border: #2a2a48;
+  --input: #2a2a48;
+  --ring: #A0D1CA;
 
-/* === Layout shell === */
-.app-shell { display: flex; flex-direction: column; min-height: 100vh; }
+  --sidebar: #0a0a1a;
+  --sidebar-foreground: #e8eef5;
+  --sidebar-primary: #A0D1CA;
+  --sidebar-primary-foreground: #06121f;
+  --sidebar-accent: #1d1d3c;
+  --sidebar-accent-foreground: #e8eef5;
+  --sidebar-border: #2a2a48;
+  --sidebar-ring: #A0D1CA;
 
-.app-header {
-  position: sticky; top: 0; z-index: 30;
-  padding: 0.7rem 1.3rem;
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: saturate(140%) blur(10px);
-  -webkit-backdrop-filter: saturate(140%) blur(10px);
-  border-bottom: 1px solid var(--border);
-  display: flex; align-items: center; gap: 1rem;
-}
-.app-header .logo {
-  font-weight: 700; font-size: 1rem;
-  background: linear-gradient(90deg, #4954bd 0%, var(--accent) 100%);
-  -webkit-background-clip: text; background-clip: text; color: transparent;
-}
-.app-header .crumbs { color: var(--muted); font-size: 0.78rem; }
+  --status-success: #4cd1b0; --status-success-bg: #0c2a24;
+  --status-warning: #e6c34d; --status-warning-bg: #2e2606;
+  --status-error:   #f4a0b0; --status-error-bg:   #2a0a10;
+  --status-info:    #7fb0e6; --status-info-bg:    #0a1f38;
 
-.app-main {
-  flex: 1;
-  width: 100%;
-  padding: 1.2rem 1.5rem 2rem;
-}
-
-/* === Empresa switcher (header) === */
-.empresa-switcher { position: relative; }
-.switcher-trigger {
-  background: var(--panel-2);
-  color: var(--text);
-  border: 1px solid var(--border);
-  padding: 0.32rem 0.7rem;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-size: 0.82rem;
-  font-weight: 500;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  min-width: 14rem;
-  max-width: 22rem;
-  box-shadow: none;
-  transition: border-color 0.15s, background 0.15s;
-}
-.switcher-trigger:hover, .switcher-trigger.active {
-  background: var(--panel-3);
-  border-color: var(--border-strong);
-}
-.switcher-active {
-  display: flex; flex-direction: column;
-  align-items: flex-start; gap: 0; line-height: 1.2;
-  min-width: 0; flex: 1;
-}
-.switcher-name {
-  font-weight: 600;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  max-width: 16rem;
-}
-.switcher-caret {
-  color: var(--muted);
-  font-size: 0.7rem;
-  margin-left: auto;
-}
-.switcher-panel {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 40;
-  min-width: 100%;
-  max-width: 26rem;
-  background: var(--panel);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  padding: 0.5rem;
-  box-shadow: var(--shadow-md);
-}
-.switcher-head {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 0.2rem 0.4rem 0.5rem;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 0.4rem;
-}
-.switcher-list { list-style: none; padding: 0; margin: 0; max-height: 50vh; overflow: auto; }
-.switcher-list li {
-  padding: 0.4rem 0.55rem;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background 0.1s;
-}
-.switcher-list li:hover { background: var(--panel-2); }
-.switcher-list li.active {
-  background: var(--accent-soft);
-  border: 1px solid rgba(94,106,210,0.35);
-}
-.switcher-item-name { font-weight: 500; }
-
-/* === Toasts === */
-.toast-stack {
-  position: fixed;
-  top: 1rem;
-  right: 1rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  z-index: 70;
-  width: min(380px, calc(100vw - 2rem));
-  pointer-events: none;
-}
-.toast {
-  pointer-events: auto;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 0.6rem 0.75rem;
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 0.55rem;
-  align-items: flex-start;
-  box-shadow: var(--shadow-md);
-  font-size: 0.85rem;
-}
-.toast-icon {
-  width: 1.5rem; height: 1.5rem;
-  border-radius: 50%;
-  display: inline-flex; align-items: center; justify-content: center;
-  font-weight: 700;
-  font-size: 0.9rem;
-}
-.toast-success .toast-icon { background: var(--chip-ok-bg);   color: var(--chip-ok-fg); }
-.toast-error   .toast-icon { background: var(--chip-nc-bg);   color: var(--chip-nc-fg); }
-.toast-info    .toast-icon { background: var(--accent-soft);  color: var(--accent-hover); }
-.toast-warn    .toast-icon { background: var(--chip-warn-bg); color: var(--chip-warn-fg); }
-.toast-success { border-left: 3px solid var(--ok); }
-.toast-error   { border-left: 3px solid var(--danger); }
-.toast-warn    { border-left: 3px solid var(--warn); }
-.toast-info    { border-left: 3px solid var(--accent); }
-.toast-body { min-width: 0; line-height: 1.35; }
-.toast-title { font-weight: 500; }
-.toast-detail { color: var(--muted); font-size: 0.78rem; margin-top: 0.15rem; word-break: break-word; }
-.toast-close {
-  background: transparent;
-  border: 0;
-  color: var(--muted);
-  padding: 0.1rem 0.3rem;
-  font-size: 0.85rem;
-  cursor: pointer;
-  box-shadow: none;
-}
-.toast-close:hover { color: var(--text); }
-.toast-enter-from { opacity: 0; transform: translateX(20px); }
-.toast-enter-active, .toast-leave-active { transition: transform 0.18s ease, opacity 0.18s ease; }
-.toast-leave-to { opacity: 0; transform: translateX(20px); }
-
-/* === Cards === */
-.card {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 0.95rem 1.1rem;
-}
-.panel-head {
-  display: flex; align-items: flex-start; justify-content: space-between;
-  gap: 1rem;
-}
-.panel-head h2 { margin-bottom: 0.15rem; }
-.empty { padding: 1.2rem 0; text-align: center; font-size: 0.9rem; }
-.center { text-align: center; }
-
-.row { display: flex; gap: 0.55rem; align-items: center; flex-wrap: wrap; }
-.col { display: flex; flex-direction: column; gap: 0.85rem; }
-.spacer { flex: 1; }
-
-/* === Chips & badges === */
-.badge, .chip {
-  display: inline-flex; align-items: center; gap: 0.2rem;
-  padding: 1px 7px; border-radius: 999px;
-  font-size: 0.7rem; font-weight: 600;
-  letter-spacing: 0.01em; text-transform: lowercase;
-  vertical-align: middle;
-}
-.badge.nc, .chip.nc { background: var(--chip-nc-bg); color: var(--chip-nc-fg); border: 1px solid var(--chip-nc-border); }
-.badge.ok, .chip.ok { background: var(--chip-ok-bg); color: var(--chip-ok-fg); border: 1px solid var(--chip-ok-border); }
-.badge.warn, .chip.warn { background: var(--chip-warn-bg); color: var(--chip-warn-fg); border: 1px solid var(--chip-warn-border); }
-
-/* === Alerts === */
-.alert { padding: 0.55rem 0.75rem; border-radius: var(--radius-sm); border: 1px solid; font-size: 0.85rem; }
-.alert.info { background: var(--accent-soft); border-color: rgba(94,106,210,0.30); color: #3a3f7a; }
-.alert.ok { background: var(--chip-ok-bg); border-color: var(--chip-ok-border); color: var(--chip-ok-fg); }
-.alert.warn { background: var(--chip-warn-bg); border-color: var(--chip-warn-border); color: var(--chip-warn-fg); }
-.alert.error { background: var(--chip-nc-bg); border-color: var(--chip-nc-border); color: var(--chip-nc-fg); }
-
-/* === Empresas list (index) === */
-.empresa-list { display: grid; gap: 0.5rem; list-style: none; padding: 0; margin: 0; }
-.empresa-item {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 0.7rem 0.9rem;
-  background: var(--panel-2); border: 1px solid var(--border);
-  border-radius: var(--radius);
-  cursor: pointer; transition: border-color 0.15s, background 0.15s;
-}
-.empresa-item:hover { background: var(--panel-3); border-color: var(--border-strong); }
-
-/* === Empresa page === */
-.empresa-page { display: flex; flex-direction: column; gap: 0.95rem; }
-.empresa-hero {
-  display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem;
-  padding: 0.4rem 0.2rem;
-}
-.empresa-hero h1 { margin: 0.1rem 0; }
-.hero-actions { display: flex; gap: 0.4rem; }
-.empresa-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  grid-template-areas:
-    "files pdfs"
-    "loads loads"
-    "actions actions";
-  gap: 0.95rem;
-}
-.empresa-grid > .files-panel { grid-area: files; }
-.empresa-grid > .pdfs-panel { grid-area: pdfs; }
-.empresa-grid > .loads-panel { grid-area: loads; }
-.empresa-grid > .actions-panel { grid-area: actions; }
-@media (max-width: 1000px) {
-  .empresa-grid {
-    grid-template-columns: 1fr;
-    grid-template-areas: "files" "pdfs" "loads" "actions";
-  }
+  --chart-1: #F5C242;
+  --chart-2: #22D3EE;
+  --chart-3: #A78BFA;
+  --chart-4: #F472B6;
+  --chart-5: #60A5FA;
 }
 
-/* === File listing === */
-.pdf-row {
-  display: flex; flex-direction: column;
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 0.55rem 0.7rem;
-  transition: border-color 0.15s;
-}
-.pdf-row:hover { border-color: var(--border-strong); }
-.pdf-row-top { display: grid; grid-template-columns: auto 1fr; gap: 0.6rem; align-items: center; }
-.pdf-cufe-line {
-  display: flex; align-items: center; gap: 0.4rem;
-  margin-top: 0.35rem; padding-top: 0.35rem;
-  border-top: 1px dashed var(--border);
-  font-size: 0.72rem;
-  overflow: hidden;
-}
-.pdf-cufe-line .cufe-hex {
-  color: var(--text-soft);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  flex: 1; min-width: 0;
+/* ---- map runtime vars -> Tailwind v4 utilities ---- */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --color-status-success: var(--status-success);
+  --color-status-success-bg: var(--status-success-bg);
+  --color-status-warning: var(--status-warning);
+  --color-status-warning-bg: var(--status-warning-bg);
+  --color-status-error: var(--status-error);
+  --color-status-error-bg: var(--status-error-bg);
+  --color-status-info: var(--status-info);
+  --color-status-info-bg: var(--status-info-bg);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  /* all four slots routed through runtime-overridable *-stack vars (the pickers) */
+  --font-sans: var(--font-sans-stack);
+  --font-mono: var(--font-mono-stack);
+  --font-data: var(--font-data-stack);
+  --font-heading: var(--font-heading-stack);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
 }
 
-.file-list, .loads-list { list-style: none; padding: 0; margin: 0.7rem 0 0; display: flex; flex-direction: column; gap: 0.35rem; }
-.file-row {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 0.6rem; align-items: center;
-  padding: 0.55rem 0.7rem;
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  transition: border-color 0.15s, background 0.15s;
-}
-.file-row:hover { border-color: var(--border-strong); }
-.file-row.is-imported { opacity: 0.85; }
-.file-row.is-importing { border-color: var(--accent); background: var(--accent-soft); }
-.file-icon { font-size: 1.1rem; opacity: 0.7; }
-.file-meta { min-width: 0; }
-.file-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
-.file-action { padding: 0.32rem 0.7rem; font-size: 0.78rem; }
+/* (consumer note) Removed playground-only pieces: the Apax @font-face block (licensed font,
+   files absent here) and the .fonts-preload picker list. Órbita bakes Fraunces + Inter +
+   IBM Plex Mono, declared in nuxt.config (@nuxt/fonts). */
 
-.load-row {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 0.6rem; align-items: center;
-  padding: 0.55rem 0.7rem;
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  cursor: pointer; transition: border-color 0.15s, background 0.15s;
-}
-.load-row:hover { background: var(--panel-3); border-color: var(--border-strong); }
-.load-id { color: var(--muted); font-size: 0.8rem; min-width: 2.5em; text-align: right; }
-.load-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+/* ── Carácter, DECOUPLED (tweak #3): Radio (radius) and Densidad (spacing) are independent,
+   so Nítido can be sharp WITHOUT being cramped — calm precision. ── */
+:root[data-strength="suave"]       { --radius: 0.875rem; } /* 14px */
+:root[data-strength="equilibrado"] { --radius: 0.5rem; }   /* 8px */
+:root[data-strength="definido"]    { --radius: 0.25rem; }  /* 4px */
+:root[data-strength="nitido"]      { --radius: 0.125rem; } /* 2px (default) */
+:root[data-density="amplia"]   [data-pg-content] { padding: 2.5rem; }
+:root[data-density="media"]    [data-pg-content] { padding: 1.5rem; }
+:root[data-density="compacta"] [data-pg-content] { padding: 0.875rem; }
+:root[data-density="amplia"]   [data-pg-content] > div { gap: 2.5rem; }
+:root[data-density="compacta"] [data-pg-content] > div { gap: 0.875rem; }
 
-.upload-secondary {
-  margin-top: 0.9rem;
-  padding-top: 0.7rem;
-  border-top: 1px dashed var(--border);
+/* ── Accent application INTENSITY (#5): how far the active accent (--primary) bleeds into the
+   normally-NEUTRAL surfaces. Per-sub-brand, keyed by :root[data-accent-spread]; separate light/dark
+   mixes (dark needs lighter %s to stay legible). Tints ONLY neutral tokens — NEVER --status-*,
+   --chart-*, --card or --background (content legibility + status/chart independence preserved).
+   These set the BASE token vars, so concept skins reading var(--sidebar)/var(--border) inherit the
+   tint; a concept that hardcodes a colour simply composes on top. 'neutro' = no rule (defaults). ── */
+/* Sutil — a whisper of the accent */
+:root[data-accent-spread="sutil"]:not(.dark) {
+  --muted: color-mix(in oklab, var(--primary) 7%, #f7f7f6);
+  --sidebar: color-mix(in oklab, var(--primary) 7%, #f7f7f6);
+  --secondary: color-mix(in oklab, var(--primary) 9%, #eeeeed);
+  --accent: color-mix(in oklab, var(--primary) 9%, #eeeeed);
+  --sidebar-accent: color-mix(in oklab, var(--primary) 9%, #eeeeed);
+  --border: color-mix(in oklab, var(--primary) 11%, #e2e2e1);
+  --input: color-mix(in oklab, var(--primary) 11%, #e2e2e1);
+  --sidebar-border: color-mix(in oklab, var(--primary) 11%, #e2e2e1);
 }
-.upload-secondary summary {
-  cursor: pointer; font-size: 0.82rem; color: var(--muted);
-  padding: 0.2rem 0; user-select: none;
+.dark[data-accent-spread="sutil"] {
+  --muted: color-mix(in oklab, var(--primary) 6%, #15162e);
+  --sidebar: color-mix(in oklab, var(--primary) 6%, #0a0a1a);
+  --secondary: color-mix(in oklab, var(--primary) 8%, #1d1d3c);
+  --accent: color-mix(in oklab, var(--primary) 8%, #1d1d3c);
+  --sidebar-accent: color-mix(in oklab, var(--primary) 8%, #1d1d3c);
+  --border: color-mix(in oklab, var(--primary) 9%, #2a2a48);
+  --input: color-mix(in oklab, var(--primary) 9%, #2a2a48);
+  --sidebar-border: color-mix(in oklab, var(--primary) 9%, #2a2a48);
 }
-.upload-secondary summary:hover { color: var(--text); }
-
-.file-picker { display: inline-flex; cursor: pointer; margin-top: 0.5rem; }
-.file-picker .button-like {
-  display: inline-block; background: var(--accent); color: white;
-  padding: 0.45rem 0.85rem; border-radius: var(--radius-sm);
-  font-size: 0.82rem; font-weight: 500;
-  box-shadow: var(--shadow-sm);
-  transition: filter 0.15s;
+/* Teñido — the accent clearly colours the chrome */
+:root[data-accent-spread="tenido"]:not(.dark) {
+  --muted: color-mix(in oklab, var(--primary) 13%, #f7f7f6);
+  --sidebar: color-mix(in oklab, var(--primary) 13%, #f7f7f6);
+  --secondary: color-mix(in oklab, var(--primary) 16%, #eeeeed);
+  --accent: color-mix(in oklab, var(--primary) 16%, #eeeeed);
+  --sidebar-accent: color-mix(in oklab, var(--primary) 16%, #eeeeed);
+  --border: color-mix(in oklab, var(--primary) 19%, #e2e2e1);
+  --input: color-mix(in oklab, var(--primary) 19%, #e2e2e1);
+  --sidebar-border: color-mix(in oklab, var(--primary) 19%, #e2e2e1);
 }
-.file-picker:hover .button-like { filter: brightness(1.08); }
-
-/* === Modal (DirectoryPicker) === */
-.modal-backdrop {
-  position: fixed; inset: 0;
-  background: rgba(15, 23, 42, 0.35);
-  display: flex; align-items: center; justify-content: center;
-  z-index: 60;
-  backdrop-filter: blur(3px);
+.dark[data-accent-spread="tenido"] {
+  --muted: color-mix(in oklab, var(--primary) 10%, #15162e);
+  --sidebar: color-mix(in oklab, var(--primary) 10%, #0a0a1a);
+  --secondary: color-mix(in oklab, var(--primary) 12%, #1d1d3c);
+  --accent: color-mix(in oklab, var(--primary) 12%, #1d1d3c);
+  --sidebar-accent: color-mix(in oklab, var(--primary) 12%, #1d1d3c);
+  --border: color-mix(in oklab, var(--primary) 14%, #2a2a48);
+  --input: color-mix(in oklab, var(--primary) 14%, #2a2a48);
+  --sidebar-border: color-mix(in oklab, var(--primary) 14%, #2a2a48);
 }
-.modal {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  width: 720px; max-width: 92vw; max-height: 80vh;
-  display: flex; flex-direction: column;
-  box-shadow: var(--shadow-md);
+/* Inmersivo — the sub-brand owns the surfaces (German's "more shades on the lighter components") */
+:root[data-accent-spread="inmersivo"]:not(.dark) {
+  --muted: color-mix(in oklab, var(--primary) 22%, #f7f7f6);
+  --sidebar: color-mix(in oklab, var(--primary) 22%, #f7f7f6);
+  --secondary: color-mix(in oklab, var(--primary) 26%, #eeeeed);
+  --accent: color-mix(in oklab, var(--primary) 26%, #eeeeed);
+  --sidebar-accent: color-mix(in oklab, var(--primary) 26%, #eeeeed);
+  --border: color-mix(in oklab, var(--primary) 30%, #e2e2e1);
+  --input: color-mix(in oklab, var(--primary) 30%, #e2e2e1);
+  --sidebar-border: color-mix(in oklab, var(--primary) 30%, #e2e2e1);
 }
-.modal-header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 0.85rem 1.1rem; border-bottom: 1px solid var(--border);
-}
-.modal-toolbar {
-  display: flex; gap: 0.45rem; align-items: center;
-  padding: 0.5rem 1.1rem; border-bottom: 1px solid var(--border);
-}
-.breadcrumbs {
-  padding: 0.4rem 1.1rem; border-bottom: 1px solid var(--border);
-  display: flex; align-items: center; gap: 0.2rem; flex-wrap: wrap;
-  font-size: 0.78rem;
-}
-.breadcrumbs .crumb { padding: 0.15rem 0.45rem; font-size: 0.78rem; }
-.modal-body { flex: 1; overflow: auto; padding: 0.6rem 1.1rem; }
-.modal-footer {
-  display: flex; align-items: center; gap: 0.55rem;
-  padding: 0.75rem 1.1rem; border-top: 1px solid var(--border);
-}
-.dir-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.15rem; }
-.dir-item {
-  padding: 0.45rem 0.6rem;
-  border-radius: var(--radius-sm);
-  cursor: pointer; user-select: none;
-  transition: background 0.12s;
-}
-.dir-item:hover { background: var(--panel-2); }
-
-/* === Column visibility panel === */
-.columns-panel {
-  position: absolute; top: calc(100% + 6px); left: 0;
-  z-index: 25; min-width: 360px; max-width: 520px; max-height: 60vh;
-  overflow: auto;
-  background: var(--panel); border: 1px solid var(--border-strong);
-  border-radius: var(--radius); padding: 0.6rem 0.7rem;
-  box-shadow: var(--shadow-md);
-}
-.columns-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.15rem 0.5rem; }
-.column-toggle {
-  display: flex; align-items: center; gap: 0.4rem;
-  padding: 0.18rem 0.3rem; border-radius: 4px; cursor: pointer; font-size: 0.78rem;
-}
-.column-toggle:hover { background: var(--panel-2); }
-.column-toggle input { accent-color: var(--accent); }
-
-/* === Data table (load page) === */
-.load-page { display: flex; flex-direction: column; gap: 0.85rem; }
-
-.load-toolbar {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 0.75rem 0.95rem;
-  display: flex; flex-direction: column; gap: 0.55rem;
-}
-.load-toolbar-row {
-  display: flex; align-items: center; gap: 0.55rem; flex-wrap: wrap;
+.dark[data-accent-spread="inmersivo"] {
+  --muted: color-mix(in oklab, var(--primary) 15%, #15162e);
+  --sidebar: color-mix(in oklab, var(--primary) 15%, #0a0a1a);
+  --secondary: color-mix(in oklab, var(--primary) 18%, #1d1d3c);
+  --accent: color-mix(in oklab, var(--primary) 18%, #1d1d3c);
+  --sidebar-accent: color-mix(in oklab, var(--primary) 18%, #1d1d3c);
+  --border: color-mix(in oklab, var(--primary) 22%, #2a2a48);
+  --input: color-mix(in oklab, var(--primary) 22%, #2a2a48);
+  --sidebar-border: color-mix(in oklab, var(--primary) 22%, #2a2a48);
 }
 
-.table-card {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
+/* ════════ Layout concept skins (CSS-only, keyed by :root[data-concept]) ════════ */
+/* Generated per-concept (BACKBONE readings), authored in parallel. CONCEPT-SKINS-START */
+
+/* ===== Concept: "El Faro" (the lighthouse) — calm vigilance ===== */
+/* (topbar beacon removed — the live pilot light now lives on the logo's "P": .dandelyon-sun) */
+:root[data-concept="faro"] [data-pg-sidebar] { border-right: 1px solid var(--border); }
+:root[data-concept="faro"] [data-pg-sidebar] [data-active="true"],
+:root[data-concept="faro"] [data-pg-sidebar] .router-link-active {
+  position: relative; background: color-mix(in oklab, var(--primary) 10%, transparent); color: var(--foreground);
+}
+:root[data-concept="faro"] [data-pg-sidebar] [data-active="true"]::before,
+:root[data-concept="faro"] [data-pg-sidebar] .router-link-active::before {
+  content: ""; position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: 3px; height: 70%;
+  border-radius: 0 9999px 9999px 0; background: var(--primary);
+  box-shadow: 0 0 8px color-mix(in oklab, var(--primary) 55%, transparent);
+}
+:root[data-concept="faro"] [data-pg-content] > div { display: flex; flex-direction: column; gap: 1.75rem; }
+:root[data-concept="faro"] [data-slot="card"] {
+  border: 1px solid var(--border); border-radius: calc(var(--radius) + 2px); box-shadow: none; background: var(--card);
+}
+:root[data-concept="faro"] [data-slot="card-title"] { font-family: var(--font-heading); font-weight: 400; letter-spacing: -0.01em; }
+:root[data-concept="faro"] [data-slot="card-header"] {
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 70%, transparent); padding-bottom: 0.875rem;
 }
 
-.data-table-wrapper {
-  overflow: auto;
-  max-height: calc(100vh - 230px);
+/* ===== Concept: "Instrumento" — marine chronometer / observatory readout ===== */
+:root[data-concept="instrumento"] [data-slot="card"] {
+  border: 1px solid var(--border); background: var(--card); box-shadow: none;
 }
-table.data {
-  border-collapse: separate;
-  border-spacing: 0;
-  width: max-content;
-  min-width: 100%;
-  font-size: 0.8rem;
-  font-variant-numeric: tabular-nums;
+:root[data-concept="instrumento"] [data-slot="card-header"] {
+  position: relative; padding-block: 0.75rem; border-bottom: 1px solid var(--border);
 }
-table.data th, table.data td {
-  padding: 0.45rem 0.7rem;
-  border-bottom: 1px solid var(--border);
-  white-space: nowrap;
-  vertical-align: middle;
+:root[data-concept="instrumento"] [data-slot="card-header"]::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 5px;
+  background-image: repeating-linear-gradient(to right, var(--border) 0 1px, transparent 1px 12px);
+  pointer-events: none; opacity: 0.6;
 }
-table.data th {
-  background: var(--panel-2);
-  position: sticky; top: 0; z-index: 2;
-  text-align: left; font-weight: 600;
-  color: var(--text-soft);
-  border-bottom: 1px solid var(--border-strong);
-  font-size: 0.75rem;
-  text-transform: none;
-  letter-spacing: 0;
+:root[data-concept="instrumento"] [data-slot="card-title"] {
+  font-family: var(--font-mono); font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--foreground);
 }
-table.data tbody tr { transition: background 0.1s; }
-table.data tbody tr:hover td { background: rgba(94, 106, 210, 0.06); }
-table.data tbody tr:nth-child(even) td { background: rgba(15, 23, 42, 0.022); }
-table.data tbody tr:nth-child(even):hover td { background: rgba(94, 106, 210, 0.08); }
-table.data td.num, table.data th.num { text-align: right; font-variant-numeric: tabular-nums; }
-table.data td:first-child, table.data th:first-child { padding-left: 1rem; }
-table.data td:last-child, table.data th:last-child { padding-right: 1rem; }
+:root[data-concept="instrumento"] [data-slot="card-content"] { padding: 0.875rem 1rem 1rem; font-variant-numeric: tabular-nums; }
+:root[data-concept="instrumento"] [data-pg-content] > div { gap: 0.875rem; }
+:root[data-concept="instrumento"] [data-pg-topbar] { position: relative; }
+:root[data-concept="instrumento"] [data-pg-topbar]::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 4px;
+  background-image: repeating-linear-gradient(to right, var(--muted-foreground) 0 1px, transparent 1px 16px);
+  opacity: 0.35; pointer-events: none;
+}
+:root[data-concept="instrumento"] [data-pg-sidebar] [data-active="true"] { position: relative; border-radius: 2px; }
+:root[data-concept="instrumento"] [data-pg-sidebar] [data-active="true"]::before {
+  content: ""; position: absolute; left: 0; top: 50%; width: 2px; height: 14px; transform: translateY(-50%);
+  background: #FDB813; animation: instrumento-pulse 4s ease-in-out infinite;
+}
+@keyframes instrumento-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
 
-/* Small touches */
-::-webkit-scrollbar { width: 10px; height: 10px; }
+/* ===== Concept: "Observatorio al amanecer" — calm spatial, the smooth extreme ===== */
+:root[data-concept="observatorio"] [data-pg-content] { padding: clamp(2.5rem, 4vw, 4rem); }
+:root[data-concept="observatorio"] [data-pg-content] > div {
+  gap: clamp(3rem, 5vw, 5rem); max-width: 60rem; margin-inline: auto;
+}
+:root[data-concept="observatorio"] [data-slot="card"] {
+  border: none; box-shadow: none; background: var(--card); border-radius: calc(var(--radius) + 0.5rem);
+  padding-block: clamp(2rem, 3vw, 3rem); gap: 2rem;
+}
+:root[data-concept="observatorio"] [data-slot="card-content"] { padding-inline: clamp(1.5rem, 3vw, 3rem); }
+:root[data-concept="observatorio"] [data-slot="card-header"] {
+  padding-inline: clamp(1.5rem, 3vw, 3rem); padding-bottom: 1.5rem; position: relative;
+}
+:root[data-concept="observatorio"] [data-slot="card-header"]::after {
+  content: ""; position: absolute; left: clamp(1.5rem, 3vw, 3rem); right: clamp(1.5rem, 3vw, 3rem); bottom: 0; height: 1px;
+  background: linear-gradient(to right, color-mix(in oklab, var(--foreground) 14%, transparent), transparent 75%);
+}
+:root[data-concept="observatorio"] [data-slot="card-title"] {
+  font-family: var(--font-heading); font-size: clamp(1.75rem, 3vw, 2.5rem); font-weight: 400; line-height: 1.1;
+  letter-spacing: -0.015em; color: var(--foreground); position: relative; padding-left: 1.1em;
+}
+:root[data-concept="observatorio"] [data-slot="card-title"]::before {
+  content: ""; position: absolute; left: 0; top: 0.62em; width: 0.34em; height: 0.34em; border-radius: 9999px;
+  background: #FDB813; box-shadow: 0 0 0 0.18em color-mix(in oklab, #FDB813 16%, transparent);
+  animation: observatorio-pilot 5.5s ease-in-out infinite;
+}
+@keyframes observatorio-pilot {
+  0%, 100% { box-shadow: 0 0 0 0.18em color-mix(in oklab, #FDB813 16%, transparent); }
+  50%      { box-shadow: 0 0 0 0.34em color-mix(in oklab, #FDB813 7%, transparent); }
+}
+:root[data-concept="observatorio"] [data-pg-topbar] {
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 55%, transparent);
+  background: color-mix(in oklab, var(--card) 70%, var(--background));
+}
+:root[data-concept="observatorio"] [data-pg-sidebar] { background: color-mix(in oklab, var(--sidebar) 75%, var(--background)); }
+:root[data-concept="observatorio"] [data-pg-sidebar] [data-active="true"] {
+  background: color-mix(in oklab, var(--sidebar-accent) 60%, transparent); position: relative;
+}
+:root[data-concept="observatorio"] [data-pg-sidebar] [data-active="true"]::after {
+  content: ""; position: absolute; right: 0.7rem; top: 50%; transform: translateY(-50%);
+  width: 0.32rem; height: 0.32rem; border-radius: 9999px; background: #FDB813;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-concept="observatorio"] [data-slot="card-title"]::before { animation: none; }
+}
+
+/* ===== Concept: "Bitácora" — clinical logbook / editorial (Transparency) ===== */
+:root[data-concept="bitacora"] [data-pg-content] > div { max-width: 52rem; margin-inline: auto; counter-reset: bitacora; }
+:root[data-concept="bitacora"] [data-slot="card"] {
+  counter-increment: bitacora; border-radius: 0; border-color: var(--border);
+  border-top: 2px solid color-mix(in oklab, var(--foreground) 70%, transparent); box-shadow: none; background: var(--card);
+}
+:root[data-concept="bitacora"] [data-slot="card-header"] {
+  position: relative; padding-bottom: 1.25rem; border-bottom: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
+}
+:root[data-concept="bitacora"] [data-slot="card-title"] {
+  position: relative; font-family: var(--font-heading); font-weight: 400; font-size: 1.5rem; line-height: 1.15;
+  letter-spacing: -0.01em; padding-left: 3.25rem;
+}
+:root[data-concept="bitacora"] [data-slot="card-title"]::before {
+  content: "§ " counter(bitacora, decimal-leading-zero); position: absolute; left: 0; top: 0.15em;
+  font-family: var(--font-mono); font-size: 0.7rem; font-weight: 500; letter-spacing: 0.06em;
+  color: var(--muted-foreground); font-variant-numeric: tabular-nums;
+}
+:root[data-concept="bitacora"] [data-slot="card-title"]::after {
+  content: ""; display: inline-block; width: 0.4rem; height: 0.4rem; margin-left: 0.5rem; border-radius: 9999px;
+  background: #FDB813; vertical-align: 0.18em; animation: bitacora-pulse 4s ease-in-out infinite;
+}
+@keyframes bitacora-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 color-mix(in oklab, #FDB813 45%, transparent); }
+  50%      { opacity: 0.78; box-shadow: 0 0 0 3px color-mix(in oklab, #FDB813 0%, transparent); }
+}
+:root[data-concept="bitacora"] [data-slot="card-content"] { line-height: 1.6; }
+:root[data-concept="bitacora"] [data-pg-topbar] { border-bottom: 1px solid var(--border); font-family: var(--font-mono); letter-spacing: 0.02em; }
+:root[data-concept="bitacora"] [data-pg-sidebar] [data-active="true"] { border-left: 2px solid #FDB813; border-radius: 0; font-family: var(--font-heading); }
+
+/* ===== Concept: "Faro + Instrumento" (híbrido ★) — chronometer precision + a living beacon ===== */
+/* Instrumento structure: sharp 2px cards, hairline rules, engraved mono titles, ruler ticks, dense. */
+:root[data-concept="faro-instrumento"] [data-slot="card"] {
+  border: 1px solid var(--border); background: var(--card); box-shadow: none;
+}
+:root[data-concept="faro-instrumento"] [data-slot="card-header"] {
+  position: relative; padding-block: 0.75rem; border-bottom: 1px solid var(--border);
+}
+:root[data-concept="faro-instrumento"] [data-slot="card-header"]::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 5px;
+  background-image: repeating-linear-gradient(to right, var(--border) 0 1px, transparent 1px 12px);
+  pointer-events: none; opacity: 0.6;
+}
+:root[data-concept="faro-instrumento"] [data-slot="card-title"] {
+  font-family: var(--font-mono); font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--foreground);
+}
+:root[data-concept="faro-instrumento"] [data-slot="card-content"] { padding: 0.875rem 1rem 1rem; font-variant-numeric: tabular-nums; }
+:root[data-concept="faro-instrumento"] [data-pg-content] > div { gap: 1rem; }
+
+/* Chronometer tick scale on the topbar's lower edge (the live pilot light is on the logo). */
+:root[data-concept="faro-instrumento"] [data-pg-topbar] { position: relative; }
+:root[data-concept="faro-instrumento"] [data-pg-topbar]::before {
+  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 4px;
+  background-image: repeating-linear-gradient(to right, var(--muted-foreground) 0 1px, transparent 1px 16px);
+  opacity: 0.35; pointer-events: none;
+}
+
+/* Faro navigation: edge beam on the active item + the tower's guiding edge. */
+:root[data-concept="faro-instrumento"] [data-pg-sidebar] { border-right: 1px solid var(--border); }
+:root[data-concept="faro-instrumento"] [data-pg-sidebar] [data-active="true"] {
+  position: relative; border-radius: 2px; background: color-mix(in oklab, var(--primary) 10%, transparent);
+}
+:root[data-concept="faro-instrumento"] [data-pg-sidebar] [data-active="true"]::before {
+  content: ""; position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: 3px; height: 70%;
+  border-radius: 0 9999px 9999px 0; background: var(--primary);
+  box-shadow: 0 0 8px color-mix(in oklab, var(--primary) 55%, transparent);
+}
+
+/* CONCEPT-SKINS-END */
+
+/* ════════ Tier 3 — structural shell SPINES (keyed by :root[data-spine]) ════════ */
+
+/* ── Solar rail (the chosen Tier-3 direction): the sidebar becomes a lit solar edge;
+   the active item burns like the sun. The ⌘K search lives in the topbar
+   (CommandFirst). Console + Horizon were explored and dropped 2026-06-15. ── */
+:root[data-spine="beacon"] [data-pg-sidebar] {
+  border-right: 1px solid color-mix(in oklab, var(--primary) 35%, var(--sidebar-border));
+  background: linear-gradient(to right, color-mix(in oklab, var(--primary) 9%, transparent), transparent 30%), var(--sidebar);
+}
+:root[data-spine="beacon"] [data-pg-sidebar] [data-active="true"] {
+  position: relative;
+  background: color-mix(in oklab, var(--primary) 16%, transparent);
+  box-shadow: inset 0 0 20px color-mix(in oklab, var(--primary) 16%, transparent);
+}
+:root[data-spine="beacon"] [data-pg-sidebar] [data-active="true"]::before {
+  content: ""; position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+  width: 3px; height: 82%; border-radius: 0 9999px 9999px 0; background: var(--primary);
+  box-shadow: 0 0 12px 1px color-mix(in oklab, var(--primary) 70%, transparent);
+}
+
+/* Beam "sweep" (tweak #2): the lit beam animates in when the active route changes
+   (the lighthouse turning). Off when the switch is off or reduced-motion is set. */
+@keyframes beam-sweep {
+  from { transform: translateY(-50%) scaleY(0); opacity: 0; }
+  to   { transform: translateY(-50%) scaleY(1); opacity: 1; }
+}
+:root[data-beam="on"][data-spine="beacon"] [data-pg-sidebar] [data-active="true"]::before {
+  transform-origin: center; animation: beam-sweep 0.45s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-beam="on"][data-spine="beacon"] [data-pg-sidebar] [data-active="true"]::before { animation: none; }
+}
+
+/* Fraunces "moments" (tweak #5): card titles breathe in the display serif — quiet
+   warmth inside the sharp grid (composes with / overrides a concept's title font). */
+:root[data-fraunces="on"] [data-pg-content] [data-slot="card-title"] {
+  font-family: var(--font-heading); font-weight: 400; letter-spacing: -0.01em;
+}
+
+/* ── "Sistema solar" (2.5D): the WHOLE system seen at a tilt at the foot of the sidebar — the
+   Dandelyon sun at the centre, planets travelling along foreshortened elliptical orbits (CSS
+   offset-path → they read as a top-down-angled plane, near side big/bright, far side small/dim),
+   a quiet starfield, and a Star-Trek starship that flies THROUGH the system (scaling near→far
+   for depth). Whisper by default: low-opacity, currentColor (tinted via data-ocean-tint). Orbit +
+   corona speed follow the system status. The .cosmos-stage is centred in the band (which fills the
+   whole footer) so the ENTIRE system stays visible; data-swell zooms it. Sun at stage 120,40.
+   (Replaces the old horizon sea + boat.) ── */
+/* universe depth: the band's background is the BRAND colour, dark at the edges and getting LIGHTER
+   toward the sun (the sun lights the space around it). On-palette (mixes of the accent). The bottom
+   is masked to transparent so the maker ribbon underneath stays legible. */
+.pg-cosmos {
+  /* soft space in the PALETTE BLUE (indigo), not black: a lighter indigo at the centre fading to a
+     soft, medium indigo at the corners (never black). The lift is subtle so the sun never washes
+     out the planets — everything stays readable. Lit objects (`color` below) are a light tint. */
+  --space-blue: var(--color-dandelyon-indigo, #1E1B4B);
+  background: radial-gradient(circle at 50% 42%,
+    color-mix(in oklab, var(--space-blue) 72%, #07060f) 0%,
+    color-mix(in oklab, var(--space-blue) 52%, #040409) 55%,
+    color-mix(in oklab, var(--space-blue) 38%, #010104) 100%);
+}
+/* blur lives on the STAGE (planets/sun/stars) → diffuse; the ship stays crisp so it stands out */
+.cosmos-stage { position: absolute; left: 50%; top: 50%; width: 240px; height: 80px; transform: translate(-50%, -50%); filter: blur(0.35px); }
+
+/* foreshortened orbit rings (HTML ellipses centred on the sun) */
+.cosmos-orbit { position: absolute; left: 120px; top: 40px; transform: translate(-50%, -50%);
+  border: 1px solid currentColor; border-radius: 50%; opacity: 0.3; }
+
+/* planets travel the elliptical path (offset-path set inline per orbit); depth = scale+fade,
+   synced so the far side (top of the ellipse, 50%) is small/dim and the near side (bottom, 0/100%) big/bright */
+@keyframes pg-orbit-travel { from { offset-distance: 0%; } to { offset-distance: 100%; } }
+@keyframes pg-orbit-depth {
+  0%, 100% { opacity: 0.95; transform: scale(1); }
+  25%      { opacity: 0.6;  transform: scale(0.78); }
+  50%      { opacity: 0.3;  transform: scale(0.5); }
+  75%      { opacity: 0.6;  transform: scale(0.78); }
+}
+/* planets are little SPHERES: a radial gradient gives a lit side (toward the sun) + a shaded
+   terminator, so they read as 3D worlds. --pl sets each planet's hue (subtle palette variety). */
+.cosmos-planet { position: absolute; left: 0; top: 0; width: 6px; height: 6px; border-radius: 50%;
+  --pl: currentColor;
+  background: radial-gradient(circle at 34% 30%,
+    color-mix(in oklab, var(--pl) 28%, #ffffff) 0%,
+    var(--pl) 56%,
+    color-mix(in oklab, var(--pl) 72%, #15111f) 100%);
+  offset-rotate: 0deg; offset-anchor: 50% 50%;
+  animation: pg-orbit-travel linear infinite, pg-orbit-depth ease-in-out infinite; }
+.cosmos-planet.orbit-1 { width: 4px; height: 4px; animation-duration: 14s, 14s; } /* small rocky world */
+.cosmos-planet.orbit-2 { width: 9px; height: 9px; animation-duration: 24s, 24s; } /* Earth */
+.cosmos-planet.orbit-3 { width: 8px; height: 8px; animation-duration: 40s, 40s; } /* Mars */
+.cosmos-planet.orbit-4 { width: 9px; height: 9px; animation-duration: 60s, 60s; } /* Saturn (ringed gas giant) */
+/* Earth/Mars are drawn by an inline SVG that fills the planet → hide the gradient sphere behind it */
+.cosmos-planet.has-svg { background: none; }
+.cosmos-planet .planet-svg { display: block; width: 100%; height: 100%; }
+/* Saturn-style rings on the ringed planet (tilted ellipse, scales with the planet's depth) */
+.cosmos-planet.ringed::after {
+  content: ""; position: absolute; left: 50%; top: 50%; width: 18px; height: 6.5px;
+  transform: translate(-50%, -50%) rotate(-20deg); border: 1.2px solid currentColor;
+  border-radius: 50%; opacity: 0.8;
+}
+:root[data-status="drift"] .cosmos-planet.orbit-1 { animation-duration: 8s, 8s; }
+:root[data-status="drift"] .cosmos-planet.orbit-2 { animation-duration: 14s, 14s; }
+:root[data-status="drift"] .cosmos-planet.orbit-3 { animation-duration: 23s, 23s; }
+:root[data-status="drift"] .cosmos-planet.orbit-4 { animation-duration: 34s, 34s; }
+:root[data-status="out"]   .cosmos-planet.orbit-1 { animation-duration: 4.5s, 4.5s; }
+:root[data-status="out"]   .cosmos-planet.orbit-2 { animation-duration: 8s, 8s; }
+:root[data-status="out"]   .cosmos-planet.orbit-3 { animation-duration: 13s, 13s; }
+:root[data-status="out"]   .cosmos-planet.orbit-4 { animation-duration: 19s, 19s; }
+
+/* the sun at the centre: a breathing corona + a bright core */
+@keyframes pg-cosmos-sun-glow {
+  0%, 100% { opacity: 0.5; transform: translate(-50%, -50%) scale(1); }
+  50%      { opacity: 0.82; transform: translate(-50%, -50%) scale(1.18); }
+}
+/* the sun = a luminous STAR sphere: a hot bright centre → warm tint → a soft corona around it
+   (high-quality, matching the shaded planets) — kept contained so it doesn't wash out the planets */
+/* the sun is its own warm YELLOW (not the cosmos tint) — a bright sunny star */
+.cosmos-sun-glow { position: absolute; left: 120px; top: 40px; width: 30px; height: 30px; border-radius: 50%;
+  background: radial-gradient(circle, #ffe486 0%, #ffc61e 33%, color-mix(in oklab, #ffc61e 50%, transparent) 52%, transparent 74%);
+  transform: translate(-50%, -50%); animation: pg-cosmos-sun-glow 6s ease-in-out infinite; }
+.cosmos-sun-core { position: absolute; left: 120px; top: 40px; width: 14px; height: 14px; border-radius: 50%;
+  background: radial-gradient(circle at 42% 38%, #fff6d2 0%, #ffd64a 34%, #efa80c 86%);
+  box-shadow: 0 0 5px 0.5px color-mix(in oklab, #ffc61e 55%, transparent);
+  transform: translate(-50%, -50%); opacity: 1; }
+:root[data-status="drift"] .cosmos-sun-glow { animation-duration: 3.4s; }
+:root[data-status="out"]   .cosmos-sun-glow { animation-duration: 1.8s; }
+
+/* starfield (positions set inline per star) — on-palette currentColor */
+@keyframes pg-cosmos-twinkle { 0%, 100% { opacity: 0.2; } 50% { opacity: 0.9; } }
+.cosmos-star { position: absolute; border-radius: 50%; background: currentColor;
+  animation: pg-cosmos-twinkle ease-in-out infinite; }
+
+/* occasional shooting stars — a tail that trails the head along the exact travel line: the bar's
+   bright end (right = head) leads; rotate(--ang)+translateX move it head-first so the tail always
+   follows. --ang varies per meteor (set inline) so they don't always come from the same side. */
+@keyframes pg-meteor {
+  0%   { opacity: 0;   transform: rotate(var(--ang, 150deg)) translateX(0); }
+  1.5% { opacity: 0.9; }
+  6%   { opacity: 0;   transform: rotate(var(--ang, 150deg)) translateX(170px); }
+  100% { opacity: 0;   transform: rotate(var(--ang, 150deg)) translateX(170px); }
+}
+/* a shooting star = a tapering tail + a bright glowing HEAD dot at the leading end */
+.cosmos-meteor { position: absolute; width: 34px; height: 2px; border-radius: 2px; opacity: 0;
+  transform-origin: right center;
+  background: linear-gradient(to right, transparent, color-mix(in oklab, currentColor 72%, transparent) 62%, currentColor);
+  animation: pg-meteor linear infinite; }
+.cosmos-meteor::after {
+  content: ""; position: absolute; right: -1px; top: 50%; width: 4px; height: 4px; border-radius: 50%;
+  background: #fff; transform: translate(50%, -50%);
+  box-shadow: 0 0 5px 1.5px color-mix(in oklab, currentColor 85%, #fff);
+}
+
+/* the starship flies THROUGH the system — TWO crossings per loop from different sides + heights so
+   it never always comes from the same place: A) right → left up high, then B) left → right down low
+   (mirrored via scaleX(-1) so it faces its travel). Each scales near→far for depth. */
+@keyframes pg-ship-cross {
+  /* Event 1: normal cruise right → left, high */
+  0%   { opacity: 0;    left: 112%; top: 22%; transform: scale(0.5); }
+  3%   { opacity: 0.95; }
+  18%  { opacity: 0.95; left: 12%;  top: 22%; transform: scale(1.12); }
+  22%  { opacity: 0;    left: -26%; top: 22%; transform: scale(0.5); }
+  /* gap (invisible): reposition left + low + flipped to face right for the warp run */
+  40%  { opacity: 0;    left: -22%; top: 56%; transform: scale(0.6) scaleX(-1); }
+  /* Event 2: WARP JUMP left → right — drift in, slow to centre, then STRETCH + shoot off */
+  43%  { opacity: 0.95; left: -6%;  top: 56%; transform: scale(0.9)  scaleX(-1); }
+  53%  { opacity: 0.95; left: 46%;  top: 56%; transform: scale(1.05) scaleX(-1); }
+  55%  { opacity: 1;    left: 50%;  top: 56%; transform: scale(1.05) scaleX(-1); }    /* build-up hold */
+  57%  { opacity: 1;    left: 96%;  top: 56%; transform: scale(1.04) scaleX(-1.12); } /* WARP! quick acceleration (barely stretches) */
+  59%  { opacity: 0;    left: 165%; top: 56%; transform: scale(0.9)  scaleX(-1.2); }  /* zoomed off */
+  100% { opacity: 0;    left: 150%; top: 22%; transform: scale(0.5); }
+}
+@keyframes pg-ship-bob {
+  0%, 100% { transform: translateY(0) rotate(-3deg); }
+  50%      { transform: translateY(-2px) rotate(3deg); }
+}
+@keyframes pg-ship-light-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+/* NOTE: no CSS filter here — a filter rasterises the SVG, which then pixelates when the warp/cruise
+   transform scales it. Plain (vector) SVG stays crisp at any scale.
+   Hull colour = Starfleet silver-grey (the ship's original colour), not the cosmos tint. */
+.pg-ship { position: absolute; top: 22%; color: #c4c9d2; animation: pg-ship-cross 36s linear infinite; }
+.pg-ship .pg-ship-hull { display: block; animation: pg-ship-bob 4s ease-in-out infinite; }
+.pg-ship .ship-light { animation: pg-ship-light-blink 2.2s ease-in-out infinite; }
+:root[data-status="drift"] .pg-ship { animation-duration: 25s; }
+:root[data-status="out"]   .pg-ship { animation-duration: 17s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cosmos-planet, .cosmos-sun-glow, .cosmos-star { animation: none; }
+  .pg-ship, .cosmos-meteor { display: none; }
+}
+/* the band fills the whole footer (set in the component); data-swell ZOOMS the centred system
+   instead of changing the band height, so the full system stays centred + visible at every size. */
+:root[data-swell="bajo"] .cosmos-stage { transform: translate(-50%, -50%) scale(0.82); }
+:root[data-swell="alto"] .cosmos-stage { transform: translate(-50%, -50%) scale(1.12); }
+/* element colour = the brand tint, kept a touch SATURATED so every object reads on the pale-blue
+   field (nothing washed out). cyan · accent · default. */
+.pg-cosmos { color: color-mix(in oklab, var(--pg-cosmos-accent, var(--primary)) 82%, #fff4e0); }
+:root[data-ocean-tint="teal"]   .pg-cosmos { color: color-mix(in oklab, #22D3EE 88%, #fff); }
+:root[data-ocean-tint="accent"] .pg-cosmos { color: color-mix(in oklab, var(--pg-cosmos-accent, var(--primary)) 82%, #fff4e0); }
+
+/* The Dandelyon sun-core (the dot over the "D") is the ONE live beacon — it dims/brightens.
+   Always solar gold #FDB813 (never recolored); quickens subtly as the system goes off-range. */
+.dandelyon-sun {
+  fill: var(--pg-sun, #FDB813);
+  transform-box: fill-box; transform-origin: center;
+  animation: dandelyon-sun 3.8s ease-in-out infinite;
+}
+@keyframes dandelyon-sun {
+  0%, 100% { opacity: 0.5; transform: scale(0.9);  filter: drop-shadow(0 0 0 transparent); }
+  50%      { opacity: 1;   transform: scale(1.18); filter: drop-shadow(0 0 4px color-mix(in oklab, var(--pg-sun, #FDB813) 60%, transparent)); }
+}
+:root[data-status="drift"] .dandelyon-sun { animation-duration: 2.2s; }
+:root[data-status="out"]   .dandelyon-sun { animation-duration: 1.2s; }
+@media (prefers-reduced-motion: reduce) { .dandelyon-sun { animation: none; opacity: 1; transform: none; } }
+
+/* ════════ Per-sub-brand CHARACTER axes (#11) — placed LAST so each wins same-specificity ties
+   over the concept-skin / strength / fraunces rules it overrides. Default levels emit nothing,
+   so they compose cleanly with everything above. All per-sub-brand (data-* written by apply()). ── */
+
+/* Forma — per-SB corner character; OVERRIDES the global Radio (strength) for that sub-brand.
+   'auto' (default) emits no rule → the global radius stands. */
+:root[data-forma="recta"] { --radius: 0.125rem; }
+:root[data-forma="media"] { --radius: 0.5rem; }
+:root[data-forma="suave"] { --radius: 1rem; }
+
+/* Profundidad — elevation on cards; wins over a concept's box-shadow:none when set. */
+:root[data-depth="medio"] [data-slot="card"] {
+  box-shadow: 0 1px 2px color-mix(in oklab, var(--foreground) 6%, transparent),
+              0 2px 6px color-mix(in oklab, var(--foreground) 7%, transparent);
+}
+:root[data-depth="elevado"] [data-slot="card"] {
+  box-shadow: 0 2px 4px color-mix(in oklab, var(--foreground) 8%, transparent),
+              0 8px 20px color-mix(in oklab, var(--foreground) 12%, transparent);
+}
+
+/* Énfasis tipográfico — display-serif usage on content card titles (composes over data-fraunces). */
+:root[data-emphasis="sobrio"] [data-pg-content] [data-slot="card-title"] {
+  font-family: var(--font-sans); font-weight: 600; letter-spacing: 0;
+}
+:root[data-emphasis="editorial"] [data-pg-content] [data-slot="card-title"] {
+  font-family: var(--font-heading); font-weight: 400; font-size: 1.5rem; letter-spacing: -0.02em; line-height: 1.15;
+}
+
+/* Movimiento — liveliness. Quieto stills the beam sweep; Vivo lifts cards on hover. */
+:root[data-motion="quieto"] [data-pg-sidebar] [data-active="true"]::before { animation: none !important; }
+:root[data-motion="vivo"] [data-pg-content] [data-slot="card"] { transition: transform 0.18s ease, box-shadow 0.18s ease; }
+:root[data-motion="vivo"] [data-pg-content] [data-slot="card"]:hover { transform: translateY(-2px); }
+@media (prefers-reduced-motion: reduce) {
+  :root[data-motion="vivo"] [data-pg-content] [data-slot="card"] { transition: none; }
+  :root[data-motion="vivo"] [data-pg-content] [data-slot="card"]:hover { transform: none; }
+}
+
+/* ════════ Scrollbars — thin, rounded, translucent, theme-aware (replaces the ugly defaults) ════════ */
+/* Firefox / standard */
+* { scrollbar-width: thin; scrollbar-color: color-mix(in oklab, var(--muted-foreground) 50%, transparent) transparent; }
+/* WebKit / Chromium (Brave) — a floating pill thumb with a transparent track */
+::-webkit-scrollbar { width: 11px; height: 11px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 6px; border: 2px solid var(--bg); }
-::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: color-mix(in oklab, var(--muted-foreground) 48%, transparent);
+  border-radius: 9999px;
+  border: 3px solid transparent;     /* inset so the thumb reads as a slim floating pill */
+  background-clip: padding-box;
+  min-height: 28px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--muted-foreground) 70%, transparent);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:active {
+  background: color-mix(in oklab, var(--muted-foreground) 78%, transparent);
+  background-clip: padding-box;
+}
+
+@layer base {
+  * { @apply border-border outline-ring/50; }
+  body { @apply bg-background text-foreground font-sans; }
+}
