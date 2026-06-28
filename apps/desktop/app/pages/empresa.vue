@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ArrowLeft, Pencil, FolderOpen, RefreshCw, FileText, Copy, Trash2, Archive, Download, ChevronRight } from 'lucide-vue-next'
+import { ArrowLeft, Pencil, FolderOpen, RefreshCw, FileText, Copy, Trash2, Archive, Download, ChevronRight, EllipsisVertical } from 'lucide-vue-next'
+import { Popover, PopoverContent, PopoverTrigger } from '~/components/ui/popover'
 
 type EmpresaInfo = {
   db_path: string
@@ -420,6 +421,23 @@ watch(dbPath, refresh)
           <FolderOpen class="size-4" /> {{ info.default_folder ? 'Cambiar carpeta' : 'Elegir carpeta' }}
         </Button>
         <Button v-if="info.default_folder" variant="ghost" :disabled="savingFolder" @click="clearFolder">Quitar</Button>
+        <Popover>
+          <PopoverTrigger as-child>
+            <Button variant="outline" size="icon" aria-label="Más acciones"><EllipsisVertical class="size-4" /></Button>
+          </PopoverTrigger>
+          <PopoverContent align="end" :side-offset="6" class="w-56 p-1">
+            <button type="button" class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-accent disabled:opacity-50" :disabled="backingUp" @click="backupPickerOpen = true">
+              <Download class="size-4" /> {{ backingUp ? 'Generando…' : 'Hacer backup' }}
+            </button>
+            <button type="button" class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-accent disabled:opacity-50" :disabled="archiving" @click="archiveEmpresa">
+              <Archive class="size-4" /> {{ archiving ? 'Archivando…' : 'Archivar' }}
+            </button>
+            <div class="my-1 h-px bg-border" />
+            <button type="button" class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-destructive transition-colors hover:bg-accent" @click="openDeleteModal">
+              <Trash2 class="size-4" /> Eliminar permanentemente
+            </button>
+          </PopoverContent>
+        </Popover>
       </div>
     </header>
 
@@ -440,7 +458,9 @@ watch(dbPath, refresh)
       @close="folderPickerOpen = false"
     />
 
-    <div v-if="info" class="grid items-start gap-4 md:grid-cols-2">
+    <div v-if="info" class="grid items-start gap-4 lg:grid-cols-[24rem_minmax(0,1fr)]">
+      <!-- columna angosta: archivos + cargas -->
+      <div class="flex min-w-0 flex-col gap-4">
       <Card>
         <CardHeader>
           <CardTitle>Archivos en la carpeta</CardTitle>
@@ -522,6 +542,35 @@ watch(dbPath, refresh)
 
       <Card>
         <CardHeader>
+          <CardTitle>Cargas</CardTitle>
+          <CardDescription>Historial de importaciones de esta empresa.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <p v-if="!cargas.length" class="py-6 text-center text-sm text-muted-foreground">Aún no hay cargas.</p>
+          <ul v-else class="flex flex-col gap-2">
+            <li v-for="c in cargas" :key="c.id">
+              <button
+                type="button"
+                class="flex w-full items-center gap-3 rounded-md border border-border bg-card px-3 py-2.5 text-left transition-colors hover:bg-accent"
+                @click="navigateTo({ path: '/load', query: { db: dbPath, id: c.id } })"
+              >
+                <span class="shrink-0 font-mono text-sm text-muted-foreground">#{{ c.id }}</span>
+                <span class="min-w-0 flex-1">
+                  <span class="block truncate font-medium">{{ c.source_name }}</span>
+                  <span class="block text-xs text-muted-foreground">{{ c.total_rows }} filas · {{ c.loaded_at }}</span>
+                </span>
+                <ChevronRight class="size-4 shrink-0 text-muted-foreground" />
+              </button>
+            </li>
+          </ul>
+        </CardContent>
+      </Card>
+      </div>
+
+      <!-- columna ancha: soportes PDF -->
+      <div class="flex min-w-0 flex-col gap-4">
+      <Card>
+        <CardHeader>
           <CardTitle>Soportes PDF</CardTitle>
           <CardDescription>
             <template v-if="pdfsListing.folder">
@@ -552,8 +601,8 @@ watch(dbPath, refresh)
             <span v-if="indexStats.failed.length"> · {{ indexStats.failed.length }} con error</span>
           </div>
 
-          <ul v-if="pdfsListing.files.length" class="flex max-h-[calc(100svh-24rem)] flex-col gap-2 overflow-y-auto pr-1">
-            <li v-for="f in pdfsListing.files" :key="f.path" class="flex flex-col rounded-md border border-border bg-card px-3 py-2.5">
+          <ul v-if="pdfsListing.files.length" class="grid max-h-[calc(100svh-22rem)] grid-cols-1 gap-2 overflow-y-auto pr-1 2xl:grid-cols-2">
+            <li v-for="f in pdfsListing.files" :key="f.path" class="flex flex-col rounded-md border border-border bg-card px-3 py-2">
               <div class="flex items-center gap-3">
                 <FileText class="size-5 shrink-0 text-muted-foreground" />
                 <div class="min-w-0 flex-1">
@@ -568,7 +617,7 @@ watch(dbPath, refresh)
                   <div class="text-xs text-muted-foreground">{{ fmtSize(f.size_bytes) }} · {{ fmtDate(f.mtime) }}</div>
                 </div>
               </div>
-              <div v-if="f.cufes.length" class="mt-2 flex items-center gap-2 border-t border-dashed border-border pt-2 font-mono text-xs">
+              <div v-if="f.cufes.length" class="mt-1.5 flex items-center gap-2 border-t border-dashed border-border pt-1.5 font-mono text-xs">
                 <span class="shrink-0 text-muted-foreground">{{ f.cufes[0].label || 'CUFE' }}:</span>
                 <span class="min-w-0 flex-1 truncate text-foreground" :title="f.cufes[0].value">{{ f.cufes[0].value }}</span>
                 <Button variant="ghost" size="icon-sm" title="Copiar" @click="copyToClipboard(f.cufes[0].value)"><Copy class="size-3.5" /></Button>
@@ -578,63 +627,16 @@ watch(dbPath, refresh)
           <p v-else-if="info.pdfs_folder && !pdfsListing.error" class="py-6 text-center text-sm text-muted-foreground">Sin PDFs en esta carpeta.</p>
         </CardContent>
       </Card>
-      <DirectoryPicker
-        :open="pdfsPickerOpen"
-        :initial-path="info?.pdfs_folder || ''"
-        title="Carpeta de soportes (PDFs)"
-        @pick="onPdfsFolderPicked"
-        @close="pdfsPickerOpen = false"
-      />
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Cargas</CardTitle>
-          <CardDescription>Historial de importaciones de esta empresa.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <p v-if="!cargas.length" class="py-6 text-center text-sm text-muted-foreground">Aún no hay cargas.</p>
-          <ul v-else class="flex flex-col gap-2">
-            <li v-for="c in cargas" :key="c.id">
-              <button
-                type="button"
-                class="flex w-full items-center gap-3 rounded-md border border-border bg-card px-3 py-2.5 text-left transition-colors hover:bg-accent"
-                @click="navigateTo({ path: '/load', query: { db: dbPath, id: c.id } })"
-              >
-                <span class="shrink-0 font-mono text-sm text-muted-foreground">#{{ c.id }}</span>
-                <span class="min-w-0 flex-1">
-                  <span class="block truncate font-medium">{{ c.source_name }}</span>
-                  <span class="block text-xs text-muted-foreground">{{ c.total_rows }} filas · {{ c.loaded_at }}</span>
-                </span>
-                <ChevronRight class="size-4 shrink-0 text-muted-foreground" />
-              </button>
-            </li>
-          </ul>
-        </CardContent>
-      </Card>
-
-      <Card class="md:col-span-2">
-        <CardHeader>
-          <CardTitle>Acciones</CardTitle>
-          <CardDescription>Backup, archivar o eliminar esta empresa.</CardDescription>
-        </CardHeader>
-        <CardContent class="flex flex-col gap-3">
-          <div class="flex flex-wrap items-center gap-2">
-            <Button variant="secondary" :disabled="backingUp" @click="backupPickerOpen = true">
-              <Download class="size-4" /> {{ backingUp ? 'Generando…' : 'Hacer backup' }}
-            </Button>
-            <Button variant="ghost" :disabled="archiving" @click="archiveEmpresa">
-              <Archive class="size-4" /> {{ archiving ? 'Archivando…' : 'Archivar' }}
-            </Button>
-            <span class="flex-1" />
-            <Button variant="destructive" @click="openDeleteModal"><Trash2 class="size-4" /> Eliminar permanentemente</Button>
-          </div>
-          <div v-if="backupResult" class="rounded-md border border-status-success/30 bg-status-success-bg px-3 py-2 text-sm text-status-success">
-            Backup creado: <span class="font-mono">{{ backupResult.path }}</span>
-            ({{ fmtSizeBytes(backupResult.size_bytes) }}, {{ backupResult.excels_included }} Excels, {{ backupResult.pdfs_included }} PDFs).
-          </div>
-        </CardContent>
-      </Card>
+      </div>
     </div>
+
+    <DirectoryPicker
+      :open="pdfsPickerOpen"
+      :initial-path="info?.pdfs_folder || ''"
+      title="Carpeta de soportes (PDFs)"
+      @pick="onPdfsFolderPicked"
+      @close="pdfsPickerOpen = false"
+    />
 
     <DirectoryPicker
       :open="backupPickerOpen"

@@ -38,7 +38,7 @@ export default defineNuxtConfig({
         'data-concept': 'faro',
         'data-spine': 'beacon',
         'data-strength': 'definido',
-        'data-density': 'media',
+        'data-density': 'compacta',
         'data-accent-spread': 'sutil',
         'data-swell': 'alto',
         'data-ocean-tint': 'accent',

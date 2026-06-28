@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Upload, ChevronRight } from 'lucide-vue-next'
+import { Upload, ChevronRight, Plus, FileSearch, Building2 } from 'lucide-vue-next'
 
 type Empresa = {
   db_path: string
@@ -30,6 +30,7 @@ const creating = ref(false)
 
 const restoring = ref(false)
 const restoreInputRef = ref<HTMLInputElement | null>(null)
+const newOpen = ref(false)
 
 const unarchiving = ref<string | null>(null)
 
@@ -134,39 +135,70 @@ onMounted(refresh)
       <p class="text-sm text-muted-foreground">Cada empresa = un archivo SQLite independiente.</p>
     </header>
 
-    <div class="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-      <Card>
-        <CardHeader>
-          <CardTitle>Tus empresas</CardTitle>
-          <CardAction class="flex items-center gap-3">
-            <label class="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
-              <Checkbox v-model="includeArchived" />
-              Mostrar archivadas
+    <!-- franja de resumen + accesos rápidos (llena la landing y deja el CTA a la vista) -->
+    <div class="grid gap-3 sm:grid-cols-3">
+      <div class="flex items-center gap-3 rounded-lg border border-border bg-card p-3">
+        <span class="inline-flex size-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+          <Building2 class="size-5" />
+        </span>
+        <div class="min-w-0">
+          <div class="font-heading text-2xl font-medium leading-none">{{ activos.length }}</div>
+          <div class="text-xs text-muted-foreground">empresas activas</div>
+        </div>
+      </div>
+      <NuxtLink to="/consulta-dian" class="flex items-center gap-3 rounded-lg border border-border bg-card p-3 transition-colors hover:bg-accent">
+        <span class="inline-flex size-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+          <FileSearch class="size-5" />
+        </span>
+        <div class="min-w-0 flex-1">
+          <div class="font-medium leading-tight">Consulta DIAN</div>
+          <div class="text-xs text-muted-foreground">RUT de terceros</div>
+        </div>
+        <ChevronRight class="size-4 shrink-0 text-muted-foreground" />
+      </NuxtLink>
+      <button type="button" class="flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 p-3 text-left transition-colors hover:bg-primary/10" @click="newOpen = true">
+        <span class="inline-flex size-10 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
+          <Plus class="size-5" />
+        </span>
+        <div class="min-w-0 flex-1">
+          <div class="font-medium leading-tight">Nueva empresa</div>
+          <div class="text-xs text-muted-foreground">Crear un libro (.db)</div>
+        </div>
+      </button>
+    </div>
+
+    <Card>
+      <CardHeader>
+        <CardTitle>Tus empresas</CardTitle>
+        <CardAction class="flex items-center gap-3">
+          <label class="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
+            <Checkbox v-model="includeArchived" />
+            Mostrar archivadas
+          </label>
+          <Button as-child variant="outline" size="sm" :disabled="restoring">
+            <label class="cursor-pointer">
+              <input
+                ref="restoreInputRef"
+                type="file"
+                accept=".zip,application/zip"
+                :disabled="restoring"
+                class="hidden"
+                @change="handleRestorePicked"
+              >
+              <Upload class="size-3.5" />
+              Restaurar
             </label>
-            <Button as-child variant="outline" size="sm" :disabled="restoring">
-              <label class="cursor-pointer">
-                <input
-                  ref="restoreInputRef"
-                  type="file"
-                  accept=".zip,application/zip"
-                  :disabled="restoring"
-                  class="hidden"
-                  @change="handleRestorePicked"
-                >
-                <Upload class="size-3.5" />
-                Restaurar
-              </label>
-            </Button>
-          </CardAction>
-        </CardHeader>
-        <CardContent>
-          <p v-if="loadingList" class="py-8 text-center text-sm text-muted-foreground">Cargando…</p>
-          <p v-else-if="!empresas.length" class="py-8 text-center text-sm text-muted-foreground">
-            Sin empresas aún. Crea la primera al lado →
-          </p>
-          <template v-else>
-            <ul class="grid gap-2 sm:grid-cols-2 2xl:grid-cols-3">
-              <li v-for="e in activos" :key="e.db_path">
+          </Button>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        <p v-if="loadingList" class="py-8 text-center text-sm text-muted-foreground">Cargando…</p>
+        <p v-else-if="!empresas.length" class="py-8 text-center text-sm text-muted-foreground">
+          Sin empresas aún. Crea la primera con «Nueva empresa» ↑
+        </p>
+        <template v-else>
+          <ul class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+            <li v-for="e in activos" :key="e.db_path">
                 <button
                   type="button"
                   class="flex w-full items-center justify-between gap-3 rounded-md border border-border bg-card px-3 py-2.5 text-left transition-colors hover:bg-accent"
@@ -183,7 +215,7 @@ onMounted(refresh)
 
             <div v-if="archivados.length && includeArchived" class="mt-4 border-t border-border pt-3">
               <h3 class="mb-2 font-mono text-xs uppercase tracking-wide text-muted-foreground">Archivadas</h3>
-              <ul class="grid gap-2 sm:grid-cols-2 2xl:grid-cols-3">
+              <ul class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
                 <li
                   v-for="e in archivados"
                   :key="e.db_path"
@@ -207,27 +239,32 @@ onMounted(refresh)
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Nueva empresa</CardTitle>
-        </CardHeader>
-        <CardContent class="flex flex-col gap-4">
+    <Dialog v-model:open="newOpen">
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Nueva empresa</DialogTitle>
+          <DialogDescription>Crea un libro contable independiente (un archivo .db).</DialogDescription>
+        </DialogHeader>
+        <div class="flex flex-col gap-4">
           <div class="flex flex-col gap-1.5">
             <Label for="new-nit">NIT (sin DV)</Label>
-            <Input id="new-nit" v-model="newNit" placeholder="900181831" inputmode="numeric" />
+            <Input id="new-nit" v-model="newNit" placeholder="900181831" inputmode="numeric" @keyup.enter="crearEmpresa" />
             <p v-if="dvHint?.valid" class="text-sm text-muted-foreground">
               DV calculado: <strong class="text-foreground">{{ dvHint.computed_dv }}</strong>
             </p>
           </div>
           <div class="flex flex-col gap-1.5">
             <Label for="new-rs">Razón social</Label>
-            <Input id="new-rs" v-model="newRazonSocial" placeholder="REAL Seguros Ltda." />
+            <Input id="new-rs" v-model="newRazonSocial" placeholder="REAL Seguros Ltda." @keyup.enter="crearEmpresa" />
           </div>
+        </div>
+        <DialogFooter>
+          <Button variant="secondary" @click="newOpen = false">Cancelar</Button>
           <Button :disabled="!newNit || !newRazonSocial || creating" @click="crearEmpresa">
             {{ creating ? 'Creando…' : 'Crear empresa' }}
           </Button>
-        </CardContent>
-      </Card>
-    </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>
