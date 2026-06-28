@@ -13,13 +13,20 @@ const inputEl = ref<HTMLInputElement | null>(null)
 const router = useRouter()
 const route = useRoute()
 const pg = useBrand()
+const prefs = usePrefs()
+// theme via usePrefs (single source of truth, issue #2)
+function toggleTheme() {
+  const dark = prefs.prefs.theme === 'dark'
+    || (prefs.prefs.theme === 'system' && import.meta.client && window.matchMedia('(prefers-color-scheme: dark)').matches)
+  prefs.setPref('theme', dark ? 'light' : 'dark')
+}
 
 const RECENTS_KEY = 'dandelyon-pg-recents'
 const recents = ref<string[]>([])
 function loadRecents() { try { recents.value = JSON.parse(localStorage.getItem(RECENTS_KEY) ?? '[]') } catch { recents.value = [] } }
 
 const actions = computed(() => [
-  { label: 'Cambiar tema (claro / oscuro)',  run: () => pg.toggleTheme() },
+  { label: 'Cambiar tema (claro / oscuro)',  run: () => toggleTheme() },
   { label: 'Sistema: marcar fuera de rango', run: () => pg.setSystemStatus('out') },
   { label: 'Sistema: marcar en orden',       run: () => pg.setSystemStatus('ok') },
 ])

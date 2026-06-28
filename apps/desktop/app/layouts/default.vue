@@ -9,6 +9,14 @@ import { Button } from '~/components/ui/button'
 
 const route = useRoute()
 const pg = useBrand()
+// Theme/preferences live in usePrefs() (single source of truth, issue #2). Calling it here also
+// initialises the singleton early so prefs apply before the SidebarUser panel mounts.
+const prefs = usePrefs()
+const isDark = computed(() =>
+  prefs.prefs.theme === 'dark'
+  || (prefs.prefs.theme === 'system' && import.meta.client && window.matchMedia('(prefers-color-scheme: dark)').matches),
+)
+function toggleTheme() { prefs.setPref('theme', isDark.value ? 'light' : 'dark') }
 
 type NavLeaf = { label: string; to: string; match?: (p: string) => boolean }
 type NavItem = NavLeaf | { label: string; icon: unknown; children: NavLeaf[] }
@@ -30,8 +38,6 @@ const notifications = [
   { kind: 'warning', text: '3 soportes sin CUFE en la última carga', time: 'hace 3 h' },
   { kind: 'info',    text: 'Nueva versión de Contab disponible',     time: 'ayer' },
 ]
-
-onMounted(() => { pg.initTheme() })
 </script>
 
 <template>
@@ -120,12 +126,12 @@ onMounted(() => { pg.initTheme() })
             <PopoverTrigger aria-label="Notificaciones"
               class="relative inline-flex size-9 items-center justify-center rounded-full border border-border bg-muted text-foreground transition-colors hover:bg-accent">
               <Bell class="size-[18px]" />
-              <span class="absolute -right-0.5 -top-0.5 inline-flex min-w-4 items-center justify-center rounded-full bg-status-error px-1 text-[9px] font-bold leading-4 text-white">3</span>
+              <span v-if="prefs.prefs.notifications" class="absolute -right-0.5 -top-0.5 inline-flex min-w-4 items-center justify-center rounded-full bg-status-error px-1 text-[9px] font-bold leading-4 text-white">3</span>
             </PopoverTrigger>
             <PopoverContent align="end" :side-offset="8" class="w-72 p-0">
               <div class="flex items-center justify-between border-b border-border px-3 py-2">
                 <span class="text-sm font-medium">Notificaciones</span>
-                <span class="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">3 nuevas</span>
+                <span class="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">{{ prefs.prefs.notifications ? '3 nuevas' : 'silenciadas' }}</span>
               </div>
               <div class="max-h-72 overflow-y-auto">
                 <div v-for="(n, i) in notifications" :key="i" class="flex gap-2 px-3 py-2.5 transition-colors hover:bg-accent">
@@ -140,10 +146,10 @@ onMounted(() => { pg.initTheme() })
             </PopoverContent>
           </Popover>
 
-          <!-- theme toggle (claro / oscuro) -->
+          <!-- theme toggle (claro / oscuro) — vía usePrefs (fuente única; el panel de preferencias coincide) -->
           <Button variant="outline" size="icon" aria-label="Cambiar tema"
-            class="rounded-full bg-muted text-foreground" @click="pg.toggleTheme()">
-            <Moon v-if="pg.theme === 'light'" class="size-[18px]" />
+            class="rounded-full bg-muted text-foreground" @click="toggleTheme()">
+            <Moon v-if="!isDark" class="size-[18px]" />
             <Sun v-else class="size-[18px]" />
           </Button>
         </div>
