@@ -747,6 +747,27 @@
   background-clip: padding-box;
 }
 
+/* ════════ User preferences (SidebarUser / usePrefs) — real, applied effects ════════ */
+/* "Reducir movimiento" → stop animations + transitions (cosmos orbits, beam sweep, shooting
+   stars, hover lifts). Mirrors prefers-reduced-motion but user-toggleable. */
+:root[data-reduce-motion="on"] *,
+:root[data-reduce-motion="on"] *::before,
+:root[data-reduce-motion="on"] *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
+}
+/* "Alto contraste" → stronger borders/inputs + more legible secondary text + a visible focus ring */
+:root[data-contrast="high"] {
+  --border: color-mix(in oklab, var(--foreground) 45%, transparent);
+  --input: color-mix(in oklab, var(--foreground) 50%, transparent);
+  --sidebar-border: color-mix(in oklab, var(--foreground) 45%, transparent);
+  --muted-foreground: color-mix(in oklab, var(--foreground) 80%, var(--muted));
+  --ring: var(--foreground);
+}
+/* (UI scale lives on <html style="font-size"> — rem-based UI scales with it, no rule needed.) */
+
 @layer base {
   * { @apply border-border outline-ring/50; }
   body { @apply bg-background text-foreground font-sans; }
