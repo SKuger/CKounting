@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // User / logged-in block. variant="sidebar" → full block that collapses to the avatar on
-// the icon rail (finance-lch / lab-qc / shadcn convention). variant="navbar" → compact
+// the icon rail (shadcn convention). variant="navbar" → compact
 // pill for the topbar-right. Logged-in dot uses the accent-INDEPENDENT status palette.
 // Mock persona (playground): a QC coordinator — an early orbiter in the Dandelyon constellation.
 import { ChevronsUpDown, LogOut, UserRound, Settings } from 'lucide-vue-next'
@@ -13,7 +13,7 @@ const pg = useBrand()
 // In the sidebar, align the menu's end to the trigger's end when the block sits at the BOTTOM
 // (the menu rises from the user box's bottom edge); top placement keeps the start-aligned menu.
 const menuAlign = computed(() => props.variant === 'navbar' || pg.userPlacement === 'bottom' ? 'end' : 'start')
-const user = { name: 'Carlos Kuger', role: 'Mejor contador del mundo', email: 'ckuger@hematologico.com', initials: 'CK' }
+const user = { name: 'Carlos Kuger', role: 'Mejor contador del mundo', email: 'ckuger@dandelyon.app', initials: 'CK' }
 // in the sidebar, hide the text when collapsed to the icon rail; in the navbar always show
 const showText = computed(() => props.variant === 'navbar' || state.value === 'expanded')
 </script>
