@@ -520,6 +520,18 @@ Sino, sea base_19 = IVA / 0.19
 
 ---
 
+## D-056 — SidebarUser: gestor de cuenta + preferencias reales (consumo del DS, issue #2) ✅
+**Fecha**: 2026-06-28
+**Decisión**: Se consume del DS (`SKuger/DandeLyon-DesignSystem#2` / PR #4) el estándar *dual-source* de `SidebarUser`: composables `useUser` (multi-cuenta: editar/añadir/eliminar — nunca la última; persistido) + `usePrefs` (preferencias reales aplicadas al DOM) + efectos CSS (`data-reduce-motion`, `data-contrast`). En Contab:
+- **`usePrefs` es la ÚNICA fuente de tema/densidad/escala.** El toggle del topbar y la acción ⌘K enrutan por `usePrefs`; `useBrand` pierde su manejo de tema. La densidad horneada (D-055, `compacta`) pasa a ser el **default** de `usePrefs.density` (el usuario puede cambiarla y persiste).
+- **Sin backend de sesión (D-004 single-user)**: no hay auth que inyectar, así que el `localStorage` (`contab-user-accounts`, `contab-user-prefs`) ES la fuente real. Se siembra **una cuenta neutra editable** ("Mi cuenta"); se eliminan los perfiles demo del DS (Carlos Kuger/Ana Ríos).
+- **Notificaciones** (preferencia) controlan el badge de la campana del topbar.
+**Razón**: issue `SKuger/CKounting#2`. El DS define que los componentes compartidos son dual-source con features reales (no mocks).
+**Conciliación (en vivo)**: tema/densidad/escala/reduce-motion/alto-contraste se aplican al togglearlos; editar perfil se refleja; añadir/eliminar cuenta persiste; sin datos demo; cero errores. Hecho por etapas (composables → css → componente → cableado), commit por etapa.
+**Pendiente menor**: `region`/`notifications` quedan persistidas; cablear `region` al formato de números de las tablas es incremental (no bloquea la aceptación).
+
+---
+
 ## Decisiones pendientes (a tomar más adelante)
 
 - **D-E1-13** ⏸ Behavior de R-V3 cuando IVA = 0 (default actual: skip). Confirmar si lo cambiamos a "marcar excluido" o "tarifa 0%".

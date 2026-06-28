@@ -163,6 +163,14 @@ Surgieron 2 mejoras que van en `SKuger/DandeLyon-DesignSystem` (no en Contab):
   **localmente** en Contab como stopgap; el issue sigue abierto para la fuente compartida.
 - **#2** SidebarUser editable (perfil/correo) + preferencias reales.
 
+### Consumo en CKounting de SidebarUser + preferencias — D-056 (issue CKounting #2)
+El DS implementó el estándar (DS #2 / PR #4); se **consumió** en Contab por etapas (commit por
+etapa): composables `useUser`/`usePrefs` (claves propias, sin demo, density default compacta) →
+efectos CSS reduce-motion/contraste → `SidebarUser` (usePlayground→useBrand) → cableado
+(usePrefs = fuente única de tema/densidad/escala; topbar + ⌘K + panel unificados; notif→campana).
+Verificado en vivo: todas las preferencias con efecto + CRUD de cuentas; cero errores. Sin auth
+(D-004) → localStorage es la fuente real, una cuenta neutra editable.
+
 ### Próxima sesión — candidatos
 
 | Opción | Esfuerzo | Valor |
