@@ -1,0 +1,47 @@
+appId: com.dandelyon.contab
+productName: Contab
+copyright: Creado por SKuger
+
+directories:
+  output: dist
+  buildResources: build
+
+# Only the shell's own runtime files go inside the asar; the heavy artifacts (Nitro server,
+# Python sidecars, Poppler) are shipped as extraResources next to the app (populated by CI before
+# electron-builder runs — see .github/workflows/release-windows.yml).
+files:
+  - src/**
+  - package.json
+
+extraResources:
+  - from: resources/server
+    to: server
+  - from: resources/core-sidecar
+    to: core-sidecar
+  - from: resources/dian-sidecar
+    to: dian-sidecar
+  - from: resources/poppler
+    to: poppler
+
+win:
+  target:
+    - nsis
+  icon: build/icon.ico
+  # No Authenticode signing (paid) — SmartScreen will warn on first install. Auto-update still works
+  # (electron-updater verifies the installer's sha512 from latest.yml, independent of code signing).
+
+nsis:
+  oneClick: false
+  perMachine: false              # per-user install in %LOCALAPPDATA% → no UAC prompt, less AV friction
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Contab
+
+# Auto-update target. Hosting still TBD (see plan): point at a PUBLIC releases repo so the client can
+# pull updates without a token (the source repo stays private). electron-builder only uses this on
+# `--publish`; `npm run dist` uses `--publish never`.
+publish:
+  provider: github
+  owner: SKuger
+  repo: CKounting-releases       # TODO: crear este repo público (solo binarios + latest.yml)

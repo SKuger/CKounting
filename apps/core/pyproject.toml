@@ -13,6 +13,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+build = ["pyinstaller>=6"]  # empaqueta el sidecar (contab-sidecar.spec) para el instalador de escritorio
 
 [project.scripts]
 contab-sidecar = "contab_core.sidecar:main"

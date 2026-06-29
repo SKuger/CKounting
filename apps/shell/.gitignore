@@ -1,0 +1,7 @@
+node_modules/
+dist/
+# build artifacts staged by CI (Nitro .output, PyInstaller sidecars, Poppler)
+resources/server/
+resources/core-sidecar/
+resources/dian-sidecar/
+resources/poppler/
