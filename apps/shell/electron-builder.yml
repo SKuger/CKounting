@@ -44,4 +44,5 @@ nsis:
 publish:
   provider: github
   owner: SKuger
-  repo: CKounting-releases       # TODO: crear este repo público (solo binarios + latest.yml)
+  repo: CKounting-releases       # repo público dedicado (solo binarios + latest.yml). Crear en
+                                 # GitHub + dar acceso al CI vía secreto GH_TOKEN (PAT) en CKounting.

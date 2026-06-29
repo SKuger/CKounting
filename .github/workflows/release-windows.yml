@@ -67,11 +67,19 @@ jobs:
           Copy-Item apps/dian-rut/dist/dian-sidecar/*    "$r/dian-sidecar"  -Recurse -Force
 
       # ── Instalador Electron (NSIS) ──
+      # Publica el release en el repo público (SKuger/CKounting-releases) SOLO si existe el
+      # secreto GH_TOKEN (PAT con acceso a ese repo). Sin token → '--publish never' (solo
+      # artifact del run), así el build nunca falla mientras se configura el hosting.
       - name: Build installer
         working-directory: apps/shell
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           npm install
-          npx electron-builder --win nsis --publish never
+          $mode = if ($env:GH_TOKEN) { 'always' } else { 'never' }
+          Write-Host "electron-builder --publish $mode"
+          npx electron-builder --win nsis --publish $mode
 
       - uses: actions/upload-artifact@v4
         with:
