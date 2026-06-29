@@ -6,7 +6,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { resolve, dirname } from 'node:path'
 
 export const DIAN_PORT = Number(process.env.DIAN_PORT) || 8756
 
@@ -64,13 +64,22 @@ export async function ensureDianService(): Promise<void> {
   if (state.starting) return state.starting
 
   state.starting = (async () => {
-    const pythonBin = resolvePythonBin()
-    const cwd = dianCwd()
-    const proc = spawn(
-      pythonBin,
-      ['-u', '-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', String(DIAN_PORT), '--log-level', 'warning'],
-      { cwd, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PYTHONUNBUFFERED: '1' } },
-    )
+    // Packaged (Electron): DIAN_SIDECAR_BIN points at the PyInstaller exe (run_server.py embeds
+    // uvicorn) — spawn it directly with --host/--port. Dev: `python -m uvicorn main:app`.
+    const sidecarBin = process.env.DIAN_SIDECAR_BIN
+    let cmd: string
+    let args: string[]
+    let cwd: string
+    if (sidecarBin) {
+      cmd = sidecarBin
+      args = ['--host', '127.0.0.1', '--port', String(DIAN_PORT)]
+      cwd = dirname(sidecarBin)
+    } else {
+      cmd = resolvePythonBin()
+      args = ['-u', '-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', String(DIAN_PORT), '--log-level', 'warning']
+      cwd = dianCwd()
+    }
+    const proc = spawn(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PYTHONUNBUFFERED: '1' } })
     state.proc = proc
     proc.stdout?.on('data', (c: Buffer) => process.stderr.write(`[dian-rut] ${c}`))
     proc.stderr?.on('data', (c: Buffer) => process.stderr.write(`[dian-rut] ${c}`))

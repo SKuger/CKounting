@@ -3,6 +3,7 @@ import os
 import traceback
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from playwright_stealth import Stealth
+from dian_paths import BROWSER_PROFILE_DIR, ERRORS_DIR
 
 DIAN_URL = "https://muisca.dian.gov.co/WebRutMuisca/DefConsultaEstadoRUT.faces"
 
@@ -155,8 +156,8 @@ async def perform_scraping(nits: list[int | str | float], results: list[dict], c
             
         # 2. Automated Fallback
         if mode == "automated":
-            # Directorio para el perfil del navegador (ayuda a pasar Cloudflare)
-            user_data_dir = os.path.join(os.getcwd(), "browser_profile")
+            # Directorio para el perfil del navegador (ayuda a pasar Cloudflare). Escribible: DIAN_WORKDIR.
+            user_data_dir = BROWSER_PROFILE_DIR
             os.makedirs(user_data_dir, exist_ok=True)
             
             # Iniciar Stealth configuration solo en modo automático
@@ -344,7 +345,7 @@ async def perform_scraping(nits: list[int | str | float], results: list[dict], c
                     
             except Exception as e:
                 error_msg = str(e)
-                screenshot_path = f"errors/error_{nit_str}.png"
+                screenshot_path = os.path.join(ERRORS_DIR, f"error_{nit_str}.png")
                 try: await page.screenshot(path=screenshot_path)
                 except: pass
                 

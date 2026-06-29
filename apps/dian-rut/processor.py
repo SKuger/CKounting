@@ -3,10 +3,11 @@ import pandas as pd
 import os
 import traceback
 from scraper import perform_scraping
+from dian_paths import RESULTS_DIR
 
 async def process_excel(file_path: str, file_id: str, client_id: str, send_log, active_jobs: dict):
     output_filename = f"resultados_{file_id}.xlsx"
-    output_path = os.path.join("results", output_filename)
+    output_path = os.path.join(RESULTS_DIR, output_filename)
     active_jobs[file_id] = output_path
     
     try:
