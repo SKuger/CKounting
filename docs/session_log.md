@@ -178,3 +178,23 @@ Verificado en vivo: todas las preferencias con efecto + CRUD de cuentas; cero er
 | **Re-tematizar páginas a tokens/shadcn** | Medio-alto | Cierra la migración del design system (Fase 8 "cero hex crudo" en todo). |
 | **PR de la rama** `feat/design-system-orbita` → cerrar issue #1 | Bajo | Mergear el shell. |
 | **Validar E-DIAN end-to-end** | Bajo-medio | Pendiente de la sesión 2. |
+
+---
+
+## Sesión 4 — 2026-06-28: E10 — empaquetado de escritorio (Electron)
+
+**Resultado**: andamiaje completo para entregar Contab como **app de escritorio Windows** instalable + auto-update, en la rama `feat/e10-desktop-electron`. Decisiones D-057 (Electron, supersede Tauri), D-058 (DIAN sin Chromium, modo CDP), D-059 (sin firma; update por sha512; releases en repo público — hosting TBD).
+
+### Qué se hizo (commit por fase)
+- **Env-hooks**: `sidecar.ts` (`CONTAB_SIDECAR_BIN`), `dianSidecar.ts` (`DIAN_SIDECAR_BIN`), `pdf_cufe.py` (`CONTAB_PDFTOTEXT`) — retrocompatibles en dev.
+- **`apps/shell/`** (Electron): main/nitro/paths/preload/updater + `electron-builder.yml` (NSIS per-user) + icono. Nitro como child_process (Node de Electron), puerto dinámico, tree-kill al cerrar.
+- **PyInstaller**: `contab-sidecar.spec` (core) y `dian-sidecar.spec` + `run_server.py` (DIAN, uvicorn embebido), ambos onedir. `dian_paths.py` reubica los dirs escribibles a `%APPDATA%\Contab\dian` (`DIAN_WORKDIR`) y resuelve `static/` por `sys._MEIPASS`.
+- **CI**: `.github/workflows/release-windows.yml` (windows-latest, gratis): PyInstaller×2 → Poppler → nuxt build → staging → electron-builder NSIS → upload-artifact (hosting `--publish never` por ahora).
+
+### Verificado en Linux
+`nuxt build` → `node .output/server/index.mjs` arranca y el sidecar responde por RPC; **binario PyInstaller del core construido y probado** directo (ping→pong) y vía Nitro con `CONTAB_SIDECAR_BIN` (ping + list_empresas). DIAN: import chain OK + `DIAN_WORKDIR` crea dirs. 61/61 tests del core verdes.
+
+### Pendiente (Windows / decisión)
+- Build real + prueba del instalable en **Windows** (CI o máquina): ventana Electron, sin procesos huérfanos al cerrar, Poppler extrae CUFE, WS DIAN, SmartScreen.
+- **Hosting de auto-update**: crear el repo público de releases y pasar el CI a `--publish always`.
+- Pulido: `DIAN_PORT` dinámico, `playwright install` on-demand opcional, splash/logging.

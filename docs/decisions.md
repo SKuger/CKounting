@@ -532,6 +532,24 @@ Sino, sea base_19 = IVA / 0.19
 
 ---
 
+## D-057 — Shell de escritorio = Electron (supersede D-002 Tauri) ✅
+**Fecha**: 2026-06-28
+**Decisión**: El empaquetado de escritorio (E10) usa **Electron**, no Tauri. Electron envuelve la arquitectura actual tal cual: corre el **servidor Nitro (Node)** como `child_process` (con el Node embebido de Electron vía `ELECTRON_RUN_AS_NODE`), y Nitro lanza los sidecars Python como hasta ahora. El shell vive en **`apps/shell/`** (separado de `apps/desktop` para no ensuciar el árbol Nuxt).
+**Razón**: la app **no es un SPA estático** — depende en runtime de Nitro para `/api/*` y del spawn de los sidecars. Tauri obligaría a empacar Node como sidecar o reescribir `server/api` en Rust (mucho más trabajo), y su ventaja de "shell liviano" se diluye porque igual empaquetamos Python (~200 MB). **Supersede D-002** (Tauri, previo a esta arquitectura).
+**Mecánica**: los sidecars se empaquetan con **PyInstaller (onedir)** y Nitro los spawnea vía env-hooks nuevos: `CONTAB_SIDECAR_BIN`, `DIAN_SIDECAR_BIN` (si están, ejecuta el `.exe` directo; si no, dev `python -m`). Poppler/`pdftotext` se bundlea y se resuelve con `CONTAB_PDFTOTEXT`. Verificado end-to-end en Linux (Nitro construido + binario PyInstaller responden por RPC).
+
+## D-058 — DIAN en v1 sin Chromium bundleado (modo CDP) ✅
+**Fecha**: 2026-06-28
+**Decisión**: La Consulta DIAN se incluye en v1, pero **no se empaqueta el navegador de Playwright** (~300 MB). El scraper usa el **Chrome real del usuario** vía CDP (`--remote-debugging-port=9222`) — que ya es su modo preferido (evade Cloudflare) y cuya UI ya existe. Los dirs escribibles del sidecar (uploads/results/errors/browser_profile) se reubican a `%APPDATA%\Contab\dian` vía `DIAN_WORKDIR`; `static/` viaja read-only en el bundle (`sys._MEIPASS`).
+**Razón**: instalador más liviano y robusto; el fallback automatizado con Chromium propio es propenso a bloqueos. (Opcional futuro: botón "instalar navegador" con `playwright install` on-demand.)
+
+## D-059 — Sin firma Authenticode; auto-update por sha512; releases en repo público ✅
+**Fecha**: 2026-06-28 (cierra D-E10-1)
+**Decisión**: No se compra certificado de firma Windows (Authenticode) — habrá warning de SmartScreen en la 1ª instalación ("Más información → Ejecutar de todos modos"). El **auto-update** (`electron-updater`) funciona igual: verifica integridad por **sha512** desde `latest.yml`, independiente de la firma. El instalador es **NSIS per-user** (`%LOCALAPPDATA%`, sin UAC). Build en **GitHub Actions `windows-latest`** (gratis).
+**Hosting de updates**: pendiente de decidir; el cableado queda listo apuntando a un **repo público de releases** (`SKuger/CKounting-releases`, por crear) para que el cliente descargue sin token (el código sigue privado). El CI hoy hace `--publish never` + sube el instalador como artefacto.
+
+---
+
 ## Decisiones pendientes (a tomar más adelante)
 
 - **D-E1-13** ⏸ Behavior de R-V3 cuando IVA = 0 (default actual: skip). Confirmar si lo cambiamos a "marcar excluido" o "tarifa 0%".

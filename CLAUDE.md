@@ -17,7 +17,7 @@ El primer flujo concreto, implementado en E1, es el **cruce DIAN ↔ soportes**:
 
 ## Stack final
 
-- **Desktop shell**: Tauri (Rust) — pendiente para E10. Hoy corremos en navegador.
+- **Desktop shell**: **Electron** en [`apps/shell/`](apps/shell/) (E10, en curso — D-057, supersede el Tauri original D-002). Electron arranca el servidor Nitro como child_process (Node embebido) y éste lanza los sidecars; en dev seguimos corriendo en navegador (`npm run dev`).
 - **Frontend**: Nuxt 4 (Vue + TypeScript) en `apps/desktop/`, `ssr: false`.
   - **Design system Dandelyon · Órbita** (D-053): tokens shadcn + Tailwind v4 + reka-ui + shadcn-nuxt + @nuxt/fonts. Look horneado con `.theme-orbita` + `data-*` en `<html>`; composable `useBrand()` reemplaza el store del playground. Contrato de tokens en [`apps/desktop/app/assets/css/main.css`](apps/desktop/app/assets/css/main.css). Regla de oro: solo tokens semánticos en `.vue`/`.ts`, nada de hex crudo (salvo SVGs de marca).
   - **Toda la app migrada** (D-054): shell (sidebar + topbar Órbita) **y** páginas (Empresas, Carga, Consulta DIAN) + `DirectoryPicker`/`ToastContainer`, todo sobre tokens/shadcn (cero hex crudo salvo SVGs de marca).
@@ -27,7 +27,7 @@ El primer flujo concreto, implementado en E1, es el **cruce DIAN ↔ soportes**:
   - Deps: `openpyxl`, `xlsxwriter`, `pypdfium2`, `opencv-python-headless`, `numpy`, `Pillow`.
   - Binario de sistema requerido: `pdftotext` (Poppler) — viene con la mayoría de distros.
 - **Base de datos**: SQLite — **un archivo .db por empresa** (aislamiento total, D-003).
-- **Empaquetado**: `tauri build` para Windows (pendiente E10).
+- **Empaquetado** (E10, en curso): **Electron + electron-builder** (NSIS Windows per-user). Sidecars como `.exe` PyInstaller (onedir) + Poppler bundleado; el shell los inyecta a Nitro por env (`CONTAB_SIDECAR_BIN`, `DIAN_SIDECAR_BIN`, `CONTAB_PDFTOTEXT`, `DIAN_WORKDIR`). Build en GitHub Actions `windows-latest`; auto-update con electron-updater (sin firma Authenticode → integridad sha512; hosting de releases por decidir). Ver D-057/058/059 y [`apps/shell/README.md`](apps/shell/README.md).
 
 ## Decisiones inmutables (no re-preguntar)
 
