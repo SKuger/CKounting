@@ -56,6 +56,7 @@ async function startNitro() {
     NITRO_HOST: '127.0.0.1',
     PORT: String(port),
     NITRO_PORT: String(port),
+    CONTAB_VERSION: require('electron').app.getVersion(),
     DIAN_WORKDIR: p.dianWorkdir,
     PLAYWRIGHT_BROWSERS_PATH: p.playwrightBrowsers,
   }
