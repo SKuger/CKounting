@@ -1,0 +1,83 @@
+name: Release (Windows)
+
+# Construye el instalable de escritorio (Electron + sidecars PyInstaller + Poppler) en Windows.
+# Disparo manual o por tag `vX.Y.Z`. Por ahora NO publica (hosting de updates por decidir): sube el
+# instalador como artefacto del run. Cuando se decida el hosting, cambiar `--publish never` →
+# `--publish always` y añadir el secreto GH_TOKEN del repo público de releases.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # ── Sidecar núcleo (PyInstaller onedir) ──
+      - name: Build core sidecar
+        working-directory: apps/core
+        run: |
+          python -m pip install --upgrade pip
+          pip install . pyinstaller
+          pyinstaller contab-sidecar.spec --noconfirm
+
+      # ── Sidecar DIAN (PyInstaller onedir) ── (entorno pip separado para no mezclar con el core)
+      - name: Build DIAN sidecar
+        working-directory: apps/dian-rut
+        run: |
+          pip install -r requirements.txt pyinstaller
+          pyinstaller dian-sidecar.spec --noconfirm
+
+      # ── Poppler (pdftotext.exe + DLLs) ──
+      - name: Fetch Poppler
+        shell: pwsh
+        run: |
+          $ver = '24.08.0-0'
+          curl.exe -L -o poppler.zip "https://github.com/oschwartz10612/poppler-windows/releases/download/v$ver/Release-$ver.zip"
+          Expand-Archive poppler.zip -DestinationPath poppler-tmp -Force
+          $bin = (Get-ChildItem poppler-tmp -Recurse -Filter pdftotext.exe | Select-Object -First 1).Directory.FullName
+          New-Item -ItemType Directory -Force -Path apps/shell/resources/poppler | Out-Null
+          Copy-Item "$bin/*" apps/shell/resources/poppler -Recurse -Force
+
+      # ── Frontend Nuxt/Nitro ──
+      - name: Build Nuxt
+        working-directory: apps/desktop
+        run: |
+          npm ci
+          npm run build
+
+      # ── Staging para electron-builder extraResources ──
+      - name: Stage resources
+        shell: pwsh
+        run: |
+          $r = 'apps/shell/resources'
+          New-Item -ItemType Directory -Force -Path "$r/server","$r/core-sidecar","$r/dian-sidecar" | Out-Null
+          Copy-Item apps/desktop/.output/*               "$r/server"        -Recurse -Force
+          Copy-Item apps/core/dist/contab-sidecar/*      "$r/core-sidecar"  -Recurse -Force
+          Copy-Item apps/dian-rut/dist/dian-sidecar/*    "$r/dian-sidecar"  -Recurse -Force
+
+      # ── Instalador Electron (NSIS) ──
+      - name: Build installer
+        working-directory: apps/shell
+        run: |
+          npm install
+          npx electron-builder --win nsis --publish never
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: contab-windows-installer
+          path: |
+            apps/shell/dist/*.exe
+            apps/shell/dist/*.blockmap
+            apps/shell/dist/latest.yml
+          if-no-files-found: error
