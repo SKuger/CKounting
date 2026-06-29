@@ -550,6 +550,16 @@ Sino, sea base_19 = IVA / 0.19
 
 ---
 
+## D-060 — Hosting de releases resuelto: repo público + GH_TOKEN, con compuerta de borrador ✅
+**Fecha**: 2026-06-29 (resuelve el "pendiente" de D-059)
+**Decisión**: El hosting de updates es el repo público **`SKuger/CKounting-releases`** (creado). El código sigue en el privado `SKuger/CKounting`. Para que el CI pueda publicar en ese repo distinto se usa un **PAT** (fine-grained, solo `CKounting-releases`, Contents: RW) guardado como secreto **`GH_TOKEN`** en CKounting — el `GITHUB_TOKEN` por defecto no alcanza a otro repo. El cliente **descarga y se auto-actualiza sin ningún token** porque el repo es público (`…/releases/latest`).
+**CI**: el paso *Build installer* publica condicional: `--publish always` si existe `GH_TOKEN`, si no `--publish never` (nunca rompe el build).
+**Compuerta de calidad (elección del usuario)**: electron-builder sube los releases como **borrador (draft)** por defecto y **así se deja** — el tag genera el borrador, el usuario prueba el `.exe` y hace clic en **"Publish release"** (o `gh release edit <tag> --draft=false`) cuando está listo. *No* se usa `releaseType: release` (publicación automática) a propósito, para revisar antes de que llegue al cliente.
+**Gotcha resuelto**: el repo de releases debía tener ≥1 commit (rama default) o la publicación falla con `422 Repository is empty`. Se inicializó con un README; no se repite.
+**Primer release publicado**: v0.1.2 (favicon/icono CK ya horneado).
+
+---
+
 ## Decisiones pendientes (a tomar más adelante)
 
 - **D-E1-13** ⏸ Behavior de R-V3 cuando IVA = 0 (default actual: skip). Confirmar si lo cambiamos a "marcar excluido" o "tarifa 0%".
