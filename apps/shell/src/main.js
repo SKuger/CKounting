@@ -45,6 +45,11 @@ async function createWindow() {
   await win.loadURL(`http://127.0.0.1:${server.port}/`)
   win.show()
   win.on('closed', () => { win = null })
+
+  // Auto-update only makes sense in the installed app (dev has no update feed).
+  if (app.isPackaged) {
+    try { require('./updater').initUpdater() } catch (e) { log.warn('updater init failed', e) }
+  }
 }
 
 const gotLock = app.requestSingleInstanceLock()
