@@ -4,7 +4,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createInterface, type Interface } from 'node:readline'
 import { existsSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { resolve, dirname } from 'node:path'
 
 type PendingResolver = {
   resolve: (value: unknown) => void
@@ -48,11 +48,24 @@ function ensureProcess() {
   const state = getState()
   if (state.proc && !state.proc.killed) return state.proc
 
-  const pythonBin = resolvePythonBin()
-  const coreDir = resolve(process.cwd(), '..', 'core')
-  const cwd = existsSync(coreDir) ? coreDir : resolve(process.cwd(), '..', '..', 'apps', 'core')
+  // Packaged (Electron): CONTAB_SIDECAR_BIN points at the PyInstaller executable, which embeds the
+  // entrypoint — spawn it directly (no `-m`). Dev: fall back to `python -m contab_core.sidecar`.
+  const sidecarBin = process.env.CONTAB_SIDECAR_BIN
+  let cmd: string
+  let args: string[]
+  let cwd: string
+  if (sidecarBin) {
+    cmd = sidecarBin
+    args = []
+    cwd = dirname(sidecarBin)
+  } else {
+    cmd = resolvePythonBin()
+    args = ['-u', '-m', 'contab_core.sidecar']
+    const coreDir = resolve(process.cwd(), '..', 'core')
+    cwd = existsSync(coreDir) ? coreDir : resolve(process.cwd(), '..', '..', 'apps', 'core')
+  }
 
-  const proc = spawn(pythonBin, ['-u', '-m', 'contab_core.sidecar'], {
+  const proc = spawn(cmd, args, {
     cwd,
     stdio: ['pipe', 'pipe', 'pipe'],
     env: { ...process.env, PYTHONUNBUFFERED: '1' },

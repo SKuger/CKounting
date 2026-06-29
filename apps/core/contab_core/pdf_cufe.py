@@ -9,6 +9,7 @@ Strategy (D-017, refined):
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -98,7 +99,10 @@ def _find_cufes_in_text(text: str) -> list[Cufe]:
 
 
 def _pdftotext(pdf_path: Path, layout: bool, timeout: float = 30.0) -> str:
-    args = ["pdftotext", "-layout" if layout else "-raw", "-enc", "UTF-8", str(pdf_path), "-"]
+    # Packaged (Windows): CONTAB_PDFTOTEXT points at the bundled Poppler binary (not on PATH).
+    # Dev / Linux: fall back to `pdftotext` from PATH.
+    exe = os.environ.get("CONTAB_PDFTOTEXT") or "pdftotext"
+    args = [exe, "-layout" if layout else "-raw", "-enc", "UTF-8", str(pdf_path), "-"]
     try:
         result = subprocess.run(args, capture_output=True, timeout=timeout, check=False)
     except (subprocess.TimeoutExpired, FileNotFoundError):
