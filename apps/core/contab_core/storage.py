@@ -342,7 +342,10 @@ def set_pdfs_folder(db_path: str | Path, folder: str | None) -> None:
         conn.close()
 
 
-# ── 0.1.4: periodos (mes) + carpeta de soportes por mes + papelera ─────────────
+# ── 0.1.4: MESES (periodos) como contenedor + carpeta de soportes por mes ──────
+# El mes es el contenedor: se crea un mes y dentro se carga SU Excel y se elige SU
+# carpeta de soportes. NO hay carpeta de soportes global. No se opera a nivel de
+# fila (la tabla del Excel no cambia); lo movible/borrable es el Excel cargado.
 
 def _norm_periodo(periodo: str) -> str:
     p = (periodo or "").strip()
@@ -351,133 +354,110 @@ def _norm_periodo(periodo: str) -> str:
     return p
 
 
+def create_periodo(db_path: str | Path, periodo: str) -> dict:
+    """Crea un mes (ambiente) vacío. Idempotente."""
+    p = _norm_periodo(periodo)
+    conn = connect(db_path)
+    try:
+        ensure_schema(conn)
+        with transaction(conn):
+            conn.execute("INSERT OR IGNORE INTO periodo_folder(periodo) VALUES (?)", (p,))
+    finally:
+        conn.close()
+    return {"periodo": p}
+
+
 def periodo_pdfs_folder(conn: sqlite3.Connection, periodo: str | None) -> str | None:
-    """Carpeta de soportes del periodo; fallback a la carpeta global de la empresa."""
-    if periodo:
-        row = conn.execute(
-            "SELECT pdfs_folder FROM periodo_folder WHERE periodo = ?", (periodo,)
-        ).fetchone()
-        if row and row["pdfs_folder"]:
-            return row["pdfs_folder"]
-    row = conn.execute("SELECT pdfs_folder FROM empresa_info LIMIT 1").fetchone()
+    """Carpeta de soportes DEL MES. Sin fallback global (0.1.4: no hay carpeta global)."""
+    if not periodo:
+        return None
+    row = conn.execute(
+        "SELECT pdfs_folder FROM periodo_folder WHERE periodo = ?", (periodo,)
+    ).fetchone()
     return row["pdfs_folder"] if row else None
 
 
 def set_periodo_folder(db_path: str | Path, periodo: str, folder: str | None) -> dict:
+    """Carpeta de soportes del mes. El mes queda creado aunque se limpie la carpeta."""
     p = _norm_periodo(periodo)
     normalized = (folder or "").strip() or None
     conn = connect(db_path)
     try:
         ensure_schema(conn)
         with transaction(conn):
-            if normalized is None:
-                conn.execute("DELETE FROM periodo_folder WHERE periodo = ?", (p,))
-            else:
-                conn.execute(
-                    "INSERT INTO periodo_folder(periodo, pdfs_folder) VALUES (?, ?) "
-                    "ON CONFLICT(periodo) DO UPDATE SET pdfs_folder = excluded.pdfs_folder",
-                    (p, normalized),
-                )
+            conn.execute(
+                "INSERT INTO periodo_folder(periodo, pdfs_folder) VALUES (?, ?) "
+                "ON CONFLICT(periodo) DO UPDATE SET pdfs_folder = excluded.pdfs_folder",
+                (p, normalized),
+            )
     finally:
         conn.close()
     return {"periodo": p, "pdfs_folder": normalized}
 
 
 def list_periodos(db_path: str | Path, include_deleted: bool = False) -> list[dict]:
-    """Meses presentes en la empresa con sus conteos y su carpeta de soportes."""
+    """Meses de la empresa: los creados (periodo_folder) ∪ los que ya tienen Excel.
+    Incluye meses creados aún sin Excel. Conteos a nivel de LOTE (Excel)."""
     conn = connect(db_path)
     try:
         ensure_schema(conn)
-        del_filter = "" if include_deleted else "AND er.deleted_at IS NULL"
-        rows = conn.execute(
-            f"""
-            SELECT er.periodo AS periodo,
-                   COUNT(DISTINCT er.load_id) AS load_count,
-                   COUNT(*) AS row_count
-            FROM excel_row er
-            WHERE er.periodo IS NOT NULL {del_filter}
-            GROUP BY er.periodo
-            ORDER BY er.periodo DESC
-            """
-        ).fetchall()
+        del_filter = "" if include_deleted else "AND deleted_at IS NULL"
+        months: set[str] = {
+            r["periodo"] for r in conn.execute("SELECT periodo FROM periodo_folder").fetchall()
+        }
+        for r in conn.execute(
+            f"SELECT DISTINCT periodo FROM excel_load WHERE periodo IS NOT NULL {del_filter}"
+        ).fetchall():
+            months.add(r["periodo"])
         folders = {
             r["periodo"]: r["pdfs_folder"]
             for r in conn.execute("SELECT periodo, pdfs_folder FROM periodo_folder").fetchall()
         }
         out = []
-        for r in rows:
-            d = dict(r)
-            d["pdfs_folder"] = folders.get(d["periodo"])
-            out.append(d)
+        for p in months:
+            agg = conn.execute(
+                f"SELECT COUNT(*) AS lc, COALESCE(SUM(total_rows), 0) AS rc "
+                f"FROM excel_load WHERE periodo = ? {del_filter}",
+                (p,),
+            ).fetchone()
+            out.append({
+                "periodo": p,
+                "load_count": agg["lc"],
+                "row_count": agg["rc"],
+                "pdfs_folder": folders.get(p),
+            })
+        out.sort(key=lambda d: d["periodo"], reverse=True)
         return out
     finally:
         conn.close()
 
 
-def set_load_periodo(db_path: str | Path, load_id: int, periodo: str, propagate: bool = True) -> dict:
-    """Cambiar el mes del lote. propagate=True reasigna también sus filas al mes."""
+def delete_periodo(db_path: str | Path, periodo: str) -> dict:
+    """Borra el mes y su(s) Excel (hard delete; cascada a filas/validaciones)."""
     p = _norm_periodo(periodo)
     conn = connect(db_path)
     try:
         ensure_schema(conn)
         with transaction(conn):
+            conn.execute("DELETE FROM excel_load WHERE periodo = ?", (p,))
+            conn.execute("DELETE FROM periodo_folder WHERE periodo = ?", (p,))
+    finally:
+        conn.close()
+    return {"periodo": p, "deleted": True}
+
+
+def set_load_periodo(db_path: str | Path, load_id: int, periodo: str) -> dict:
+    """Mover el Excel cargado a otro mes (crea el mes destino si no existe)."""
+    p = _norm_periodo(periodo)
+    conn = connect(db_path)
+    try:
+        ensure_schema(conn)
+        with transaction(conn):
+            conn.execute("INSERT OR IGNORE INTO periodo_folder(periodo) VALUES (?)", (p,))
             conn.execute("UPDATE excel_load SET periodo = ? WHERE id = ?", (p, int(load_id)))
-            if propagate:
-                conn.execute("UPDATE excel_row SET periodo = ? WHERE load_id = ?", (p, int(load_id)))
     finally:
         conn.close()
     return {"load_id": int(load_id), "periodo": p}
-
-
-def move_rows_periodo(
-    db_path: str | Path, load_id: int, row_indexes: list[int], periodo: str
-) -> dict:
-    """Mover documentos (filas) puntuales a otro mes (override por fila)."""
-    p = _norm_periodo(periodo)
-    idxs = [int(i) for i in (row_indexes or [])]
-    if not idxs:
-        raise ValueError("No se indicaron documentos para mover.")
-    conn = connect(db_path)
-    try:
-        ensure_schema(conn)
-        placeholders = ",".join("?" for _ in idxs)
-        with transaction(conn):
-            cur = conn.execute(
-                f"UPDATE excel_row SET periodo = ? WHERE load_id = ? AND row_index IN ({placeholders})",
-                (p, int(load_id), *idxs),
-            )
-            moved = cur.rowcount
-    finally:
-        conn.close()
-    return {"moved": moved, "periodo": p}
-
-
-def _set_rows_deleted(db_path, load_id, row_indexes, deleted: bool) -> int:
-    idxs = [int(i) for i in (row_indexes or [])]
-    if not idxs:
-        raise ValueError("No se indicaron documentos.")
-    conn = connect(db_path)
-    try:
-        ensure_schema(conn)
-        placeholders = ",".join("?" for _ in idxs)
-        value = "datetime('now')" if deleted else "NULL"
-        with transaction(conn):
-            cur = conn.execute(
-                f"UPDATE excel_row SET deleted_at = {value} "
-                f"WHERE load_id = ? AND row_index IN ({placeholders})",
-                (int(load_id), *idxs),
-            )
-            return cur.rowcount
-    finally:
-        conn.close()
-
-
-def soft_delete_rows(db_path: str | Path, load_id: int, row_indexes: list[int]) -> dict:
-    return {"deleted": _set_rows_deleted(db_path, load_id, row_indexes, True)}
-
-
-def restore_rows(db_path: str | Path, load_id: int, row_indexes: list[int]) -> dict:
-    return {"restored": _set_rows_deleted(db_path, load_id, row_indexes, False)}
 
 
 def _set_load_deleted(db_path, load_id, deleted: bool) -> None:

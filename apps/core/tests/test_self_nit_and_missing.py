@@ -24,7 +24,8 @@ def empresa_with_load(tmp_path: Path, sample_excel: Path) -> dict:
         conn.close()
     pdfs_folder = tmp_path / "pdfs_vacia"
     pdfs_folder.mkdir()
-    storage.set_pdfs_folder(db_path, str(pdfs_folder))
+    # 0.1.4: la carpeta de soportes es POR MES (el lote de la muestra cae en 2026-02).
+    storage.set_periodo_folder(db_path, "2026-02", str(pdfs_folder))
     return {"db_path": db_path, "load_id": load_id, "rows": loaded.rows}
 
 

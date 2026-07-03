@@ -107,7 +107,7 @@ def test_missing_supports_report_has_5_columns(empresa_with_load, tmp_path: Path
     # Configurar carpeta de PDFs vacía → todas las filas fallan V1.
     pdfs_folder = tmp_path / "pdfs_vacia"
     pdfs_folder.mkdir()
-    storage.set_pdfs_folder(db_path, str(pdfs_folder))
+    storage.set_periodo_folder(db_path, "2026-02", str(pdfs_folder))  # 0.1.4: soportes por mes
 
     res = HANDLERS["export_missing_supports"]({
         "db_path": str(db_path), "load_id": load_id,
@@ -130,7 +130,7 @@ def test_missing_supports_export_inverts_nc_totals(empresa_with_load, tmp_path: 
     out = tmp_path / "faltantes_nc.xlsx"
     pdfs_folder = tmp_path / "pdfs_vacia"
     pdfs_folder.mkdir()
-    storage.set_pdfs_folder(db_path, str(pdfs_folder))
+    storage.set_periodo_folder(db_path, "2026-02", str(pdfs_folder))  # 0.1.4: soportes por mes
 
     HANDLERS["export_missing_supports"]({
         "db_path": str(db_path), "load_id": load_id,

@@ -39,6 +39,7 @@ def test_marks_imported_files(empresa_with_folder, sample_excel):
     HANDLERS["import_excel"]({
         "db_path": str(db_path),
         "source_path": str(target),
+        "periodo": "2026-02",
     })
 
     result = HANDLERS["list_folder_files"]({"db_path": str(db_path)})

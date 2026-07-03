@@ -259,24 +259,19 @@ def persist_load(conn, source_path: str, loaded: LoadedExcel, periodo: str | Non
     return load_id
 
 
-def fetch_load_rows(conn, load_id: int, include_deleted: bool = False) -> list[dict[str, Any]]:
+def fetch_load_rows(conn, load_id: int) -> list[dict[str, Any]]:
     """Read rows back as dicts (data_json deserialized).
     Derived columns are recomputed on every read so the latest derivation logic
     always wins, even on cargas persisted with older schemas (D-045 retrofit).
-    0.1.4: cada fila incluye su 'row_index' explícito y 'periodo'; excluye las
-    filas en papelera salvo include_deleted=True. Mapear por 'row_index', NO por
-    la posición del array (con papelera/filtros la posición ya no == row_index)."""
-    sql = "SELECT row_index, periodo, deleted_at, data_json FROM excel_row WHERE load_id = ?"
-    if not include_deleted:
-        sql += " AND deleted_at IS NULL"
-    sql += " ORDER BY row_index"
+    0.1.4: la tabla NO cambia — el periodo vive a nivel de lote (excel_load), no
+    por fila; no hay papelera de filas."""
+    cur = conn.execute(
+        "SELECT row_index, data_json FROM excel_row WHERE load_id = ? ORDER BY row_index",
+        (load_id,),
+    )
     out: list[dict[str, Any]] = []
-    for r in conn.execute(sql, (load_id,)).fetchall():
+    for r in cur.fetchall():
         row = json.loads(r["data_json"])
         row.update(_derive_columns(row))
-        row["row_index"] = r["row_index"]
-        row["periodo"] = r["periodo"]
-        if include_deleted:
-            row["deleted"] = r["deleted_at"] is not None
         out.append(row)
     return out

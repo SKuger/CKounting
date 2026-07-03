@@ -263,24 +263,21 @@ def _h_import_excel(params: dict) -> dict:
     db_path = Path(params["db_path"])
     source_path = Path(params["source_path"])
     periodo = params.get("periodo")
-    if periodo is not None:
-        if not isinstance(periodo, str):
-            raise ValueError("periodo debe ser string 'AAAA-MM' o null")
-        periodo = storage_module._norm_periodo(periodo)
+    if not isinstance(periodo, str) or not periodo.strip():
+        raise ValueError("Debes indicar el mes (periodo 'AAAA-MM') al cargar el Excel.")
+    periodo = storage_module._norm_periodo(periodo)
+    storage_module.create_periodo(db_path, periodo)  # el Excel se carga DENTRO del mes
     loaded = excel_module.load_excel(source_path)
     conn = storage_module.connect(db_path)
     try:
         load_id = excel_module.persist_load(conn, str(source_path), loaded, periodo)
-        load_periodo = conn.execute(
-            "SELECT periodo FROM excel_load WHERE id = ?", (load_id,)
-        ).fetchone()["periodo"]
     finally:
         conn.close()
     return {
         "load_id": load_id,
         "sheet_name": loaded.sheet_name,
         "total_rows": len(loaded.rows),
-        "periodo": load_periodo,
+        "periodo": periodo,
         "columns": excel_module.DIAN_COLUMNS + excel_module.DERIVED_COLUMNS,
     }
 
@@ -386,10 +383,9 @@ def _h_get_load_rows(params: dict) -> dict:
     load_id = int(params["load_id"])
     offset = int(params.get("offset", 0))
     limit = int(params.get("limit", 1000))
-    include_deleted = bool(params.get("include_deleted", False))
     conn = storage_module.connect(db_path)
     try:
-        rows = excel_module.fetch_load_rows(conn, load_id, include_deleted=include_deleted)
+        rows = excel_module.fetch_load_rows(conn, load_id)
         v3_overrides = sorted(storage_module.list_overrides(conn, load_id, "V3"))
     finally:
         conn.close()
@@ -469,17 +465,12 @@ def _h_run_validations(params: dict) -> dict:
         indexed_cufes, index_stats = _resolve_load_cufes(conn, load_id)
         rows = excel_module.fetch_load_rows(conn, load_id)
         v3_overrides = storage_module.list_overrides(conn, load_id, "V3")
-        # evaluate_rows indexa por POSICIÓN del array; pero persistimos el
-        # row_index REAL de cada fila, porque con la papelera la posición ya no
-        # coincide con row_index. Se mapea en esta frontera.
-        overrides_by_pos = {
-            pos: {"V3"} for pos, r in enumerate(rows) if r.get("row_index") in v3_overrides
-        }
+        overrides_by_row = {i: {"V3"} for i in v3_overrides}
         tagged = validations_module.evaluate_rows(
             rows,
             run_v3=run_v3,
             indexed_cufes=indexed_cufes,
-            overrides_by_row=overrides_by_pos,
+            overrides_by_row=overrides_by_row,
             self_nit=self_nit,
         )
         failing = sum(1 for r in tagged if r)
@@ -492,13 +483,12 @@ def _h_run_validations(params: dict) -> dict:
                 notes = f"{len(no_cufe)} PDF(s) sin CUFE extraído"
         failures = [
             {
-                "row_index": rows[pos]["row_index"],
-                "reason": "; ".join(msg for _code, msg in tag),
-                "codes": [code for code, _msg in tag],
+                "row_index": i,
+                "reason": "; ".join(msg for _code, msg in row),
+                "codes": [code for code, _msg in row],
             }
-            for pos, tag in enumerate(tagged) if tag
+            for i, row in enumerate(tagged) if row
         ]
-        cufe_by_ri = {r["row_index"]: r.get("CUFE/CUDE") for r in rows}
         with storage_module.transaction(conn):
             cur = conn.execute(
                 "INSERT INTO validation_run(load_id, finished_at, total_rows, failing_rows, notes) "
@@ -509,7 +499,7 @@ def _h_run_validations(params: dict) -> dict:
             conn.executemany(
                 "INSERT INTO validation_failure(run_id, row_index, cufe_cude, reason) "
                 "VALUES (?, ?, ?, ?)",
-                [(run_id, f["row_index"], cufe_by_ri.get(f["row_index"]), f["reason"]) for f in failures],
+                [(run_id, f["row_index"], rows[f["row_index"]].get("CUFE/CUDE"), f["reason"]) for f in failures],
             )
         return {
             "run_id": run_id,
@@ -618,7 +608,15 @@ def _h_export_missing_supports(params: dict) -> dict:
     return export_module.export_missing_supports(rows, missing, output_path)
 
 
-# ---------- 0.1.4: periodos (mes) + carpeta de soportes por mes + papelera ----------
+# ---------- 0.1.4: MESES (periodos) — crear, soportes por mes, mover/borrar el Excel ----------
+
+def _h_create_periodo(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    periodo = params.get("periodo")
+    if not isinstance(periodo, str):
+        raise ValueError("periodo requerido (string 'AAAA-MM')")
+    return storage_module.create_periodo(db_path, periodo)
+
 
 def _h_list_periodos(params: dict) -> list[dict]:
     db_path = Path(params["db_path"])
@@ -651,44 +649,21 @@ def _h_set_periodo_pdfs_folder(params: dict) -> dict:
     return storage_module.set_periodo_folder(db_path, periodo, folder)
 
 
+def _h_delete_periodo(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    periodo = params.get("periodo")
+    if not isinstance(periodo, str):
+        raise ValueError("periodo requerido (string 'AAAA-MM')")
+    return storage_module.delete_periodo(db_path, periodo)
+
+
 def _h_set_load_periodo(params: dict) -> dict:
     db_path = Path(params["db_path"])
     load_id = int(params["load_id"])
     periodo = params.get("periodo")
     if not isinstance(periodo, str):
         raise ValueError("periodo requerido (string 'AAAA-MM')")
-    propagate = bool(params.get("propagate", True))
-    return storage_module.set_load_periodo(db_path, load_id, periodo, propagate=propagate)
-
-
-def _h_move_rows_periodo(params: dict) -> dict:
-    db_path = Path(params["db_path"])
-    load_id = int(params["load_id"])
-    row_indexes = params.get("row_indexes")
-    periodo = params.get("periodo")
-    if not isinstance(row_indexes, list) or not row_indexes:
-        raise ValueError("row_indexes requerido (lista no vacía)")
-    if not isinstance(periodo, str):
-        raise ValueError("periodo requerido (string 'AAAA-MM')")
-    return storage_module.move_rows_periodo(db_path, load_id, row_indexes, periodo)
-
-
-def _h_soft_delete_rows(params: dict) -> dict:
-    db_path = Path(params["db_path"])
-    load_id = int(params["load_id"])
-    row_indexes = params.get("row_indexes")
-    if not isinstance(row_indexes, list) or not row_indexes:
-        raise ValueError("row_indexes requerido (lista no vacía)")
-    return storage_module.soft_delete_rows(db_path, load_id, row_indexes)
-
-
-def _h_restore_rows(params: dict) -> dict:
-    db_path = Path(params["db_path"])
-    load_id = int(params["load_id"])
-    row_indexes = params.get("row_indexes")
-    if not isinstance(row_indexes, list) or not row_indexes:
-        raise ValueError("row_indexes requerido (lista no vacía)")
-    return storage_module.restore_rows(db_path, load_id, row_indexes)
+    return storage_module.set_load_periodo(db_path, load_id, periodo)
 
 
 def _h_soft_delete_load(params: dict) -> dict:
@@ -764,13 +739,12 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "toggle_validation_override": _h_toggle_validation_override,
     "export_no_conformes": _h_export_no_conformes,
     "export_missing_supports": _h_export_missing_supports,
-    # 0.1.4 — periodos + papelera
+    # 0.1.4 — meses (periodos) + papelera del Excel
+    "create_periodo": _h_create_periodo,
     "list_periodos": _h_list_periodos,
     "set_periodo_pdfs_folder": _h_set_periodo_pdfs_folder,
+    "delete_periodo": _h_delete_periodo,
     "set_load_periodo": _h_set_load_periodo,
-    "move_rows_periodo": _h_move_rows_periodo,
-    "soft_delete_rows": _h_soft_delete_rows,
-    "restore_rows": _h_restore_rows,
     "soft_delete_load": _h_soft_delete_load,
     "restore_load": _h_restore_load,
     # 0.1.4 — BD del programa (contab.db)
