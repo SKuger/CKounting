@@ -2,10 +2,13 @@
 import { Upload, ChevronRight, Plus, FileSearch, Building2 } from 'lucide-vue-next'
 
 type Empresa = {
+  empresa_id?: number
   db_path: string
-  filename: string
   nit: string | null
+  dv?: string | null
   razon_social: string | null
+  created_at?: string
+  last_opened_at?: string | null
   archived: boolean
 }
 
@@ -40,7 +43,7 @@ const archivados = computed(() => empresas.value.filter((e) => e.archived))
 async function refresh() {
   loadingList.value = true
   try {
-    empresas.value = await rpc<Empresa[]>('list_empresas', {
+    empresas.value = await rpc<Empresa[]>('program_list_empresas', {
       include_archived: includeArchived.value,
     })
   } catch (exc) {
@@ -51,6 +54,12 @@ async function refresh() {
 }
 
 watch(includeArchived, refresh)
+
+// Abre una empresa registrando la visita en el catálogo central (last_opened_at).
+function openEmpresa(e: Empresa) {
+  rpc('program_touch_empresa', { db_path: e.db_path }).catch(() => {})
+  return navigateTo({ path: '/empresa', query: { db: e.db_path } })
+}
 
 let dvDebounce: ReturnType<typeof setTimeout> | null = null
 watch(newNit, (raw) => {
@@ -202,11 +211,11 @@ onMounted(refresh)
                 <button
                   type="button"
                   class="flex w-full items-center justify-between gap-3 rounded-md border border-border bg-card px-3 py-2.5 text-left transition-colors hover:bg-accent"
-                  @click="navigateTo({ path: '/empresa', query: { db: e.db_path } })"
+                  @click="openEmpresa(e)"
                 >
                   <span class="min-w-0">
                     <span class="block truncate font-medium">{{ e.razon_social || '(sin nombre)' }}</span>
-                    <span class="block truncate font-mono text-xs text-muted-foreground">{{ e.nit || '—' }} · {{ e.filename }}</span>
+                    <span class="block truncate font-mono text-xs text-muted-foreground">{{ e.nit || '—' }}</span>
                   </span>
                   <ChevronRight class="size-4 shrink-0 text-muted-foreground" />
                 </button>
@@ -221,12 +230,12 @@ onMounted(refresh)
                   :key="e.db_path"
                   class="flex items-center justify-between gap-3 rounded-md border border-border bg-card px-3 py-2.5 opacity-70 transition-opacity hover:opacity-100"
                 >
-                  <button type="button" class="min-w-0 flex-1 cursor-pointer text-left" @click="navigateTo({ path: '/empresa', query: { db: e.db_path } })">
+                  <button type="button" class="min-w-0 flex-1 cursor-pointer text-left" @click="openEmpresa(e)">
                     <span class="flex items-center gap-2">
                       <span class="truncate font-medium">{{ e.razon_social || '(sin nombre)' }}</span>
                       <Badge variant="secondary">archivada</Badge>
                     </span>
-                    <span class="block truncate font-mono text-xs text-muted-foreground">{{ e.nit || '—' }} · {{ e.filename }}</span>
+                    <span class="block truncate font-mono text-xs text-muted-foreground">{{ e.nit || '—' }}</span>
                   </button>
                   <Button variant="ghost" size="sm" :disabled="unarchiving === e.db_path" @click.stop="unarchive(e)">
                     {{ unarchiving === e.db_path ? 'Restaurando…' : 'Desarchivar' }}

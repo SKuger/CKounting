@@ -1,9 +1,9 @@
-// useUser — the design-system's DEFAULT account source for <SidebarUser> (issue #2).
-//
-// Multi-account: a list of saved profiles + the active one, switchable and editable, persisted to
-// localStorage. A consuming app can ignore this and pass <SidebarUser :user :profiles> from its own
-// auth/session instead (the component is prop-driven; this is just the standalone fallback).
+// useUser — perfil ÚNICO de Contab (D-004, sin auth), persistido en la BD del programa (contab.db)
+// vía program_get_user / program_save_user (T2.1). contab.db es la fuente de verdad y sobrevive al
+// cierre del programa; localStorage es solo una caché para pintar al instante antes de que responda
+// el sidecar. La sub-marca del design system usa <SidebarUser :user> para inyectar su propia sesión.
 import { reactive, computed, watch } from 'vue'
+import { rpc } from './useRpc'
 
 export interface Profile {
   id: string
@@ -20,68 +20,48 @@ export function initialsOf(p: Pick<Profile, 'name' | 'email'>) {
   return (p.email || '?').slice(0, 2).toUpperCase()
 }
 
-// Contab es single-user sin auth (D-004): no hay backend de sesión, así que este localStorage ES
-// la fuente real. Sembramos UNA cuenta neutra editable (sin personas demo del DS); el usuario la
-// edita y puede añadir/eliminar más desde el panel de SidebarUser.
-const DEFAULT_PROFILES: Profile[] = [
-  { id: 'principal', name: 'Mi cuenta', email: '', role: 'Contabilidad' },
-]
+const CACHE_KEY = 'contab-user'
+const DEFAULT: Profile = { id: 'principal', name: 'Mi cuenta', email: '', role: 'Contabilidad' }
 
-const KEY = 'contab-user-accounts'
-
-const state = reactive<{ profiles: Profile[]; activeId: string }>({
-  profiles: DEFAULT_PROFILES.map(p => ({ ...p })),
-  activeId: DEFAULT_PROFILES[0].id,
-})
+const state = reactive<Profile>({ ...DEFAULT })
 let started = false
 
-function slugify(s: string) {
-  return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+function cache() {
+  if (import.meta.client) localStorage.setItem(CACHE_KEY, JSON.stringify(state))
 }
-function persist() { if (import.meta.client) localStorage.setItem(KEY, JSON.stringify({ profiles: state.profiles, activeId: state.activeId })) }
+
+async function loadFromDb() {
+  try {
+    const r = await rpc<{ user: { name: string; email: string } | null }>('program_get_user')
+    if (r?.user) {
+      if (r.user.name) state.name = r.user.name
+      state.email = r.user.email ?? state.email
+      cache()
+    }
+  } catch {
+    /* el sidecar aún no responde: seguimos con la caché/el default */
+  }
+}
 
 export function useUser() {
   if (import.meta.client && !started) {
     started = true
     try {
-      const saved = JSON.parse(localStorage.getItem(KEY) ?? 'null')
-      if (saved && Array.isArray(saved.profiles) && saved.profiles.length) {
-        state.profiles = saved.profiles
-        state.activeId = saved.profiles.some((p: Profile) => p.id === saved.activeId) ? saved.activeId : saved.profiles[0].id
-      }
-    } catch { /* ignore */ }
-    watch(state, persist, { deep: true })
+      const c = JSON.parse(localStorage.getItem(CACHE_KEY) ?? 'null')
+      if (c && typeof c === 'object') Object.assign(state, c)
+    } catch { /* caché malformada: ignorar */ }
+    loadFromDb()
+    watch(state, cache, { deep: true })
   }
 
-  const active = computed<Profile>(() => state.profiles.find(p => p.id === state.activeId) ?? state.profiles[0])
+  const active = computed<Profile>(() => state)
 
-  function setActive(id: string) { if (state.profiles.some(p => p.id === id)) state.activeId = id }
-
-  // edit the active profile in place (name/email/role)
+  // Edita el perfil y lo persiste en contab.db (name/email). `role` es local (cosmético).
   function updateActive(patch: Partial<Omit<Profile, 'id'>>) {
-    const p = state.profiles.find(x => x.id === state.activeId)
-    if (p) Object.assign(p, patch)
+    Object.assign(state, patch)
+    cache()
+    if (import.meta.client) rpc('program_save_user', { name: state.name, email: state.email }).catch(() => {})
   }
 
-  // add a new account (and switch to it). id is slugged from the email/name with a collision suffix.
-  function addAccount(input: { name: string; email: string; role?: string }) {
-    const name = (input.name ?? '').trim()
-    const email = (input.email ?? '').trim()
-    if (!email) return null
-    const base = `acct-${slugify(email.split('@')[0] || name) || 'user'}`
-    const taken = new Set(state.profiles.map(p => p.id))
-    let id = base, n = 2
-    while (taken.has(id)) id = `${base}-${n++}`
-    state.profiles.push({ id, name: name || email.split('@')[0], email, role: input.role })
-    state.activeId = id
-    return id
-  }
-
-  function removeAccount(id: string) {
-    if (state.profiles.length <= 1) return            // never remove the last account
-    state.profiles = state.profiles.filter(p => p.id !== id)
-    if (state.activeId === id) state.activeId = state.profiles[0].id
-  }
-
-  return { profiles: computed(() => state.profiles), active, activeId: computed(() => state.activeId), setActive, updateActive, addAccount, removeAccount }
+  return { active, updateActive }
 }
