@@ -215,21 +215,34 @@ def load_excel(path: str | Path) -> LoadedExcel:
         wb.close()
 
 
-def persist_load(conn, source_path: str, loaded: LoadedExcel) -> int:
-    """Insert load + rows. Returns load_id."""
+def periodo_from_row(row: dict[str, Any]) -> str | None:
+    """'YYYY-MM' derivado de 'Fecha Emisión' (ISO). None si no se puede."""
+    fe = row.get("Fecha Emisión")
+    if isinstance(fe, str) and len(fe) >= 7:
+        return fe[:7]
+    return None
+
+
+def persist_load(conn, source_path: str, loaded: LoadedExcel, periodo: str | None = None) -> int:
+    """Insert load + rows. Returns load_id.
+    0.1.4: cada fila recibe su 'periodo' (mes) derivado de 'Fecha Emisión' (o el
+    'periodo' forzado); el lote guarda el mes dominante."""
     from .storage import transaction
 
     src = Path(source_path)
+    row_periodos = [periodo or periodo_from_row(row) for row in loaded.rows]
+    non_null = [p for p in row_periodos if p]
+    load_periodo = periodo or (max(set(non_null), key=non_null.count) if non_null else None)
     with transaction(conn):
         cur = conn.execute(
-            "INSERT INTO excel_load(source_path, source_name, total_rows, sheet_name) "
-            "VALUES (?, ?, ?, ?)",
-            (str(src), src.name, len(loaded.rows), loaded.sheet_name),
+            "INSERT INTO excel_load(source_path, source_name, total_rows, sheet_name, periodo) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (str(src), src.name, len(loaded.rows), loaded.sheet_name, load_periodo),
         )
         load_id = cur.lastrowid
         conn.executemany(
-            "INSERT INTO excel_row(load_id, row_index, cufe_cude, grupo, tipo_doc, data_json) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO excel_row(load_id, row_index, cufe_cude, grupo, tipo_doc, data_json, periodo) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             [
                 (
                     load_id,
@@ -238,6 +251,7 @@ def persist_load(conn, source_path: str, loaded: LoadedExcel) -> int:
                     row.get("Grupo"),
                     row.get("Tipo de documento"),
                     json.dumps(row, ensure_ascii=False, default=str),
+                    row_periodos[i],
                 )
                 for i, row in enumerate(loaded.rows)
             ],
@@ -245,17 +259,24 @@ def persist_load(conn, source_path: str, loaded: LoadedExcel) -> int:
     return load_id
 
 
-def fetch_load_rows(conn, load_id: int) -> list[dict[str, Any]]:
+def fetch_load_rows(conn, load_id: int, include_deleted: bool = False) -> list[dict[str, Any]]:
     """Read rows back as dicts (data_json deserialized).
     Derived columns are recomputed on every read so the latest derivation logic
-    always wins, even on cargas persisted with older schemas (D-045 retrofit)."""
-    cur = conn.execute(
-        "SELECT row_index, data_json FROM excel_row WHERE load_id = ? ORDER BY row_index",
-        (load_id,),
-    )
+    always wins, even on cargas persisted with older schemas (D-045 retrofit).
+    0.1.4: cada fila incluye su 'row_index' explícito y 'periodo'; excluye las
+    filas en papelera salvo include_deleted=True. Mapear por 'row_index', NO por
+    la posición del array (con papelera/filtros la posición ya no == row_index)."""
+    sql = "SELECT row_index, periodo, deleted_at, data_json FROM excel_row WHERE load_id = ?"
+    if not include_deleted:
+        sql += " AND deleted_at IS NULL"
+    sql += " ORDER BY row_index"
     out: list[dict[str, Any]] = []
-    for r in cur.fetchall():
+    for r in conn.execute(sql, (load_id,)).fetchall():
         row = json.loads(r["data_json"])
         row.update(_derive_columns(row))
+        row["row_index"] = r["row_index"]
+        row["periodo"] = r["periodo"]
+        if include_deleted:
+            row["deleted"] = r["deleted_at"] is not None
         out.append(row)
     return out

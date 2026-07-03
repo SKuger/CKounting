@@ -1,6 +1,7 @@
 """SQLite storage per empresa (D-003, D-016, plan.md E1 schema)."""
 from __future__ import annotations
 
+import re
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -33,7 +34,9 @@ CREATE TABLE IF NOT EXISTS excel_load (
   source_name  TEXT NOT NULL,
   loaded_at    TEXT NOT NULL DEFAULT (datetime('now')),
   total_rows   INTEGER NOT NULL,
-  sheet_name   TEXT
+  sheet_name   TEXT,
+  periodo      TEXT,          -- 'YYYY-MM' dominante del lote (0.1.4)
+  deleted_at   TEXT           -- papelera (soft-delete) del lote (0.1.4)
 );
 
 CREATE TABLE IF NOT EXISTS excel_row (
@@ -43,10 +46,19 @@ CREATE TABLE IF NOT EXISTS excel_row (
   cufe_cude    TEXT,
   grupo        TEXT,
   tipo_doc     TEXT,
-  data_json    TEXT NOT NULL
+  data_json    TEXT NOT NULL,
+  periodo      TEXT,          -- 'YYYY-MM' de la fila; movible entre meses (0.1.4)
+  deleted_at   TEXT           -- papelera (soft-delete) de la fila (0.1.4)
 );
 CREATE INDEX IF NOT EXISTS idx_excel_row_load ON excel_row(load_id);
 CREATE INDEX IF NOT EXISTS idx_excel_row_cufe ON excel_row(cufe_cude);
+
+-- 0.1.4: carpeta de soportes (PDFs) por periodo (mes). La validación V1 de un lote
+-- cruza sus CUFE contra la carpeta del periodo del lote (fallback: empresa_info.pdfs_folder).
+CREATE TABLE IF NOT EXISTS periodo_folder (
+  periodo     TEXT PRIMARY KEY,
+  pdfs_folder TEXT
+);
 
 CREATE TABLE IF NOT EXISTS validation_rule (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -143,6 +155,23 @@ def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
         raise
 
 
+def _backfill_row_periodo(conn: sqlite3.Connection) -> None:
+    """One-time: derive excel_row.periodo ('YYYY-MM') from data_json 'Fecha Emisión'."""
+    import json as _json
+
+    updates: list[tuple[str, int]] = []
+    for r in conn.execute("SELECT id, data_json FROM excel_row WHERE periodo IS NULL").fetchall():
+        try:
+            d = _json.loads(r["data_json"])
+        except Exception:
+            continue
+        fe = d.get("Fecha Emisión")
+        if isinstance(fe, str) and len(fe) >= 7:
+            updates.append((fe[:7], r["id"]))
+    if updates:
+        conn.executemany("UPDATE excel_row SET periodo = ? WHERE id = ?", updates)
+
+
 def _run_migrations(conn: sqlite3.Connection) -> None:
     """Idempotent migrations for older empresa.db files."""
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(empresa_info)").fetchall()}
@@ -152,6 +181,33 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE empresa_info ADD COLUMN pdfs_folder TEXT")
     if "archived" not in cols:
         conn.execute("ALTER TABLE empresa_info ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+
+    # 0.1.4 — periodo (mes) + papelera (soft-delete) sobre excel_row / excel_load.
+    row_cols = {r["name"] for r in conn.execute("PRAGMA table_info(excel_row)").fetchall()}
+    if "deleted_at" not in row_cols:
+        conn.execute("ALTER TABLE excel_row ADD COLUMN deleted_at TEXT")
+    if "periodo" not in row_cols:
+        conn.execute("ALTER TABLE excel_row ADD COLUMN periodo TEXT")
+        _backfill_row_periodo(conn)
+    # índice del periodo: aquí (no en SCHEMA_SQL) porque la columna puede acabar de
+    # crearse por ALTER; IF NOT EXISTS lo hace idempotente para BD nuevas y viejas.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_excel_row_periodo ON excel_row(periodo)")
+
+    load_cols = {r["name"] for r in conn.execute("PRAGMA table_info(excel_load)").fetchall()}
+    if "deleted_at" not in load_cols:
+        conn.execute("ALTER TABLE excel_load ADD COLUMN deleted_at TEXT")
+    if "periodo" not in load_cols:
+        conn.execute("ALTER TABLE excel_load ADD COLUMN periodo TEXT")
+        # periodo del lote = el mes más frecuente entre sus filas.
+        conn.execute(
+            """
+            UPDATE excel_load SET periodo = (
+              SELECT er.periodo FROM excel_row er
+              WHERE er.load_id = excel_load.id AND er.periodo IS NOT NULL
+              GROUP BY er.periodo ORDER BY COUNT(*) DESC LIMIT 1
+            ) WHERE periodo IS NULL
+            """
+        )
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
@@ -284,3 +340,162 @@ def set_pdfs_folder(db_path: str | Path, folder: str | None) -> None:
             conn.execute("UPDATE empresa_info SET pdfs_folder = ?", (normalized,))
     finally:
         conn.close()
+
+
+# ── 0.1.4: periodos (mes) + carpeta de soportes por mes + papelera ─────────────
+
+def _norm_periodo(periodo: str) -> str:
+    p = (periodo or "").strip()
+    if not re.fullmatch(r"\d{4}-\d{2}", p):
+        raise ValueError("El periodo debe tener el formato AAAA-MM (p. ej. 2026-05).")
+    return p
+
+
+def periodo_pdfs_folder(conn: sqlite3.Connection, periodo: str | None) -> str | None:
+    """Carpeta de soportes del periodo; fallback a la carpeta global de la empresa."""
+    if periodo:
+        row = conn.execute(
+            "SELECT pdfs_folder FROM periodo_folder WHERE periodo = ?", (periodo,)
+        ).fetchone()
+        if row and row["pdfs_folder"]:
+            return row["pdfs_folder"]
+    row = conn.execute("SELECT pdfs_folder FROM empresa_info LIMIT 1").fetchone()
+    return row["pdfs_folder"] if row else None
+
+
+def set_periodo_folder(db_path: str | Path, periodo: str, folder: str | None) -> dict:
+    p = _norm_periodo(periodo)
+    normalized = (folder or "").strip() or None
+    conn = connect(db_path)
+    try:
+        ensure_schema(conn)
+        with transaction(conn):
+            if normalized is None:
+                conn.execute("DELETE FROM periodo_folder WHERE periodo = ?", (p,))
+            else:
+                conn.execute(
+                    "INSERT INTO periodo_folder(periodo, pdfs_folder) VALUES (?, ?) "
+                    "ON CONFLICT(periodo) DO UPDATE SET pdfs_folder = excluded.pdfs_folder",
+                    (p, normalized),
+                )
+    finally:
+        conn.close()
+    return {"periodo": p, "pdfs_folder": normalized}
+
+
+def list_periodos(db_path: str | Path, include_deleted: bool = False) -> list[dict]:
+    """Meses presentes en la empresa con sus conteos y su carpeta de soportes."""
+    conn = connect(db_path)
+    try:
+        ensure_schema(conn)
+        del_filter = "" if include_deleted else "AND er.deleted_at IS NULL"
+        rows = conn.execute(
+            f"""
+            SELECT er.periodo AS periodo,
+                   COUNT(DISTINCT er.load_id) AS load_count,
+                   COUNT(*) AS row_count
+            FROM excel_row er
+            WHERE er.periodo IS NOT NULL {del_filter}
+            GROUP BY er.periodo
+            ORDER BY er.periodo DESC
+            """
+        ).fetchall()
+        folders = {
+            r["periodo"]: r["pdfs_folder"]
+            for r in conn.execute("SELECT periodo, pdfs_folder FROM periodo_folder").fetchall()
+        }
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["pdfs_folder"] = folders.get(d["periodo"])
+            out.append(d)
+        return out
+    finally:
+        conn.close()
+
+
+def set_load_periodo(db_path: str | Path, load_id: int, periodo: str, propagate: bool = True) -> dict:
+    """Cambiar el mes del lote. propagate=True reasigna también sus filas al mes."""
+    p = _norm_periodo(periodo)
+    conn = connect(db_path)
+    try:
+        ensure_schema(conn)
+        with transaction(conn):
+            conn.execute("UPDATE excel_load SET periodo = ? WHERE id = ?", (p, int(load_id)))
+            if propagate:
+                conn.execute("UPDATE excel_row SET periodo = ? WHERE load_id = ?", (p, int(load_id)))
+    finally:
+        conn.close()
+    return {"load_id": int(load_id), "periodo": p}
+
+
+def move_rows_periodo(
+    db_path: str | Path, load_id: int, row_indexes: list[int], periodo: str
+) -> dict:
+    """Mover documentos (filas) puntuales a otro mes (override por fila)."""
+    p = _norm_periodo(periodo)
+    idxs = [int(i) for i in (row_indexes or [])]
+    if not idxs:
+        raise ValueError("No se indicaron documentos para mover.")
+    conn = connect(db_path)
+    try:
+        ensure_schema(conn)
+        placeholders = ",".join("?" for _ in idxs)
+        with transaction(conn):
+            cur = conn.execute(
+                f"UPDATE excel_row SET periodo = ? WHERE load_id = ? AND row_index IN ({placeholders})",
+                (p, int(load_id), *idxs),
+            )
+            moved = cur.rowcount
+    finally:
+        conn.close()
+    return {"moved": moved, "periodo": p}
+
+
+def _set_rows_deleted(db_path, load_id, row_indexes, deleted: bool) -> int:
+    idxs = [int(i) for i in (row_indexes or [])]
+    if not idxs:
+        raise ValueError("No se indicaron documentos.")
+    conn = connect(db_path)
+    try:
+        ensure_schema(conn)
+        placeholders = ",".join("?" for _ in idxs)
+        value = "datetime('now')" if deleted else "NULL"
+        with transaction(conn):
+            cur = conn.execute(
+                f"UPDATE excel_row SET deleted_at = {value} "
+                f"WHERE load_id = ? AND row_index IN ({placeholders})",
+                (int(load_id), *idxs),
+            )
+            return cur.rowcount
+    finally:
+        conn.close()
+
+
+def soft_delete_rows(db_path: str | Path, load_id: int, row_indexes: list[int]) -> dict:
+    return {"deleted": _set_rows_deleted(db_path, load_id, row_indexes, True)}
+
+
+def restore_rows(db_path: str | Path, load_id: int, row_indexes: list[int]) -> dict:
+    return {"restored": _set_rows_deleted(db_path, load_id, row_indexes, False)}
+
+
+def _set_load_deleted(db_path, load_id, deleted: bool) -> None:
+    conn = connect(db_path)
+    try:
+        ensure_schema(conn)
+        value = "datetime('now')" if deleted else "NULL"
+        with transaction(conn):
+            conn.execute(f"UPDATE excel_load SET deleted_at = {value} WHERE id = ?", (int(load_id),))
+    finally:
+        conn.close()
+
+
+def soft_delete_load(db_path: str | Path, load_id: int) -> dict:
+    _set_load_deleted(db_path, load_id, True)
+    return {"load_id": int(load_id), "deleted": True}
+
+
+def restore_load(db_path: str | Path, load_id: int) -> dict:
+    _set_load_deleted(db_path, load_id, False)
+    return {"load_id": int(load_id), "deleted": False}
