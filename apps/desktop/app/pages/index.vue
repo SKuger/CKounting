@@ -155,7 +155,7 @@ onMounted(refresh)
           <div class="text-xs text-muted-foreground">empresas activas</div>
         </div>
       </div>
-      <NuxtLink to="/consulta-dian" class="flex items-center gap-3 rounded-lg border border-border bg-card p-3 transition-colors hover:bg-accent">
+      <NuxtLink to="/consulta-dian" data-tour="consulta-dian" class="flex items-center gap-3 rounded-lg border border-border bg-card p-3 transition-colors hover:bg-accent">
         <span class="inline-flex size-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
           <FileSearch class="size-5" />
         </span>
@@ -165,7 +165,7 @@ onMounted(refresh)
         </div>
         <ChevronRight class="size-4 shrink-0 text-muted-foreground" />
       </NuxtLink>
-      <button type="button" class="flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 p-3 text-left transition-colors hover:bg-primary/10" @click="newOpen = true">
+      <button type="button" data-tour="nueva-empresa" class="flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 p-3 text-left transition-colors hover:bg-primary/10" @click="newOpen = true">
         <span class="inline-flex size-10 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
           <Plus class="size-5" />
         </span>
@@ -176,7 +176,7 @@ onMounted(refresh)
       </button>
     </div>
 
-    <Card>
+    <Card data-tour="empresas-lista">
       <CardHeader>
         <CardTitle>Tus empresas</CardTitle>
         <CardAction class="flex items-center gap-3">

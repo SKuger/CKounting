@@ -502,6 +502,7 @@ watch(showTrash, refresh)
           <span :class="failingCount > 0 ? 'text-status-error' : 'text-status-success'">
             <strong>{{ failingCount }} / {{ totalCount }}</strong> no conformes
           </span>
+          <HelpHint title="¿Qué es «no conforme»?">Son las filas que no pasan alguna validación (V1 soporte, V2 nota crédito, V3 tarifa de IVA). Son las que debes revisar.</HelpHint>
         </template>
       </p>
     </header>
@@ -518,6 +519,7 @@ watch(showTrash, refresh)
           />
         </div>
         <Button
+          data-tour="load-solo-nc"
           :variant="onlyFailing ? 'default' : 'outline'"
           :disabled="!hasValidationRun"
           title="Atajo: f"
@@ -526,7 +528,7 @@ watch(showTrash, refresh)
           {{ onlyFailing ? '✓ Solo no conformes' : 'Solo no conformes' }}
           <span v-if="hasValidationRun" class="ml-1 inline-flex items-center rounded-full bg-status-error-bg px-1.5 text-[10px] font-bold text-status-error">{{ failingCount }}</span>
         </Button>
-        <Button :variant="showTrash ? 'default' : 'outline'" title="Ver documentos en la papelera" @click="showTrash = !showTrash">
+        <Button data-tour="load-papelera" :variant="showTrash ? 'default' : 'outline'" title="Ver documentos en la papelera" @click="showTrash = !showTrash">
           {{ showTrash ? '✓ Papelera' : 'Papelera' }}
         </Button>
         <Popover v-model:open="showColumnsPanel">
@@ -559,13 +561,13 @@ watch(showTrash, refresh)
           </PopoverContent>
         </Popover>
         <span class="flex-1" />
-        <Button :disabled="validating || !data" title="Atajo: v" @click="ejecutarValidaciones()">
+        <Button data-tour="load-validar" :disabled="validating || !data" title="Atajo: v" @click="ejecutarValidaciones()">
           {{ validating ? 'Validando…' : 'Validar' }}
         </Button>
         <Button variant="secondary" @click="exportPickerOpen = true">
           <FolderOpen class="size-4" /> {{ exportFolder ? 'Cambiar salida' : 'Carpeta de salida' }}
         </Button>
-        <Button :disabled="exporting || !exportPath" @click="exportar">
+        <Button data-tour="load-exportar" :disabled="exporting || !exportPath" @click="exportar">
           {{ exporting ? 'Exportando…' : 'Exportar faltantes de soporte' }}
         </Button>
       </div>

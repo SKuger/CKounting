@@ -290,10 +290,10 @@ onBeforeUnmount(() => ws?.close())
           </p>
 
           <div class="flex flex-wrap items-center gap-2">
-            <Button :disabled="launching || browserMode === 'human'" @click="launchBrowser">
+            <Button data-tour="dian-abrir" :disabled="launching || browserMode === 'human'" @click="launchBrowser">
               <Globe class="size-4" /> {{ launching ? 'Abriendo…' : 'Abrir navegador para la DIAN' }}
             </Button>
-            <Button variant="secondary" type="button" :disabled="checking" @click="checkBrowserMode">
+            <Button data-tour="dian-verificar" variant="secondary" type="button" :disabled="checking" @click="checkBrowserMode">
               {{ verifyLabel }}
             </Button>
           </div>
@@ -323,6 +323,7 @@ onBeforeUnmount(() => ws?.close())
       <Card v-if="!running && !finished">
         <CardContent class="flex flex-col gap-4">
           <div
+            data-tour="dian-archivo"
             class="flex flex-col items-center gap-2 rounded-lg border-[1.5px] border-dashed px-4 py-5 text-center transition-colors"
             :class="dragging ? 'border-primary bg-primary/5' : 'border-input'"
             @dragenter.prevent="dragging = true"
@@ -341,7 +342,7 @@ onBeforeUnmount(() => ws?.close())
             </Button>
           </div>
           <div class="flex items-center gap-3">
-            <Button :disabled="!file" @click="start">Consultar terceros</Button>
+            <Button data-tour="dian-consultar" :disabled="!file" @click="start">Consultar terceros</Button>
             <a class="text-sm text-muted-foreground hover:text-foreground hover:underline" href="/api/dian/template" download>Descargar plantilla</a>
           </div>
         </CardContent>

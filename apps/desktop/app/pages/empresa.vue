@@ -477,7 +477,7 @@ watch(dbPath, refresh)
         </p>
       </div>
       <div class="flex gap-2">
-        <Button variant="secondary" :disabled="savingFolder" @click="folderPickerOpen = true">
+        <Button variant="secondary" data-tour="empresa-carpeta" :disabled="savingFolder" @click="folderPickerOpen = true">
           <FolderOpen class="size-4" /> {{ info.default_folder ? 'Cambiar carpeta' : 'Elegir carpeta' }}
         </Button>
         <Button v-if="info.default_folder" variant="ghost" :disabled="savingFolder" @click="clearFolder">Quitar</Button>
@@ -600,7 +600,7 @@ watch(dbPath, refresh)
         </CardContent>
       </Card>
 
-      <Card>
+      <Card data-tour="empresa-cargas">
         <CardHeader>
           <CardTitle>Cargas</CardTitle>
           <CardDescription>Historial de importaciones de esta empresa.</CardDescription>
@@ -631,7 +631,7 @@ watch(dbPath, refresh)
 
       <!-- columna ancha: periodos (meses) + soportes PDF -->
       <div class="flex min-w-0 flex-col gap-4">
-      <Card>
+      <Card data-tour="empresa-periodos">
         <CardHeader>
           <CardTitle>Periodos (meses)</CardTitle>
           <CardDescription>
