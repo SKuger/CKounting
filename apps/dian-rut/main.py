@@ -80,7 +80,7 @@ async def download_current_file(file_id: str):
 async def get_browser_mode_status():
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
-            response = await client.get("http://localhost:9222/json/version")
+            response = await client.get("http://127.0.0.1:9222/json/version")
             if response.status_code == 200:
                 return {"status": "human_connected"}
     except (httpx.ConnectError, httpx.TimeoutException):

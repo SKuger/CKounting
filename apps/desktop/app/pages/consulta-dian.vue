@@ -1,11 +1,8 @@
 <script setup lang="ts">
-import { ArrowLeft, Copy, Download, UploadCloud } from 'lucide-vue-next'
+import { ArrowLeft, Copy, Download, Globe, UploadCloud } from 'lucide-vue-next'
 
 type LogEntry = { type: string; msg: string; time: string }
 type ServerData = { message?: string; percent?: number; download_url?: string; trace?: string }
-
-// Comando verbatim del original para lanzar Chrome en modo dev (CDP :9222).
-const CHROME_CMD = 'google-chrome --remote-debugging-port=9222 --user-data-dir=$HOME/chrome-dian-profile'
 
 const file = ref<File | null>(null)
 const dragging = ref(false)
@@ -18,6 +15,8 @@ const fileId = ref<string | null>(null)
 const downloadUrl = ref<string | null>(null)
 const browserMode = ref<'unknown' | 'human' | 'auto'>('unknown')
 const checking = ref(false)
+const launching = ref(false)
+const launchMsg = ref('')
 const copied = ref(false)
 const logBox = ref<HTMLElement | null>(null)
 
@@ -27,9 +26,9 @@ const partialUrl = computed(() => (fileId.value ? `/api/dian/download/current/${
 
 const verifyLabel = computed(() => {
   if (checking.value) return 'Verificando…'
-  if (browserMode.value === 'human') return '✓ Conectado a Chrome real'
-  if (browserMode.value === 'auto') return '🔄 Reintentar conexión'
-  return '🔍 Verificar conexión'
+  if (browserMode.value === 'human') return '✓ Conectado'
+  if (browserMode.value === 'auto') return 'Verificar conexión'
+  return 'Verificar conexión'
 })
 
 const modeBadgeClass = computed(() =>
@@ -39,6 +38,21 @@ const modeBadgeClass = computed(() =>
       ? 'bg-status-error-bg text-status-error'
       : 'bg-muted text-muted-foreground',
 )
+
+// Comando manual por SO — solo "ayuda avanzada" para quien prefiera hacerlo a mano.
+const clientOS = computed<'win' | 'mac' | 'linux' | 'other'>(() => {
+  if (!import.meta.client) return 'other'
+  const ua = navigator.userAgent
+  if (/Windows/i.test(ua)) return 'win'
+  if (/Macintosh|Mac OS/i.test(ua)) return 'mac'
+  if (/Linux|X11/i.test(ua)) return 'linux'
+  return 'other'
+})
+const manualCommand = computed(() => {
+  if (clientOS.value === 'win') return 'chrome.exe --remote-debugging-port=9222 --user-data-dir="%USERPROFILE%\\chrome-dian-profile"'
+  if (clientOS.value === 'mac') return '"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --remote-debugging-port=9222 --user-data-dir="$HOME/chrome-dian-profile"'
+  return 'google-chrome --remote-debugging-port=9222 --user-data-dir="$HOME/chrome-dian-profile"'
+})
 
 function logClass(type: string): string {
   if (type === 'error') return 'text-status-error'
@@ -87,9 +101,46 @@ async function checkBrowserMode() {
   }
 }
 
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms))
+}
+
+async function pollUntilConnected(maxTries = 15): Promise<boolean> {
+  for (let i = 0; i < maxTries; i++) {
+    await checkBrowserMode()
+    if (browserMode.value === 'human') return true
+    await sleep(1500)
+  }
+  return browserMode.value === 'human'
+}
+
+// Abre un Chrome/Edge dedicado en modo depuración, sin terminal.
+async function launchBrowser() {
+  if (launching.value) return
+  launching.value = true
+  launchMsg.value = 'Abriendo el navegador…'
+  try {
+    const r = await $fetch<{ status: string; browser?: string }>('/api/dian/launch-browser', { method: 'POST' })
+    if (r.status === 'not_found') {
+      launchMsg.value = 'No encontramos Google Chrome ni Microsoft Edge instalado. Instala Chrome, o usa la ayuda avanzada de abajo.'
+      return
+    }
+    launchMsg.value = r.status === 'already_running'
+      ? 'El navegador ya estaba abierto. Verificando conexión…'
+      : 'Navegador abierto. Entra a la página de la DIAN y resuelve el "Soy humano" si aparece.'
+    const ok = await pollUntilConnected()
+    if (ok) launchMsg.value = '✓ Conectado. Ya puedes consultar los terceros.'
+    else launchMsg.value = 'Si el navegador se abrió, espera un momento y pulsa "Verificar conexión".'
+  } catch {
+    launchMsg.value = 'No se pudo abrir el navegador automáticamente. Usa la ayuda avanzada de abajo.'
+  } finally {
+    launching.value = false
+  }
+}
+
 async function copyCommand() {
   try {
-    await navigator.clipboard.writeText(CHROME_CMD)
+    await navigator.clipboard.writeText(manualCommand.value)
     copied.value = true
     setTimeout(() => (copied.value = false), 2000)
   } catch {
@@ -194,7 +245,7 @@ onBeforeUnmount(() => ws?.close())
 </script>
 
 <template>
-  <div class="mx-auto flex w-full max-w-5xl flex-col">
+  <div class="mx-auto flex w-full max-w-5xl flex-col gap-4">
     <NuxtLink to="/" class="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground">
       <ArrowLeft class="size-3.5" /> Empresas
     </NuxtLink>
@@ -207,101 +258,116 @@ onBeforeUnmount(() => ws?.close())
       </p>
     </div>
 
-    <!-- instrucciones (modo) | acción (carga/progreso) -->
+    <!-- instrucciones (navegador) | acción (carga/progreso) -->
     <div class="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,0.85fr)]">
-    <!-- Modo Navegador Humano (CDP :9222) -->
-    <details class="overflow-hidden rounded-lg border border-border bg-card" :open="browserMode !== 'human'">
-      <summary class="flex cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 select-none [&::-webkit-details-marker]:hidden">
-        <span class="font-medium">Modo Navegador Humano</span>
-        <span class="rounded-full px-2 py-0.5 text-xs font-medium" :class="modeBadgeClass">
-          {{ browserMode === 'human' ? '🟢 Conectado a Chrome real' : browserMode === 'auto' ? '🔴 Modo Automático' : '○ verificando…' }}
-        </span>
-      </summary>
+      <!-- Navegador para la DIAN (abre Chrome en modo depuración, sin terminal) -->
+      <div class="overflow-hidden rounded-lg border border-border bg-card">
+        <div class="flex items-center justify-between gap-4 border-b border-border px-4 py-3">
+          <span class="font-medium">Navegador para la DIAN</span>
+          <span class="rounded-full px-2 py-0.5 text-xs font-medium" :class="modeBadgeClass">
+            {{ browserMode === 'human' ? '🟢 Conectado' : browserMode === 'auto' ? '🔴 Sin conectar' : '○ verificando…' }}
+          </span>
+        </div>
 
-      <div class="border-t border-border px-4 pb-4 pt-3">
-        <p class="text-sm text-muted-foreground">
-          Conecta tu navegador Chrome real para evadir los bloqueos de Cloudflare con un 100 % de efectividad.
-          El scraper se "pega" a tu Chrome por el puerto de depuración (9222) y reutiliza tu sesión de la DIAN.
-        </p>
+        <div class="flex flex-col gap-3 px-4 pb-4 pt-3">
+          <p class="text-sm text-muted-foreground">
+            Para consultar la DIAN con la máxima efectividad, Contab abre un navegador dedicado.
+            Pulsa el botón, entra a la página de la DIAN y resuelve el <strong>"Soy humano"</strong> si aparece.
+            No necesitas escribir nada en ninguna consola.
+          </p>
 
-        <ol class="my-3 flex list-decimal flex-col gap-2 pl-5 text-sm">
-          <li>Abre la aplicación <strong>"Terminal"</strong> o <strong>"Consola"</strong> de tu computador.</li>
-          <li>
-            Copia y pega este comando, y presiona <strong>ENTER</strong>:
-            <div class="mt-1.5 flex items-stretch gap-2">
-              <code class="flex-1 overflow-x-auto whitespace-nowrap rounded-md border border-border bg-muted px-2.5 py-2 font-mono text-xs">{{ CHROME_CMD }}</code>
-              <Button variant="ghost" size="sm" type="button" @click="copyCommand">
-                <Copy class="size-3.5" /> {{ copied ? '¡Copiado!' : 'Copiar' }}
-              </Button>
+          <div class="flex flex-wrap items-center gap-2">
+            <Button :disabled="launching || browserMode === 'human'" @click="launchBrowser">
+              <Globe class="size-4" /> {{ launching ? 'Abriendo…' : 'Abrir navegador para la DIAN' }}
+            </Button>
+            <Button variant="secondary" type="button" :disabled="checking" @click="checkBrowserMode">
+              {{ verifyLabel }}
+            </Button>
+          </div>
+
+          <p v-if="launchMsg" class="text-sm" :class="browserMode === 'human' ? 'text-status-success' : 'text-muted-foreground'">
+            {{ launchMsg }}
+          </p>
+
+          <details class="text-sm">
+            <summary class="cursor-pointer select-none text-muted-foreground transition-colors hover:text-foreground">
+              Ayuda avanzada (abrir el navegador manualmente)
+            </summary>
+            <div class="mt-2 flex flex-col gap-1.5">
+              <p class="text-xs text-muted-foreground">Si el botón no funciona, abre una terminal/consola y ejecuta:</p>
+              <div class="flex items-stretch gap-2">
+                <code class="flex-1 overflow-x-auto whitespace-nowrap rounded-md border border-border bg-muted px-2.5 py-2 font-mono text-xs">{{ manualCommand }}</code>
+                <Button variant="ghost" size="sm" type="button" @click="copyCommand">
+                  <Copy class="size-3.5" /> {{ copied ? '¡Copiado!' : 'Copiar' }}
+                </Button>
+              </div>
             </div>
-          </li>
-          <li>Se abrirá Chrome. Entra a la página de la <strong>DIAN</strong> allí, resuelve el "Soy humano" y déjala abierta.</li>
-          <li>Haz clic en <strong>"Verificar conexión"</strong>.</li>
-        </ol>
-
-        <Button variant="secondary" type="button" :disabled="checking" @click="checkBrowserMode">
-          {{ verifyLabel }}
-        </Button>
+          </details>
+        </div>
       </div>
-    </details>
 
-    <!-- Paso 1: cargar archivo -->
-    <Card v-if="!running && !finished">
-      <CardContent class="flex flex-col gap-4">
-        <div
-          class="flex flex-col items-center gap-2 rounded-lg border-[1.5px] border-dashed px-4 py-5 text-center transition-colors"
-          :class="dragging ? 'border-primary bg-primary/5' : 'border-input'"
-          @dragenter.prevent="dragging = true"
-          @dragover.prevent="dragging = true"
-          @dragleave.prevent="dragging = false"
-          @drop.prevent="onDrop"
-        >
-          <UploadCloud class="size-6 text-muted-foreground" />
-          <p v-if="file">Archivo cargado: <span class="font-mono">{{ file.name }}</span></p>
-          <p v-else class="text-muted-foreground">Arrastra aquí tu Excel <span class="font-mono">.xlsx</span> o selecciónalo</p>
-          <Button as-child variant="outline" size="sm">
-            <label class="cursor-pointer">
-              Elegir archivo
-              <input type="file" accept=".xlsx" hidden @change="pickFile(($event.target as HTMLInputElement).files)">
-            </label>
-          </Button>
-        </div>
-        <div class="flex items-center gap-3">
-          <Button :disabled="!file" @click="start">Consultar terceros</Button>
-          <a class="text-sm text-muted-foreground hover:text-foreground hover:underline" href="/api/dian/template" download>Descargar plantilla</a>
-        </div>
-      </CardContent>
-    </Card>
-
-    <!-- Paso 2/3: progreso + resultado -->
-    <Card v-else>
-      <CardContent class="flex flex-col gap-3">
-        <div class="flex items-center gap-3">
-          <div class="h-2 flex-1 overflow-hidden rounded-full bg-muted">
-            <div class="h-full bg-primary transition-[width] duration-300" :style="{ width: percent + '%' }" />
+      <!-- Paso 1: cargar archivo -->
+      <Card v-if="!running && !finished">
+        <CardContent class="flex flex-col gap-4">
+          <div
+            class="flex flex-col items-center gap-2 rounded-lg border-[1.5px] border-dashed px-4 py-5 text-center transition-colors"
+            :class="dragging ? 'border-primary bg-primary/5' : 'border-input'"
+            @dragenter.prevent="dragging = true"
+            @dragover.prevent="dragging = true"
+            @dragleave.prevent="dragging = false"
+            @drop.prevent="onDrop"
+          >
+            <UploadCloud class="size-6 text-muted-foreground" />
+            <p v-if="file">Archivo cargado: <span class="font-mono">{{ file.name }}</span></p>
+            <p v-else class="text-muted-foreground">Arrastra aquí tu Excel <span class="font-mono">.xlsx</span> o selecciónalo</p>
+            <Button as-child variant="outline" size="sm">
+              <label class="cursor-pointer">
+                Elegir archivo
+                <input type="file" accept=".xlsx" hidden @change="pickFile(($event.target as HTMLInputElement).files)">
+              </label>
+            </Button>
           </div>
-          <span class="font-mono text-sm">{{ percent }}%</span>
-        </div>
-        <p class="text-sm" :class="finished ? 'text-status-success' : 'text-muted-foreground'">{{ statusMsg }}</p>
-
-        <div ref="logBox" class="h-60 overflow-auto rounded-md border border-border bg-muted px-3 py-2.5 font-mono text-xs leading-relaxed">
-          <div v-for="(l, i) in logs" :key="i" class="whitespace-pre-wrap break-words" :class="logClass(l.type)">
-            <span class="text-muted-foreground">[{{ l.time }}]</span> {{ l.msg }}
+          <div class="flex items-center gap-3">
+            <Button :disabled="!file" @click="start">Consultar terceros</Button>
+            <a class="text-sm text-muted-foreground hover:text-foreground hover:underline" href="/api/dian/template" download>Descargar plantilla</a>
           </div>
-        </div>
+        </CardContent>
+      </Card>
 
-        <div class="flex items-center gap-3">
-          <Button v-if="downloadUrl" as-child>
-            <a :href="downloadUrl" download><Download class="size-4" /> Descargar resultado</a>
-          </Button>
-          <Button v-else-if="partialUrl" as-child variant="secondary">
-            <a :href="partialUrl" download><Download class="size-4" /> Descargar avance parcial</a>
-          </Button>
-          <Button v-if="finished" variant="ghost" @click="reset">Nueva consulta</Button>
-          <Button v-else-if="!running" variant="ghost" @click="reset">Cancelar</Button>
-        </div>
-      </CardContent>
-    </Card>
+      <!-- Paso 2/3: progreso + resultado -->
+      <Card v-else>
+        <CardContent class="flex flex-col gap-3">
+          <div class="flex items-center gap-3">
+            <div class="h-2 flex-1 overflow-hidden rounded-full bg-muted">
+              <div class="h-full bg-primary transition-[width] duration-300" :style="{ width: percent + '%' }" />
+            </div>
+            <span class="font-mono text-sm">{{ percent }}%</span>
+          </div>
+          <p class="text-sm" :class="finished ? 'text-status-success' : 'text-muted-foreground'">{{ statusMsg }}</p>
+
+          <details>
+            <summary class="cursor-pointer select-none text-xs text-muted-foreground transition-colors hover:text-foreground">
+              Ver detalle técnico
+            </summary>
+            <div ref="logBox" class="mt-1.5 h-52 overflow-auto rounded-md border border-border bg-muted px-3 py-2.5 font-mono text-xs leading-relaxed">
+              <div v-for="(l, i) in logs" :key="i" class="whitespace-pre-wrap break-words" :class="logClass(l.type)">
+                <span class="text-muted-foreground">[{{ l.time }}]</span> {{ l.msg }}
+              </div>
+            </div>
+          </details>
+
+          <div class="flex items-center gap-3">
+            <Button v-if="downloadUrl" as-child>
+              <a :href="downloadUrl" download><Download class="size-4" /> Descargar resultado</a>
+            </Button>
+            <Button v-else-if="partialUrl" as-child variant="secondary">
+              <a :href="partialUrl" download><Download class="size-4" /> Descargar avance parcial</a>
+            </Button>
+            <Button v-if="finished" variant="ghost" @click="reset">Nueva consulta</Button>
+            <Button v-else-if="!running" variant="ghost" @click="reset">Cancelar</Button>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   </div>
 </template>

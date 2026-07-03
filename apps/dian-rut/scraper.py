@@ -132,7 +132,7 @@ async def perform_scraping(nits: list[int | str | float], results: list[dict], c
         
         # 1. Attempt Human Mode (CDP)
         try:
-            browser = await p.chromium.connect_over_cdp("http://localhost:9222")
+            browser = await p.chromium.connect_over_cdp("http://127.0.0.1:9222")
             if browser.contexts:
                 context = browser.contexts[0]
                 
