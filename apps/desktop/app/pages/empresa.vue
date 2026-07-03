@@ -53,6 +53,15 @@ type Carga = {
   loaded_at: string
   total_rows: number
   sheet_name: string | null
+  periodo?: string | null
+}
+
+type Periodo = {
+  periodo: string
+  load_count: number
+  row_count: number
+  pdfs_folder: string | null
+  indexed_cufe_count: number
 }
 
 type FolderFile = {
@@ -115,12 +124,76 @@ const indexStats = ref<IndexStats | null>(null)
 
 const pendingFiles = computed(() => folderListing.value.files.filter((f) => !f.imported))
 
+// T2.3 — periodos (meses), cada uno con su propia carpeta de soportes
+const periodos = ref<Periodo[]>([])
+const periodoPickerOpen = ref(false)
+const periodoPickerTarget = ref<string | null>(null)
+const savingPeriodoFolder = ref(false)
+
+// T2.4 — archivar con Dialog del design system (no confirm() nativo)
+const archiveModalOpen = ref(false)
+
+// Mensaje de error legible (sin el prefijo "Error:" técnico).
+function humanError(e: unknown): string {
+  const m = e instanceof Error ? e.message : String(e)
+  return m.replace(/^Error:\s*/, '').trim() || 'Ocurrió un error inesperado.'
+}
+
+// "2026-07" → "Julio 2026"; devuelve el nombre de la carpeta (no la ruta cruda).
+function monthLabel(periodo: string): string {
+  const [y, m] = periodo.split('-').map(Number)
+  if (!y || !m) return periodo
+  const s = new Date(y, m - 1, 1).toLocaleDateString('es-CO', { month: 'long', year: 'numeric' })
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+function folderName(path: string): string {
+  return path.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || path
+}
+
+async function reloadPeriodos() {
+  periodos.value = await rpc<Periodo[]>('list_periodos', { db_path: dbPath.value })
+}
+function openPeriodoPicker(periodo: string) {
+  periodoPickerTarget.value = periodo
+  periodoPickerOpen.value = true
+}
+async function setPeriodoFolder(periodo: string, folder: string | null) {
+  savingPeriodoFolder.value = true
+  try {
+    await rpc('set_periodo_pdfs_folder', { db_path: dbPath.value, periodo, folder })
+    await reloadPeriodos()
+  } catch (exc) {
+    toast.error('No se pudo guardar la carpeta del mes', humanError(exc))
+  } finally {
+    savingPeriodoFolder.value = false
+  }
+}
+function onPeriodoFolderPicked(path: string) {
+  const periodo = periodoPickerTarget.value
+  periodoPickerOpen.value = false
+  if (periodo) setPeriodoFolder(periodo, path)
+}
+
+function openArchiveModal() { archiveModalOpen.value = true }
+async function confirmArchive() {
+  archiving.value = true
+  try {
+    await rpc('archive_empresa', { db_path: dbPath.value })
+    toast.success('Empresa archivada')
+    await navigateTo('/')
+  } catch (exc) {
+    toast.error('No se pudo archivar', humanError(exc))
+    archiving.value = false
+  }
+}
+
 async function refresh() {
   if (!dbPath.value) return
   loading.value = true
   try {
     info.value = await rpc<EmpresaInfo>('open_empresa', { db_path: dbPath.value })
     cargas.value = await rpc<Carga[]>('list_loads', { db_path: dbPath.value })
+    await reloadPeriodos()
     await refreshFolderListing()
     await refreshPdfsListing()
   } catch (exc) {
@@ -202,19 +275,6 @@ async function onBackupFolderPicked(folder: string) {
     toast.error('Algo falló', String(exc))
   } finally {
     backingUp.value = false
-  }
-}
-
-async function archiveEmpresa() {
-  if (!confirm('¿Archivar esta empresa? Quedará oculta de la lista principal pero el archivo .db se conserva.')) return
-  archiving.value = true
-  try {
-    await rpc('archive_empresa', { db_path: dbPath.value })
-    toast.success('Empresa archivada')
-    await navigateTo('/')
-  } catch (exc) {
-    toast.error('Algo falló', String(exc))
-    archiving.value = false
   }
 }
 
@@ -312,7 +372,7 @@ async function importarPath(filePath: string) {
       source_path: filePath,
     })
     const fileName = filePath.split('/').pop() || filePath
-    lastImportMsg.value = `${fileName} → ${result.total_rows} filas (load_id=${result.load_id})`
+    lastImportMsg.value = `${fileName} → ${result.total_rows} filas importadas`
     cargas.value = await rpc<Carga[]>('list_loads', { db_path: dbPath.value })
     await refreshFolderListing()
   } catch (exc) {
@@ -347,7 +407,7 @@ async function handleExcelPicked(event: Event) {
       error?: string
     }>('/api/upload-excel', { method: 'POST', body: fd })
     if (!res.ok || !res.result) throw new Error(res.error || 'error desconocido')
-    lastImportMsg.value = `${file.name} → ${res.result.total_rows} filas (load_id=${res.result.load_id})`
+    lastImportMsg.value = `${file.name} → ${res.result.total_rows} filas importadas`
     cargas.value = await rpc<Carga[]>('list_loads', { db_path: dbPath.value })
     await refreshFolderListing()
   } catch (exc) {
@@ -412,7 +472,7 @@ watch(dbPath, refresh)
           NIT <strong class="text-foreground">{{ info.nit }}{{ info.dv ? `-${info.dv}` : '' }}</strong>
           <span class="ml-1 text-xs">(inmutable)</span>
           <span class="mx-1.5 text-border">·</span>
-          <span v-if="info.default_folder" class="font-mono text-xs">{{ info.default_folder }}</span>
+          <span v-if="info.default_folder" class="text-xs" :title="info.default_folder">Carpeta: <span class="text-foreground">{{ folderName(info.default_folder) }}</span></span>
           <span v-else>sin carpeta configurada</span>
         </p>
       </div>
@@ -429,7 +489,7 @@ watch(dbPath, refresh)
             <button type="button" class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-accent disabled:opacity-50" :disabled="backingUp" @click="backupPickerOpen = true">
               <Download class="size-4" /> {{ backingUp ? 'Generando…' : 'Hacer backup' }}
             </button>
-            <button type="button" class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-accent disabled:opacity-50" :disabled="archiving" @click="archiveEmpresa">
+            <button type="button" class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-accent disabled:opacity-50" :disabled="archiving" @click="openArchiveModal">
               <Archive class="size-4" /> {{ archiving ? 'Archivando…' : 'Archivar' }}
             </button>
             <div class="my-1 h-px bg-border" />
@@ -557,7 +617,9 @@ watch(dbPath, refresh)
                 <span class="shrink-0 font-mono text-sm text-muted-foreground">#{{ c.id }}</span>
                 <span class="min-w-0 flex-1">
                   <span class="block truncate font-medium">{{ c.source_name }}</span>
-                  <span class="block text-xs text-muted-foreground">{{ c.total_rows }} filas · {{ c.loaded_at }}</span>
+                  <span class="block text-xs text-muted-foreground">
+                    <template v-if="c.periodo"><span class="font-mono">{{ c.periodo }}</span> · </template>{{ c.total_rows }} filas · {{ c.loaded_at }}
+                  </span>
                 </span>
                 <ChevronRight class="size-4 shrink-0 text-muted-foreground" />
               </button>
@@ -567,11 +629,50 @@ watch(dbPath, refresh)
       </Card>
       </div>
 
-      <!-- columna ancha: soportes PDF -->
+      <!-- columna ancha: periodos (meses) + soportes PDF -->
       <div class="flex min-w-0 flex-col gap-4">
       <Card>
         <CardHeader>
-          <CardTitle>Soportes PDF</CardTitle>
+          <CardTitle>Periodos (meses)</CardTitle>
+          <CardDescription>
+            Cada mes tiene su Excel y su propia carpeta de soportes; la validación cruza el Excel del mes contra esa carpeta.
+          </CardDescription>
+        </CardHeader>
+        <CardContent class="flex flex-col gap-3">
+          <p v-if="!periodos.length" class="py-6 text-center text-sm text-muted-foreground">
+            Aún no hay meses. Importa un Excel y Contab organizará sus documentos por mes automáticamente.
+          </p>
+          <ul v-else class="flex flex-col gap-2">
+            <li v-for="p in periodos" :key="p.periodo" class="rounded-md border border-border bg-card px-3 py-2.5">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="min-w-0">
+                  <div class="font-medium">
+                    {{ monthLabel(p.periodo) }}
+                    <span class="font-mono text-xs text-muted-foreground">{{ p.periodo }}</span>
+                  </div>
+                  <div class="text-xs text-muted-foreground">
+                    {{ p.load_count }} carga(s) · {{ p.row_count }} fila(s) · {{ p.indexed_cufe_count }} CUFE indexados
+                  </div>
+                </div>
+                <div class="flex items-center gap-1.5">
+                  <Button variant="secondary" size="sm" :disabled="savingPeriodoFolder" @click="openPeriodoPicker(p.periodo)">
+                    <FolderOpen class="size-4" /> {{ p.pdfs_folder ? 'Cambiar soportes' : 'Elegir soportes' }}
+                  </Button>
+                  <Button v-if="p.pdfs_folder" variant="ghost" size="sm" :disabled="savingPeriodoFolder" @click="setPeriodoFolder(p.periodo, null)">Quitar</Button>
+                </div>
+              </div>
+              <div v-if="p.pdfs_folder" class="mt-1 text-xs text-muted-foreground" :title="p.pdfs_folder">
+                Soportes: <span class="text-foreground">{{ folderName(p.pdfs_folder) }}</span>
+              </div>
+              <div v-else class="mt-1 text-xs text-muted-foreground">Sin carpeta de soportes para este mes.</div>
+            </li>
+          </ul>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Soportes PDF (carpeta global)</CardTitle>
           <CardDescription>
             <template v-if="pdfsListing.folder">
               {{ pdfsListing.files.length }} PDF(s) · {{ pdfsListing.indexed_cufe_count }} CUFE indexados
@@ -645,6 +746,27 @@ watch(dbPath, refresh)
       @pick="onBackupFolderPicked"
       @close="backupPickerOpen = false"
     />
+
+    <DirectoryPicker
+      :open="periodoPickerOpen"
+      :initial-path="info?.pdfs_folder || ''"
+      :title="periodoPickerTarget ? `Carpeta de soportes de ${monthLabel(periodoPickerTarget)}` : 'Carpeta de soportes del mes'"
+      @pick="onPeriodoFolderPicked"
+      @close="periodoPickerOpen = false"
+    />
+
+    <Dialog v-model:open="archiveModalOpen">
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Archivar empresa</DialogTitle>
+          <DialogDescription>Quedará oculta de la lista principal, pero sus datos se conservan y puedes desarchivarla cuando quieras.</DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="secondary" @click="archiveModalOpen = false">Cancelar</Button>
+          <Button :disabled="archiving" @click="confirmArchive">{{ archiving ? 'Archivando…' : 'Archivar' }}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
 
     <Dialog v-model:open="deleteModalOpen">
       <DialogContent class="sm:max-w-md">
