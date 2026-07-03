@@ -40,7 +40,6 @@ export const TOURS: Record<string, TourDef> = {
     steps: [
       { target: '[data-tour="load-validar"]', title: 'Validar', body: 'Cruza el Excel del mes contra sus soportes y marca las filas que no cuadran.' },
       { target: '[data-tour="load-solo-nc"]', title: 'Solo no conformes', body: 'Filtra para ver únicamente las filas con problemas.' },
-      { target: '[data-tour="load-papelera"]', title: 'Papelera', body: 'Envía filas a la papelera (menú «⋮» de cada fila) y restáuralas desde aquí cuando quieras.' },
       { target: '[data-tour="load-exportar"]', title: 'Exportar', body: 'Genera el Excel de faltantes de soporte para trabajarlo aparte.' },
     ],
   },

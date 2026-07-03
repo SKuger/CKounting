@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Search, ArrowLeft, FolderOpen, EllipsisVertical, Trash2, CalendarClock } from 'lucide-vue-next'
+import { Search, ArrowLeft, FolderOpen } from 'lucide-vue-next'
 import {
   FlexRender,
   createColumnHelper,
@@ -9,7 +9,6 @@ import {
   type ColumnDef,
   type VisibilityState,
 } from '@tanstack/vue-table'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '~/components/ui/select'
 
 const HIDDEN_BY_DEFAULT = new Set<string>([
   'Divisa', 'Forma de Pago', 'Medio de Pago',
@@ -33,7 +32,7 @@ const COLUMN_GROUPS: Record<string, string[]> = {
   'Estado': ['Estado', 'Grupo'],
 }
 
-type Row = Record<string, unknown> & { row_index: number; periodo?: string | null; deleted?: boolean }
+type Row = Record<string, unknown>
 
 type LoadRows = {
   total: number
@@ -99,64 +98,6 @@ const columnVisibility = ref<VisibilityState>({})
 const showColumnsPanel = ref(false)
 const columnsSearch = ref('')
 const onlyFailing = ref(false)
-
-// T2.3 — papelera (soft-delete) + mover de mes. Las acciones usan el row_index PERSISTIDO.
-const showTrash = ref(false)
-const periodos = ref<{ periodo: string }[]>([])
-const rowBusy = ref<number | null>(null)
-const moveOpen = ref(false)
-const moveTargetRow = ref<number | null>(null)
-const movePeriodo = ref('')
-
-function humanError(e: unknown): string {
-  const m = e instanceof Error ? e.message : String(e)
-  return m.replace(/^Error:\s*/, '').trim() || 'Ocurrió un error inesperado.'
-}
-
-async function sendToTrash(rowIndex: number) {
-  rowBusy.value = rowIndex
-  try {
-    await rpc('soft_delete_rows', { db_path: dbPath.value, load_id: loadId.value, row_indexes: [rowIndex] })
-    toast.success('Fila enviada a la papelera')
-    await refresh()
-  } catch (exc) {
-    toast.error('No se pudo enviar a la papelera', humanError(exc))
-  } finally {
-    rowBusy.value = null
-  }
-}
-async function restoreRow(rowIndex: number) {
-  rowBusy.value = rowIndex
-  try {
-    await rpc('restore_rows', { db_path: dbPath.value, load_id: loadId.value, row_indexes: [rowIndex] })
-    toast.success('Fila restaurada')
-    await refresh()
-  } catch (exc) {
-    toast.error('No se pudo restaurar', humanError(exc))
-  } finally {
-    rowBusy.value = null
-  }
-}
-function openMove(rowIndex: number) {
-  moveTargetRow.value = rowIndex
-  movePeriodo.value = ''
-  moveOpen.value = true
-}
-async function confirmMove() {
-  if (moveTargetRow.value === null || !movePeriodo.value) return
-  const rowIndex = moveTargetRow.value
-  rowBusy.value = rowIndex
-  try {
-    await rpc('move_rows_periodo', { db_path: dbPath.value, load_id: loadId.value, row_indexes: [rowIndex], periodo: movePeriodo.value })
-    toast.success('Documento movido de mes')
-    moveOpen.value = false
-    await refresh()
-  } catch (exc) {
-    toast.error('No se pudo mover', humanError(exc))
-  } finally {
-    rowBusy.value = null
-  }
-}
 
 // Map<row_index, reason> — failures from the last validation_run, with V3
 // overrides applied client-side so checkbox toggles feel instant.
@@ -237,9 +178,7 @@ async function refresh() {
       load_id: loadId.value,
       offset: 0,
       limit: 5000,
-      include_deleted: showTrash.value,
     })
-    periodos.value = await rpc<{ periodo: string }[]>('list_periodos', { db_path: dbPath.value })
     if (data.value) {
       const next: VisibilityState = { ...columnVisibility.value }
       for (const col of data.value.columns) {
@@ -358,11 +297,9 @@ const columns = computed<ColumnDef<Row>[]>(() => {
 })
 
 const tableData = computed<Row[]>(() => {
-  const all = (data.value?.rows ?? []) as Row[]
-  if (showTrash.value) return all.filter((r) => r.deleted)
-  const visible = all.filter((r) => !r.deleted)
-  if (!onlyFailing.value) return visible
-  return visible.filter((r) => failuresByRow.value.has(Number(r.row_index)))
+  const all = data.value?.rows ?? []
+  if (!onlyFailing.value) return all
+  return all.filter((_, idx) => failuresByRow.value.has(idx))
 })
 
 const tableMeta = ref({
@@ -373,9 +310,6 @@ const tableMeta = ref({
 const table = useVueTable({
   get data() { return tableData.value },
   get columns() { return columns.value },
-  // El id de fila ES el row_index PERSISTIDO (no la posición del array): fallas/overrides se
-  // mapean bien aunque se filtren borradas o se cambie el orden (§4.3, T2.3).
-  getRowId: (row) => String((row as Row).row_index),
   state: {
     get globalFilter() { return globalFilter.value },
     get columnVisibility() { return columnVisibility.value },
@@ -484,7 +418,6 @@ onMounted(() => {
 })
 onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 watch(loadId, refresh)
-watch(showTrash, refresh)
 </script>
 
 <template>
@@ -527,9 +460,6 @@ watch(showTrash, refresh)
         >
           {{ onlyFailing ? '✓ Solo no conformes' : 'Solo no conformes' }}
           <span v-if="hasValidationRun" class="ml-1 inline-flex items-center rounded-full bg-status-error-bg px-1.5 text-[10px] font-bold text-status-error">{{ failingCount }}</span>
-        </Button>
-        <Button data-tour="load-papelera" :variant="showTrash ? 'default' : 'outline'" title="Ver documentos en la papelera" @click="showTrash = !showTrash">
-          {{ showTrash ? '✓ Papelera' : 'Papelera' }}
         </Button>
         <Popover v-model:open="showColumnsPanel">
           <PopoverTrigger as-child>
@@ -616,7 +546,7 @@ watch(showTrash, refresh)
               >
                 <FlexRender :render="h.column.columnDef.header" :props="h.getContext()" />
               </th>
-              <th class="approve-col">Acciones</th>
+              <th class="approve-col" title="Aprobación manual">Aprobar</th>
             </tr>
           </thead>
           <tbody>
@@ -650,35 +580,17 @@ watch(showTrash, refresh)
                 <FlexRender :render="cell.column.columnDef.cell" :props="cell.getContext()" />
               </td>
               <td class="approve-col">
-                <div class="flex items-center justify-center gap-1">
-                  <template v-if="!showTrash && (v3FailingRows.has(Number(row.id)) || v3Overrides.has(Number(row.id)))">
-                    <label class="inline-flex cursor-pointer items-center justify-center rounded p-1 hover:bg-accent" :title="v3Overrides.has(Number(row.id)) ? 'Aprobado: V3 ignorado para esta fila' : 'Aprobar V3 manualmente'">
-                      <input
-                        type="checkbox"
-                        class="size-4 cursor-pointer accent-primary"
-                        :checked="v3Overrides.has(Number(row.id))"
-                        :disabled="togglingOverride === Number(row.id)"
-                        @change="toggleOverride(Number(row.id))"
-                      >
-                    </label>
-                  </template>
-                  <Button v-if="showTrash" variant="ghost" size="sm" :disabled="rowBusy === Number(row.id)" @click="restoreRow(Number(row.id))">Restaurar</Button>
-                  <Popover v-else>
-                    <PopoverTrigger as-child>
-                      <button type="button" class="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" aria-label="Acciones de la fila">
-                        <EllipsisVertical class="size-4" />
-                      </button>
-                    </PopoverTrigger>
-                    <PopoverContent align="end" :side-offset="6" class="w-48 p-1">
-                      <button type="button" class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-accent" @click="openMove(Number(row.id))">
-                        <CalendarClock class="size-4" /> Mover a mes…
-                      </button>
-                      <button type="button" class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-destructive transition-colors hover:bg-accent disabled:opacity-50" :disabled="rowBusy === Number(row.id)" @click="sendToTrash(Number(row.id))">
-                        <Trash2 class="size-4" /> Enviar a papelera
-                      </button>
-                    </PopoverContent>
-                  </Popover>
-                </div>
+                <template v-if="v3FailingRows.has(Number(row.id)) || v3Overrides.has(Number(row.id))">
+                  <label class="inline-flex cursor-pointer items-center justify-center rounded p-1 hover:bg-accent" :title="v3Overrides.has(Number(row.id)) ? 'Aprobado: V3 ignorado para esta fila' : 'Aprobar V3 manualmente'">
+                    <input
+                      type="checkbox"
+                      class="size-4 cursor-pointer accent-primary"
+                      :checked="v3Overrides.has(Number(row.id))"
+                      :disabled="togglingOverride === Number(row.id)"
+                      @change="toggleOverride(Number(row.id))"
+                    >
+                  </label>
+                </template>
               </td>
             </tr>
             <tr v-if="onlyFailing && table.getRowModel().rows.length === 0">
@@ -691,28 +603,6 @@ watch(showTrash, refresh)
         </table>
       </div>
     </section>
-
-    <Dialog v-model:open="moveOpen">
-      <DialogContent class="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Mover documento de mes</DialogTitle>
-          <DialogDescription>Elige el mes (periodo) al que quieres mover este documento.</DialogDescription>
-        </DialogHeader>
-        <div class="flex flex-col gap-1.5">
-          <Label>Mes destino</Label>
-          <Select :model-value="movePeriodo" @update:model-value="movePeriodo = String($event ?? '')">
-            <SelectTrigger class="w-full"><SelectValue placeholder="Elegir mes…" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem v-for="p in periodos" :key="p.periodo" :value="p.periodo">{{ p.periodo }}</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <DialogFooter>
-          <Button variant="secondary" @click="moveOpen = false">Cancelar</Button>
-          <Button :disabled="!movePeriodo || rowBusy !== null" @click="confirmMove">Mover</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   </div>
 </template>
 
