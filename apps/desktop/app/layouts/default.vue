@@ -1,9 +1,10 @@
 <script setup lang="ts">
 // Contab shell — the Dandelyon · Órbita (Contabilidad) consumer of the design system.
-// Solar-rail spine (data-spine="beacon"): sidebar lockup + nav, ⌘K in the topbar, beacon,
-// notifications, theme toggle, user at the foot. Playground-only pieces (Control de marca
-// panel, resizable grid, resolution letterbox, Helm/Timón spines) are intentionally absent.
-import { Sun, Moon, Building2, FileSearch, Bell, ChevronDown } from 'lucide-vue-next'
+// Sidebar lockup + nav, ⌘K in the topbar, theme toggle, user at the foot. La campana de
+// notificaciones mock y el beacon de estado ficticio se retiraron (0.1.4 #7) hasta que exista
+// una fuente real. Playground-only pieces (Control de marca panel, resizable grid, resolution
+// letterbox, Helm/Timón spines) are intentionally absent.
+import { Sun, Moon, Building2, FileSearch, ChevronDown } from 'lucide-vue-next'
 import { Popover, PopoverContent, PopoverTrigger } from '~/components/ui/popover'
 import { Button } from '~/components/ui/button'
 
@@ -31,13 +32,6 @@ const flatNav = computed<NavLeaf[]>(() => nav.map(n => ({ label: n.label, to: n.
 
 const leafActive = (n: NavLeaf) => (n.match ? n.match(route.path) : route.path === n.to)
 const crumbLeaf = computed(() => flatNav.value.find(leafActive)?.label ?? 'Contab')
-
-// notifications (mock) — kinds map to the accent-independent status palette
-const notifications = [
-  { kind: 'success', text: 'Conciliación DIAN de mayo completada', time: 'hace 1 h' },
-  { kind: 'warning', text: '3 soportes sin CUFE en la última carga', time: 'hace 3 h' },
-  { kind: 'info',    text: 'Nueva versión de Contab disponible',     time: 'ayer' },
-]
 </script>
 
 <template>
@@ -118,34 +112,6 @@ const notifications = [
         </div>
 
         <div class="ml-auto flex items-center gap-3">
-          <SystemBeacon />
-          <span class="hidden h-5 w-px shrink-0 bg-border lg:block" />
-
-          <!-- notifications -->
-          <Popover>
-            <PopoverTrigger aria-label="Notificaciones"
-              class="relative inline-flex size-9 items-center justify-center rounded-full border border-border bg-muted text-foreground transition-colors hover:bg-accent">
-              <Bell class="size-[18px]" />
-              <span v-if="prefs.prefs.notifications" class="absolute -right-0.5 -top-0.5 inline-flex min-w-4 items-center justify-center rounded-full bg-status-error px-1 text-[9px] font-bold leading-4 text-white">3</span>
-            </PopoverTrigger>
-            <PopoverContent align="end" :side-offset="8" class="w-72 p-0">
-              <div class="flex items-center justify-between border-b border-border px-3 py-2">
-                <span class="text-sm font-medium">Notificaciones</span>
-                <span class="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">{{ prefs.prefs.notifications ? '3 nuevas' : 'silenciadas' }}</span>
-              </div>
-              <div class="max-h-72 overflow-y-auto">
-                <div v-for="(n, i) in notifications" :key="i" class="flex gap-2 px-3 py-2.5 transition-colors hover:bg-accent">
-                  <span class="mt-1 size-2 shrink-0 rounded-full" :class="`bg-status-${n.kind}`" />
-                  <div class="min-w-0">
-                    <p class="text-sm leading-tight">{{ n.text }}</p>
-                    <p class="text-[11px] text-muted-foreground">{{ n.time }}</p>
-                  </div>
-                </div>
-              </div>
-              <Button variant="ghost" class="block h-auto w-full rounded-none border-t border-border px-3 py-2 text-center text-xs font-normal text-primary hover:bg-accent">Ver todas</Button>
-            </PopoverContent>
-          </Popover>
-
           <!-- theme toggle (claro / oscuro) — vía usePrefs (fuente única; el panel de preferencias coincide) -->
           <Button variant="outline" size="icon" aria-label="Cambiar tema"
             class="rounded-full bg-muted text-foreground" @click="toggleTheme()">

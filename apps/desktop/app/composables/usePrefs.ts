@@ -8,8 +8,9 @@
 // Effects (all on <html>): theme → .dark (+ follows the OS when "system"); density → data-density
 // (existing shell skins); scale → root font-size (rem-based UI scales whole app); reduceMotion →
 // data-reduce-motion (kills animations, main.css); highContrast → data-contrast (stronger borders);
-// language → lang attr; region/notifications → persisted + read by the app (e.g. number/date format,
-// muting the topbar bell).
+// language → lang attr; region → persisted + read by the app (e.g. number/date format).
+// notifications → persisted, sin consumidor por ahora (la campana mock se retiró en 0.1.4 #7);
+// queda reservado para un sistema de notificaciones real.
 import { reactive, watch } from 'vue'
 
 export type Theme = 'light' | 'dark' | 'system'

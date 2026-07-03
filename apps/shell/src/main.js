@@ -90,6 +90,9 @@ ipcMain.on('splash:enter', () => {
   else { enterRequested = true; if (splash) splash.webContents.send('splash:loading') }
 })
 
+// "Salir de Contab" desde la UI (SidebarUser) → cerrar el programa. before-quit hace el treeKill.
+ipcMain.on('app:quit', () => app.quit())
+
 async function boot() {
   createSplash()
   server = await startNitro()
