@@ -105,6 +105,19 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms))
 }
 
+function browserLabel(b?: string): string {
+  if (b === 'edge') return 'Microsoft Edge'
+  if (b === 'chromium') return 'Chromium'
+  return 'Google Chrome'
+}
+
+// El log vive dentro de un <details> colapsado: al abrirlo, saltar al final.
+function onLogToggle(e: Event) {
+  if ((e.target as HTMLDetailsElement).open) {
+    nextTick(() => { if (logBox.value) logBox.value.scrollTop = logBox.value.scrollHeight })
+  }
+}
+
 async function pollUntilConnected(maxTries = 15): Promise<boolean> {
   for (let i = 0; i < maxTries; i++) {
     await checkBrowserMode()
@@ -127,7 +140,7 @@ async function launchBrowser() {
     }
     launchMsg.value = r.status === 'already_running'
       ? 'El navegador ya estaba abierto. Verificando conexión…'
-      : 'Navegador abierto. Entra a la página de la DIAN y resuelve el "Soy humano" si aparece.'
+      : `Abrimos ${browserLabel(r.browser)}. Entra a la página de la DIAN y resuelve el "Soy humano" si aparece.`
     const ok = await pollUntilConnected()
     if (ok) launchMsg.value = '✓ Conectado. Ya puedes consultar los terceros.'
     else launchMsg.value = 'Si el navegador se abrió, espera un momento y pulsa "Verificar conexión".'
@@ -345,7 +358,7 @@ onBeforeUnmount(() => ws?.close())
           </div>
           <p class="text-sm" :class="finished ? 'text-status-success' : 'text-muted-foreground'">{{ statusMsg }}</p>
 
-          <details>
+          <details @toggle="onLogToggle">
             <summary class="cursor-pointer select-none text-xs text-muted-foreground transition-colors hover:text-foreground">
               Ver detalle técnico
             </summary>
