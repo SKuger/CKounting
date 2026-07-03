@@ -21,6 +21,7 @@ from . import validations as validations_module
 from . import export as export_module
 from . import pdf_cufe as pdf_cufe_module
 from . import backup as backup_module
+from . import program_db as program_db_module
 
 
 # ---------- handlers ----------
@@ -82,6 +83,10 @@ def _h_create_empresa(params: dict) -> dict:
 
     db_path = paths_module.empresa_db_path(body, razon_social)
     storage_module.init_empresa_db(db_path, body, dv, razon_social)
+    try:
+        program_db_module.register_empresa(db_path, body, dv, razon_social)
+    except Exception:
+        pass  # el catálogo central es best-effort; la empresa ya quedó creada
     return {"db_path": str(db_path), "nit": body, "dv": dv, "razon_social": razon_social}
 
 
@@ -257,29 +262,58 @@ def _h_reindex_pdfs(params: dict) -> dict:
 def _h_import_excel(params: dict) -> dict:
     db_path = Path(params["db_path"])
     source_path = Path(params["source_path"])
+    periodo = params.get("periodo")
+    if periodo is not None:
+        if not isinstance(periodo, str):
+            raise ValueError("periodo debe ser string 'AAAA-MM' o null")
+        periodo = storage_module._norm_periodo(periodo)
     loaded = excel_module.load_excel(source_path)
     conn = storage_module.connect(db_path)
     try:
-        load_id = excel_module.persist_load(conn, str(source_path), loaded)
+        load_id = excel_module.persist_load(conn, str(source_path), loaded, periodo)
+        load_periodo = conn.execute(
+            "SELECT periodo FROM excel_load WHERE id = ?", (load_id,)
+        ).fetchone()["periodo"]
     finally:
         conn.close()
     return {
         "load_id": load_id,
         "sheet_name": loaded.sheet_name,
         "total_rows": len(loaded.rows),
+        "periodo": load_periodo,
         "columns": excel_module.DIAN_COLUMNS + excel_module.DERIVED_COLUMNS,
     }
 
 
 def _h_list_loads(params: dict) -> list[dict]:
     db_path = Path(params["db_path"])
+    periodo = params.get("periodo")
+    include_deleted = bool(params.get("include_deleted", False))
     conn = storage_module.connect(db_path)
     try:
-        cur = conn.execute(
-            "SELECT id, source_name, loaded_at, total_rows, sheet_name "
-            "FROM excel_load ORDER BY id DESC"
+        sql = (
+            "SELECT id, source_name, loaded_at, total_rows, sheet_name, periodo, deleted_at "
+            "FROM excel_load WHERE 1=1"
         )
-        return [dict(r) for r in cur.fetchall()]
+        args: list = []
+        if not include_deleted:
+            sql += " AND deleted_at IS NULL"
+        if periodo:
+            sql += " AND periodo = ?"
+            args.append(periodo)
+        sql += " ORDER BY id DESC"
+        out = []
+        for r in conn.execute(sql, args).fetchall():
+            out.append({
+                "id": r["id"],
+                "source_name": r["source_name"],
+                "loaded_at": r["loaded_at"],
+                "total_rows": r["total_rows"],
+                "sheet_name": r["sheet_name"],
+                "periodo": r["periodo"],
+                "deleted": r["deleted_at"] is not None,
+            })
+        return out
     finally:
         conn.close()
 
@@ -352,9 +386,10 @@ def _h_get_load_rows(params: dict) -> dict:
     load_id = int(params["load_id"])
     offset = int(params.get("offset", 0))
     limit = int(params.get("limit", 1000))
+    include_deleted = bool(params.get("include_deleted", False))
     conn = storage_module.connect(db_path)
     try:
-        rows = excel_module.fetch_load_rows(conn, load_id)
+        rows = excel_module.fetch_load_rows(conn, load_id, include_deleted=include_deleted)
         v3_overrides = sorted(storage_module.list_overrides(conn, load_id, "V3"))
     finally:
         conn.close()
@@ -393,11 +428,14 @@ def _h_toggle_validation_override(params: dict) -> dict:
         conn.close()
 
 
-def _resolve_indexed_cufes(conn, db_path: Path) -> tuple[set[str] | None, dict | None]:
-    """Index the PDFs folder if configured and return (cufes_set, stats).
-    Returns (None, None) if no pdfs_folder is configured. Caller manages connection."""
-    info = storage_module.read_empresa_info(db_path)
-    folder = (info or {}).get("pdfs_folder") if info else None
+def _load_periodo(conn, load_id: int) -> str | None:
+    r = conn.execute("SELECT periodo FROM excel_load WHERE id = ?", (int(load_id),)).fetchone()
+    return r["periodo"] if r else None
+
+
+def _index_folder_cufes(conn, folder: str | None) -> tuple[set[str] | None, dict | None]:
+    """Index a PDFs folder and return (cufes_set, stats).
+    Returns (None, None) if no folder. Caller manages the connection."""
     folder = (folder or "").strip()
     if not folder:
         return None, None
@@ -410,6 +448,14 @@ def _resolve_indexed_cufes(conn, db_path: Path) -> tuple[set[str] | None, dict |
     return cufes, stats.to_dict()
 
 
+def _resolve_load_cufes(conn, load_id: int) -> tuple[set[str] | None, dict | None]:
+    """0.1.4 — index the soportes folder OF THIS LOAD'S PERIODO (per-month),
+    falling back to the empresa-wide folder if the month has none configured."""
+    periodo = _load_periodo(conn, load_id)
+    folder = storage_module.periodo_pdfs_folder(conn, periodo)
+    return _index_folder_cufes(conn, folder)
+
+
 def _h_run_validations(params: dict) -> dict:
     db_path = Path(params["db_path"])
     load_id = int(params["load_id"])
@@ -420,33 +466,39 @@ def _h_run_validations(params: dict) -> dict:
 
     conn = storage_module.connect(db_path)
     try:
-        indexed_cufes, index_stats = _resolve_indexed_cufes(conn, db_path)
+        indexed_cufes, index_stats = _resolve_load_cufes(conn, load_id)
         rows = excel_module.fetch_load_rows(conn, load_id)
         v3_overrides = storage_module.list_overrides(conn, load_id, "V3")
-        overrides_by_row = {i: {"V3"} for i in v3_overrides}
+        # evaluate_rows indexa por POSICIÓN del array; pero persistimos el
+        # row_index REAL de cada fila, porque con la papelera la posición ya no
+        # coincide con row_index. Se mapea en esta frontera.
+        overrides_by_pos = {
+            pos: {"V3"} for pos, r in enumerate(rows) if r.get("row_index") in v3_overrides
+        }
         tagged = validations_module.evaluate_rows(
             rows,
             run_v3=run_v3,
             indexed_cufes=indexed_cufes,
-            overrides_by_row=overrides_by_row,
+            overrides_by_row=overrides_by_pos,
             self_nit=self_nit,
         )
         failing = sum(1 for r in tagged if r)
         notes = None
         if index_stats and index_stats.get("missing"):
-            notes = f"Carpeta de PDFs no existe: {index_stats.get('folder')}"
+            notes = f"Carpeta de soportes no existe: {index_stats.get('folder')}"
         elif index_stats:
             no_cufe = index_stats.get("no_cufe", []) or []
             if no_cufe:
                 notes = f"{len(no_cufe)} PDF(s) sin CUFE extraído"
         failures = [
             {
-                "row_index": i,
-                "reason": "; ".join(msg for _code, msg in row),
-                "codes": [code for code, _msg in row],
+                "row_index": rows[pos]["row_index"],
+                "reason": "; ".join(msg for _code, msg in tag),
+                "codes": [code for code, _msg in tag],
             }
-            for i, row in enumerate(tagged) if row
+            for pos, tag in enumerate(tagged) if tag
         ]
+        cufe_by_ri = {r["row_index"]: r.get("CUFE/CUDE") for r in rows}
         with storage_module.transaction(conn):
             cur = conn.execute(
                 "INSERT INTO validation_run(load_id, finished_at, total_rows, failing_rows, notes) "
@@ -457,7 +509,7 @@ def _h_run_validations(params: dict) -> dict:
             conn.executemany(
                 "INSERT INTO validation_failure(run_id, row_index, cufe_cude, reason) "
                 "VALUES (?, ?, ?, ?)",
-                [(run_id, f["row_index"], rows[f["row_index"]].get("CUFE/CUDE"), f["reason"]) for f in failures],
+                [(run_id, f["row_index"], cufe_by_ri.get(f["row_index"]), f["reason"]) for f in failures],
             )
         return {
             "run_id": run_id,
@@ -513,7 +565,7 @@ def _h_export_no_conformes(params: dict) -> dict:
 
     conn = storage_module.connect(db_path)
     try:
-        indexed_cufes, _stats = _resolve_indexed_cufes(conn, db_path)
+        indexed_cufes, _stats = _resolve_load_cufes(conn, load_id)
         rows = excel_module.fetch_load_rows(conn, load_id)
         v3_overrides = storage_module.list_overrides(conn, load_id, "V3")
     finally:
@@ -547,7 +599,7 @@ def _h_export_missing_supports(params: dict) -> dict:
 
     conn = storage_module.connect(db_path)
     try:
-        indexed_cufes, _stats = _resolve_indexed_cufes(conn, db_path)
+        indexed_cufes, _stats = _resolve_load_cufes(conn, load_id)
         if indexed_cufes is None:
             raise ValueError(
                 "Configura la carpeta de PDFs (soportes) antes de generar este reporte"
@@ -564,6 +616,127 @@ def _h_export_missing_supports(params: dict) -> dict:
             missing.add(i)
 
     return export_module.export_missing_supports(rows, missing, output_path)
+
+
+# ---------- 0.1.4: periodos (mes) + carpeta de soportes por mes + papelera ----------
+
+def _h_list_periodos(params: dict) -> list[dict]:
+    db_path = Path(params["db_path"])
+    include_deleted = bool(params.get("include_deleted", False))
+    periodos = storage_module.list_periodos(db_path, include_deleted=include_deleted)
+    conn = storage_module.connect(db_path)
+    try:
+        for p in periodos:
+            folder = p.get("pdfs_folder")
+            count = 0
+            if folder and Path(folder).is_dir():
+                try:
+                    count = len(pdf_cufe_module.get_indexed_cufes(conn, Path(folder)))
+                except Exception:
+                    count = 0
+            p["indexed_cufe_count"] = count
+    finally:
+        conn.close()
+    return periodos
+
+
+def _h_set_periodo_pdfs_folder(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    periodo = params.get("periodo")
+    folder = params.get("folder")
+    if not isinstance(periodo, str):
+        raise ValueError("periodo requerido (string 'AAAA-MM')")
+    if folder is not None and not isinstance(folder, str):
+        raise ValueError("folder debe ser string o null")
+    return storage_module.set_periodo_folder(db_path, periodo, folder)
+
+
+def _h_set_load_periodo(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    load_id = int(params["load_id"])
+    periodo = params.get("periodo")
+    if not isinstance(periodo, str):
+        raise ValueError("periodo requerido (string 'AAAA-MM')")
+    propagate = bool(params.get("propagate", True))
+    return storage_module.set_load_periodo(db_path, load_id, periodo, propagate=propagate)
+
+
+def _h_move_rows_periodo(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    load_id = int(params["load_id"])
+    row_indexes = params.get("row_indexes")
+    periodo = params.get("periodo")
+    if not isinstance(row_indexes, list) or not row_indexes:
+        raise ValueError("row_indexes requerido (lista no vacía)")
+    if not isinstance(periodo, str):
+        raise ValueError("periodo requerido (string 'AAAA-MM')")
+    return storage_module.move_rows_periodo(db_path, load_id, row_indexes, periodo)
+
+
+def _h_soft_delete_rows(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    load_id = int(params["load_id"])
+    row_indexes = params.get("row_indexes")
+    if not isinstance(row_indexes, list) or not row_indexes:
+        raise ValueError("row_indexes requerido (lista no vacía)")
+    return storage_module.soft_delete_rows(db_path, load_id, row_indexes)
+
+
+def _h_restore_rows(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    load_id = int(params["load_id"])
+    row_indexes = params.get("row_indexes")
+    if not isinstance(row_indexes, list) or not row_indexes:
+        raise ValueError("row_indexes requerido (lista no vacía)")
+    return storage_module.restore_rows(db_path, load_id, row_indexes)
+
+
+def _h_soft_delete_load(params: dict) -> dict:
+    return storage_module.soft_delete_load(Path(params["db_path"]), int(params["load_id"]))
+
+
+def _h_restore_load(params: dict) -> dict:
+    return storage_module.restore_load(Path(params["db_path"]), int(params["load_id"]))
+
+
+# ---------- 0.1.4: BD del programa (contab.db) — usuario, ajustes, registro ----------
+
+def _h_program_get_user(_params: dict) -> dict:
+    return {"user": program_db_module.get_user()}
+
+
+def _h_program_save_user(params: dict) -> dict:
+    name = params.get("name")
+    email = params.get("email")
+    if name is not None and not isinstance(name, str):
+        raise ValueError("name debe ser string")
+    if email is not None and not isinstance(email, str):
+        raise ValueError("email debe ser string")
+    return {"user": program_db_module.save_user(name=name, email=email)}
+
+
+def _h_program_get_settings(_params: dict) -> dict:
+    return {"settings": program_db_module.get_settings()}
+
+
+def _h_program_save_settings(params: dict) -> dict:
+    patch = params.get("patch")
+    if not isinstance(patch, dict):
+        raise ValueError("patch debe ser un objeto de ajustes")
+    return {"settings": program_db_module.save_settings(patch)}
+
+
+def _h_program_list_empresas(params: dict) -> list[dict]:
+    include_archived = bool(params.get("include_archived", False))
+    return program_db_module.list_registry(include_archived=include_archived)
+
+
+def _h_program_touch_empresa(params: dict) -> dict:
+    db_path = params.get("db_path")
+    if not isinstance(db_path, str) or not db_path.strip():
+        raise ValueError("db_path requerido (string)")
+    program_db_module.touch_empresa(db_path)
+    return {"ok": True}
 
 
 HANDLERS: dict[str, Callable[[dict], Any]] = {
@@ -591,6 +764,22 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "toggle_validation_override": _h_toggle_validation_override,
     "export_no_conformes": _h_export_no_conformes,
     "export_missing_supports": _h_export_missing_supports,
+    # 0.1.4 — periodos + papelera
+    "list_periodos": _h_list_periodos,
+    "set_periodo_pdfs_folder": _h_set_periodo_pdfs_folder,
+    "set_load_periodo": _h_set_load_periodo,
+    "move_rows_periodo": _h_move_rows_periodo,
+    "soft_delete_rows": _h_soft_delete_rows,
+    "restore_rows": _h_restore_rows,
+    "soft_delete_load": _h_soft_delete_load,
+    "restore_load": _h_restore_load,
+    # 0.1.4 — BD del programa (contab.db)
+    "program_get_user": _h_program_get_user,
+    "program_save_user": _h_program_save_user,
+    "program_get_settings": _h_program_get_settings,
+    "program_save_settings": _h_program_save_settings,
+    "program_list_empresas": _h_program_list_empresas,
+    "program_touch_empresa": _h_program_touch_empresa,
 }
 
 
@@ -618,6 +807,12 @@ def handle_request(request: dict) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Registra en el catálogo central (contab.db) las empresas ya existentes en disco
+    # (migración de instalaciones previas a 0.1.4). Best-effort: nunca bloquea el arranque.
+    try:
+        program_db_module.sync_registry()
+    except Exception:
+        pass
     for raw_line in sys.stdin:
         line = raw_line.strip()
         if not line:
