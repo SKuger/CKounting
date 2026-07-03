@@ -28,7 +28,7 @@
 
 ## 2. Decisiones cerradas (confirmadas por el usuario)
 - **Arquitectura de dos niveles** (D-003 intacto): `contab.db` global (programa) + **una `.db` por empresa** (datos fiscales aislados). NO monolito.
-- **Periodo** = mes calendario `YYYY-MM`. **Cada mes tiene su propio Excel + su propia carpeta de soportes (PDFs)**. La validación cruza el Excel del mes contra la carpeta de ese mes. Se pueden **mover documentos** entre meses y mandarlos a **papelera**.
+- **El MES es el contenedor** (mes calendario `YYYY-MM`). Se **crea un mes** (ambiente nuevo, vacío) y **dentro** se carga **su** Excel y se elige **su** carpeta de soportes. **NO existe carpeta de soportes global — jamás; siempre por mes.** La validación cruza el Excel del mes contra la carpeta de ese mes. Lo que se puede **mover/borrar es el Excel cargado y los soportes** (a nivel de mes): mover el Excel a otro mes o mandarlo a papelera. **NO se opera a nivel de fila** — la **tabla del Excel queda EXACTAMENTE como estaba antes** (sin columnas de mover-de-mes ni papelera por fila). *(Corrige la decisión previa de "mover por documento".)*
 - Entrega: **todo junto en 0.1.4**.
 - `contab.db` alcance: **usuario + ajustes + registro central de empresas** (con espacio para firmas/correos/fechas).
 
@@ -61,26 +61,27 @@
 
 *(Track 1 hace que `create_empresa` registre en `contab.db` y que un `program_sync_registry` interno registre las empresas existentes al arrancar. Track 2 usa `program_list_empresas` como catálogo en `index.vue`.)*
 
-### 4.2 Por empresa — periodos, soportes por mes, papelera
+### 4.2 Por empresa — MESES (periodos): crear el mes, soportes por mes, mover/borrar el Excel
 | método | params | returns |
 |---|---|---|
-| `list_periodos` | `{ db_path, include_deleted?=false }` | `[ {periodo:'YYYY-MM', load_count, row_count, pdfs_folder\|null, indexed_cufe_count} ]` (desc) |
-| `set_periodo_pdfs_folder` | `{ db_path, periodo, folder\|null }` | `{ periodo, pdfs_folder }` |
-| `set_load_periodo` | `{ db_path, load_id, periodo }` | `{ load_id, periodo }` |
-| `move_rows_periodo` | `{ db_path, load_id, row_indexes:[int], periodo }` | `{ moved:int, periodo }` |
-| `soft_delete_rows` | `{ db_path, load_id, row_indexes:[int] }` | `{ deleted:int }` |
-| `restore_rows` | `{ db_path, load_id, row_indexes:[int] }` | `{ restored:int }` |
-| `soft_delete_load` | `{ db_path, load_id }` | `{ load_id, deleted:true }` |
+| `create_periodo` | `{ db_path, periodo }` | `{ periodo }` — crea el mes (ambiente vacío) |
+| `list_periodos` | `{ db_path }` | `[ {periodo:'YYYY-MM', load_count, row_count, pdfs_folder\|null, indexed_cufe_count} ]` (incluye meses sin Excel) |
+| `set_periodo_pdfs_folder` | `{ db_path, periodo, folder\|null }` | `{ periodo, pdfs_folder }` — carpeta de soportes DEL MES |
+| `delete_periodo` | `{ db_path, periodo }` | `{ periodo, deleted:true }` — borra el mes + su Excel |
+| `set_load_periodo` | `{ db_path, load_id, periodo }` | `{ load_id, periodo }` — mover el Excel cargado a otro mes |
+| `soft_delete_load` | `{ db_path, load_id }` | `{ load_id, deleted:true }` — Excel a papelera |
 | `restore_load` | `{ db_path, load_id }` | `{ load_id, deleted:false }` |
 
-### 4.3 Comandos EXISTENTES que cambian de forma (mismo nombre)
-- `import_excel` `{ db_path, source_path, periodo? }` → además de lo actual, ahora **asigna periodo por fila** (derivado de `Fecha Emisión`, `YYYY-MM`; o el `periodo` forzado). Return incluye `{ …, periodo }` (mes dominante del lote).
-- `list_loads` `{ db_path, periodo?, include_deleted?=false }` → cada carga ahora incluye `periodo` y `deleted:bool`; filtra papelera por defecto.
-- `get_load_rows` `{ db_path, load_id, offset?, limit?, include_deleted?=false }` → **cada fila del array `rows` ahora incluye `row_index` (explícito) y `periodo`**; excluye borradas por defecto. **IMPORTANTE (Track 2):** mapea fallas/overrides por `row.row_index`, **NO por la posición del array** (antes se asumía posición == row_index; con filtros eso se rompe).
-- `run_validations` `{ db_path, load_id, run_v3?=true }` → ahora valida el lote contra **la carpeta de soportes de SU periodo** (`periodo_folder`), no la carpeta global de la empresa; excluye filas en papelera de conteos; `failures[].row_index` es el persistido.
-- `export_no_conformes` / `export_missing_supports` → excluyen filas en papelera; usan la carpeta del periodo.
+> ❌ **ELIMINADOS (no existen): `move_rows_periodo`, `soft_delete_rows`, `restore_rows`.** NO se opera a nivel de fila. La **tabla del Excel (`load.vue`) queda EXACTAMENTE como estaba antes** — sin columnas de mover-de-mes ni papelera por fila.
 
-*(Nota: `set_pdfs_folder` global de empresa queda como fallback/compat; el modelo nuevo es por periodo.)*
+### 4.3 Comandos EXISTENTES que cambian de forma (mismo nombre)
+- `import_excel` `{ db_path, source_path, periodo }` → **`periodo` REQUERIDO**: carga el Excel DENTRO de ese mes (crea el mes si no existe). Asigna `excel_load.periodo` (NO por fila). Return incluye `{ …, periodo }`.
+- `list_loads` `{ db_path, periodo?, include_deleted?=false }` → cada carga incluye `periodo` y `deleted:bool`; filtra papelera (del Excel) por defecto; se puede filtrar por mes.
+- `get_load_rows` → **QUEDA IGUAL QUE ANTES.** La tabla no cambia: NO inyecta `row_index`/`periodo` en las filas, NO hay papelera de filas.
+- `run_validations` `{ db_path, load_id, run_v3?=true }` → valida el lote contra **la carpeta de soportes de SU mes** (sin fallback global). Filas/tabla como antes.
+- `export_no_conformes` / `export_missing_supports` → usan la carpeta del mes del lote.
+
+> ⚠️ **NO hay carpeta de soportes global.** `set_pdfs_folder` (empresa) queda **obsoleto/sin uso**; la validación usa SOLO la carpeta del mes (si el mes no tiene → V1 inactivo con aviso). Track 2: **quitar toda UI de "carpeta de soportes" a nivel empresa** en `empresa.vue`.
 
 ---
 
@@ -98,10 +99,9 @@ Trabaja en `apps/desktop/**`, `apps/shell/**`, `apps/dian-rut/**`. Commits peque
 - `apps/desktop/app/components/SidebarUser.vue`: renombrar "Cerrar sesión" → **"Salir de Contab"**, que llame `window.contab?.quit()` (en navegador dev: no-op o cerrar pestaña). **Quitar** el gestor multi-cuenta / "Añadir cuenta" (D-004 sin auth); dejar solo **Preferencias + Salir**.
 - `apps/desktop/app/layouts/default.vue`: **quitar** las notificaciones mock y el badge "3" de la campana (líneas ~36-40, 124-147). Quitar/neutralizar `SystemBeacon` (estado ficticio) o cablearlo a algo real (p.ej. sidecar activo).
 
-### T2.3 · Organización por mes en la empresa (#1, #2)
-- `apps/desktop/app/pages/empresa.vue`: reorganizar el detalle **por periodos (meses)**. Cada mes muestra: su Excel importado + su **carpeta de soportes** (elegir con `DirectoryPicker` → `set_periodo_pdfs_folder`) + estado de indexado + botón validar. Usa `list_periodos`.
-- `apps/desktop/app/pages/load.vue`: mapear fallas/overrides por `row.row_index` (viene explícito). Acciones por fila/selección: **mover de mes** (`move_rows_periodo`) y **enviar a papelera** (`soft_delete_rows`); vista de **papelera** con **restaurar** (`restore_rows`). Filtrar borradas.
-- Considerar mover la elección de "carpeta de soportes" desde el nivel empresa al nivel mes.
+### T2.3 · Meses como ambientes (#1, #2) — ⚠️ MODELO CORREGIDO 2026-07-03
+- **`empresa.vue` = lista de MESES, cada uno un ambiente.** Botón **"Crear mes"** (`create_periodo`). Dentro de cada mes: **cargar su Excel** (`import_excel {db_path, source_path, periodo}`) y **elegir su carpeta de soportes** (`DirectoryPicker` → `set_periodo_pdfs_folder`) + estado de indexado + validar. Listar con `list_periodos`. Permitir **borrar el mes** (`delete_periodo`) y, sobre el Excel del mes, **mover a otro mes** (`set_load_periodo`) o **papelera** (`soft_delete_load`/`restore_load`). **QUITAR toda UI de "carpeta de soportes" a nivel empresa** (ya no existe carpeta global).
+- **`load.vue` (la tabla) = REVERTIR a como estaba antes.** El commit **`2ec8837`** metió *mover-de-mes* + *papelera* **por fila** → eso **NO va**: quitar esas columnas/acciones y el mapeo por `row_index`; la tabla vuelve a su forma previa (posicional, sin `row_index` inyectado). Los comandos `move_rows_periodo`/`soft_delete_rows`/`restore_rows` **ya no existen** en el backend.
 
 ### T2.4 · Humanizar (#3) + Ayuda
 - Mostrar **nombre** de carpeta (no ruta absoluta) con la ruta en tooltip; quitar `load_id=`, filename `.db` y rutas crudas de textos visibles.
