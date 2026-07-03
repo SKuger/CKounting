@@ -1,21 +1,11 @@
 <script setup lang="ts">
-import { ArrowLeft, Pencil, FolderOpen, FileSpreadsheet, Trash2, Archive, Download, ChevronRight, EllipsisVertical, CalendarPlus, RotateCcw, FolderSearch } from 'lucide-vue-next'
+import { ArrowLeft, Pencil, FolderOpen, FileSpreadsheet, Trash2, Archive, Download, ChevronRight, EllipsisVertical, CalendarPlus, RotateCcw, UploadCloud } from 'lucide-vue-next'
 import { Popover, PopoverContent, PopoverTrigger } from '~/components/ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '~/components/ui/select'
 
-type EmpresaInfo = {
-  db_path: string
-  nit: string
-  dv: string | null
-  razon_social: string
-  default_folder: string | null
-  archived?: boolean
-  created_at: string
-}
+type EmpresaInfo = { db_path: string; nit: string; dv: string | null; razon_social: string; archived?: boolean; created_at: string }
 type Periodo = { periodo: string; load_count: number; row_count: number; pdfs_folder: string | null; indexed_cufe_count: number }
 type Carga = { id: number; source_name: string; loaded_at: string; total_rows: number; periodo?: string | null; deleted?: boolean }
-type FolderFile = { name: string; path: string; size_bytes: number; mtime: string; imported: boolean; imported_as_load_id: number | null }
-type FolderListing = { folder: string | null; files: FolderFile[]; error: string | null }
 type BackupResult = { path: string; size_bytes: number; excels_included: number; pdfs_included: number }
 
 const route = useRoute()
@@ -25,16 +15,13 @@ const toast = useToast()
 const info = ref<EmpresaInfo | null>(null)
 const periodos = ref<Periodo[]>([])
 const loads = ref<Carga[]>([])
-const folderListing = ref<FolderListing>({ folder: null, files: [], error: null })
 const loading = ref(false)
 const busy = ref(false)
 
-// gestión de empresa (se conserva)
+// gestión de empresa
 const editingRazon = ref(false)
 const razonDraft = ref('')
 const savingRazon = ref(false)
-const folderPickerOpen = ref(false)
-const savingFolder = ref(false)
 const backupPickerOpen = ref(false)
 const backingUp = ref(false)
 const archiveModalOpen = ref(false)
@@ -45,12 +32,21 @@ const deleting = ref(false)
 
 // meses
 const newMonthOpen = ref(false)
-const newMonth = ref('')
+const now = new Date()
+const newMonthMes = ref(String(now.getMonth() + 1).padStart(2, '0'))
+const newMonthAnio = ref(String(now.getFullYear()))
+const newMonthValue = computed(() => (newMonthAnio.value && newMonthMes.value) ? `${newMonthAnio.value}-${newMonthMes.value}` : '')
+const MESES = [
+  { v: '01', l: 'Enero' }, { v: '02', l: 'Febrero' }, { v: '03', l: 'Marzo' },
+  { v: '04', l: 'Abril' }, { v: '05', l: 'Mayo' }, { v: '06', l: 'Junio' },
+  { v: '07', l: 'Julio' }, { v: '08', l: 'Agosto' }, { v: '09', l: 'Septiembre' },
+  { v: '10', l: 'Octubre' }, { v: '11', l: 'Noviembre' }, { v: '12', l: 'Diciembre' },
+]
+const ANIOS = Array.from({ length: 6 }, (_, i) => String(now.getFullYear() + 1 - i))
 const creatingMonth = ref(false)
 const deleteMonthTarget = ref<string | null>(null)
 const periodoPickerOpen = ref(false)
 const periodoPickerTarget = ref<string | null>(null)
-const loadPickerFor = ref<string | null>(null) // periodo para el que se elige Excel
 const moveTarget = ref<Carga | null>(null)
 const moveDestino = ref('')
 const showTrash = ref(false)
@@ -65,7 +61,6 @@ const activeLoadsByPeriodo = computed(() => {
   return m
 })
 const trashedLoads = computed(() => loads.value.filter((l) => l.deleted))
-const excelChoices = computed(() => folderListing.value.files.filter((f) => f.name.toLowerCase().endsWith('.xlsx') || f.name.toLowerCase().endsWith('.xls')))
 
 function humanError(e: unknown): string {
   const m = e instanceof Error ? e.message : String(e)
@@ -86,7 +81,7 @@ async function refresh() {
   loading.value = true
   try {
     info.value = await rpc<EmpresaInfo>('open_empresa', { db_path: dbPath.value })
-    await Promise.all([reloadPeriodos(), reloadLoads(), refreshFolderListing()])
+    await Promise.all([reloadPeriodos(), reloadLoads()])
   } catch (exc) {
     toast.error('No se pudo abrir la empresa', humanError(exc))
   } finally {
@@ -99,40 +94,15 @@ async function reloadPeriodos() {
 async function reloadLoads() {
   loads.value = await rpc<Carga[]>('list_loads', { db_path: dbPath.value, include_deleted: true })
 }
-async function refreshFolderListing() {
-  if (!info.value?.default_folder) {
-    folderListing.value = { folder: null, files: [], error: null }
-    return
-  }
-  try {
-    folderListing.value = await rpc<FolderListing>('list_folder_files', { db_path: dbPath.value })
-  } catch (exc) {
-    folderListing.value = { folder: null, files: [], error: humanError(exc) }
-  }
-}
-
-// ── carpeta de Excels de la empresa (fuente; D-036 auto-listado) ──
-async function persistFolder(folder: string | null) {
-  savingFolder.value = true
-  try {
-    info.value = await rpc<EmpresaInfo>('set_default_folder', { db_path: dbPath.value, folder })
-    await refreshFolderListing()
-  } catch (exc) {
-    toast.error('No se pudo guardar la carpeta', humanError(exc))
-  } finally {
-    savingFolder.value = false
-  }
-}
-function onFolderPicked(path: string) { folderPickerOpen.value = false; persistFolder(path) }
 
 // ── meses ──
 async function createMonth() {
-  if (!/^\d{4}-\d{2}$/.test(newMonth.value)) { toast.warn('Elige un mes válido'); return }
+  const periodo = newMonthValue.value
+  if (!/^\d{4}-\d{2}$/.test(periodo)) { toast.warn('Elige mes y año'); return }
   creatingMonth.value = true
   try {
-    await rpc('create_periodo', { db_path: dbPath.value, periodo: newMonth.value })
+    await rpc('create_periodo', { db_path: dbPath.value, periodo })
     newMonthOpen.value = false
-    newMonth.value = ''
     await reloadPeriodos()
   } catch (exc) {
     toast.error('No se pudo crear el mes', humanError(exc))
@@ -175,14 +145,22 @@ function onPeriodoFolderPicked(path: string) {
   if (periodo) setPeriodoFolder(periodo, path)
 }
 
-// ── Excel del mes: cargar (desde la carpeta) / mover / papelera / restaurar ──
-async function importInto(periodo: string, sourcePath: string) {
+// ── Excel del mes: subir (por archivo) / mover / papelera / restaurar ──
+async function onExcelPicked(e: Event, periodo: string) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
   busy.value = true
   try {
-    await rpc('import_excel', { db_path: dbPath.value, source_path: sourcePath, periodo })
-    loadPickerFor.value = null
-    toast.success('Excel cargado en el mes')
-    await Promise.all([reloadPeriodos(), reloadLoads(), refreshFolderListing()])
+    const fd = new FormData()
+    fd.append('db_path', dbPath.value)
+    fd.append('periodo', periodo)
+    fd.append('file', file)
+    const res = await $fetch<{ ok: boolean; error?: string }>('/api/upload-excel', { method: 'POST', body: fd })
+    if (!res.ok) throw new Error(res.error || 'error al importar')
+    toast.success(`Excel cargado en ${monthLabel(periodo)}`)
+    await Promise.all([reloadPeriodos(), reloadLoads()])
   } catch (exc) {
     toast.error('No se pudo cargar el Excel', humanError(exc))
   } finally {
@@ -229,7 +207,7 @@ async function restoreLoad(load: Carga) {
   }
 }
 
-// ── gestión de empresa (conservada) ──
+// ── gestión de empresa ──
 function startEditingRazon() { if (info.value) { razonDraft.value = info.value.razon_social; editingRazon.value = true } }
 async function saveRazon() {
   if (!razonDraft.value.trim()) return
@@ -313,15 +291,9 @@ watch(dbPath, refresh)
         </div>
         <p class="text-sm text-muted-foreground">
           NIT <strong class="text-foreground">{{ info.nit }}{{ info.dv ? `-${info.dv}` : '' }}</strong>
-          <span class="mx-1.5 text-border">·</span>
-          <span v-if="info.default_folder" class="text-xs" :title="info.default_folder">Carpeta de Excels: <span class="text-foreground">{{ folderName(info.default_folder) }}</span></span>
-          <span v-else class="text-xs">sin carpeta de Excels</span>
         </p>
       </div>
       <div class="flex gap-2">
-        <Button variant="secondary" data-tour="empresa-carpeta" :disabled="savingFolder" @click="folderPickerOpen = true">
-          <FolderOpen class="size-4" /> {{ info.default_folder ? 'Cambiar carpeta de Excels' : 'Elegir carpeta de Excels' }}
-        </Button>
         <Popover>
           <PopoverTrigger as-child>
             <Button variant="outline" size="icon" aria-label="Más acciones"><EllipsisVertical class="size-4" /></Button>
@@ -349,7 +321,7 @@ watch(dbPath, refresh)
     <Card v-if="info" data-tour="empresa-periodos">
       <CardHeader>
         <CardTitle>Meses</CardTitle>
-        <CardDescription>Cada mes es un ambiente: su Excel, su carpeta de soportes y su validación.</CardDescription>
+        <CardDescription>Cada mes es un ambiente: sube su Excel, elige su carpeta de soportes y valídalo.</CardDescription>
         <CardAction class="flex items-center gap-2">
           <Button v-if="trashedLoads.length" variant="ghost" size="sm" :class="showTrash ? 'text-foreground' : ''" @click="showTrash = !showTrash">
             <RotateCcw class="size-4" /> Papelera ({{ trashedLoads.length }})
@@ -359,7 +331,7 @@ watch(dbPath, refresh)
       </CardHeader>
       <CardContent class="flex flex-col gap-3">
         <p v-if="!periodos.length" class="py-8 text-center text-sm text-muted-foreground">
-          Aún no hay meses. Crea el primero con <strong class="text-foreground">«Crear mes»</strong> y luego carga su Excel.
+          Aún no hay meses. Crea el primero con <strong class="text-foreground">«Crear mes»</strong> y luego sube su Excel.
         </p>
 
         <div v-for="p in periodos" :key="p.periodo" class="rounded-lg border border-border bg-card p-3">
@@ -393,8 +365,11 @@ watch(dbPath, refresh)
             </template>
             <div v-else class="flex items-center justify-between gap-2">
               <span class="text-sm text-muted-foreground">Sin Excel en este mes.</span>
-              <Button variant="outline" size="sm" :disabled="busy || !info.default_folder" :title="info.default_folder ? '' : 'Primero elige la carpeta de Excels de la empresa'" @click="loadPickerFor = p.periodo">
-                <FolderSearch class="size-4" /> Cargar Excel
+              <Button as-child variant="outline" size="sm" :disabled="busy">
+                <label class="cursor-pointer">
+                  <UploadCloud class="size-4" /> Cargar Excel
+                  <input type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" hidden @change="onExcelPicked($event, p.periodo)">
+                </label>
               </Button>
             </div>
           </div>
@@ -412,44 +387,37 @@ watch(dbPath, refresh)
       </CardContent>
     </Card>
 
-    <!-- Pickers de carpeta -->
-    <DirectoryPicker :open="folderPickerOpen" :initial-path="info?.default_folder || ''" title="Carpeta de Excels de la empresa" @pick="onFolderPicked" @close="folderPickerOpen = false" />
-    <DirectoryPicker :open="periodoPickerOpen" :initial-path="info?.default_folder || ''" :title="periodoPickerTarget ? `Carpeta de soportes de ${monthLabel(periodoPickerTarget)}` : 'Carpeta de soportes del mes'" @pick="onPeriodoFolderPicked" @close="periodoPickerOpen = false" />
-    <DirectoryPicker :open="backupPickerOpen" :initial-path="info?.default_folder || ''" title="Carpeta donde se guardará el backup (.contab.zip)" @pick="onBackupFolderPicked" @close="backupPickerOpen = false" />
+    <!-- Pickers de carpeta (soportes por mes + backup) -->
+    <DirectoryPicker :open="periodoPickerOpen" :initial-path="''" :title="periodoPickerTarget ? `Carpeta de soportes de ${monthLabel(periodoPickerTarget)}` : 'Carpeta de soportes del mes'" @pick="onPeriodoFolderPicked" @close="periodoPickerOpen = false" />
+    <DirectoryPicker :open="backupPickerOpen" :initial-path="''" title="Carpeta donde se guardará el backup (.contab.zip)" @pick="onBackupFolderPicked" @close="backupPickerOpen = false" />
 
     <!-- Crear mes -->
     <Dialog v-model:open="newMonthOpen">
       <DialogContent class="sm:max-w-sm">
         <DialogHeader>
           <DialogTitle>Crear mes</DialogTitle>
-          <DialogDescription>Elige el mes que vas a trabajar. Luego cargas su Excel y su carpeta de soportes.</DialogDescription>
+          <DialogDescription>Elige el mes que vas a trabajar. Luego subes su Excel y eliges su carpeta de soportes.</DialogDescription>
         </DialogHeader>
-        <div class="flex flex-col gap-1.5">
-          <Label for="new-month">Mes</Label>
-          <Input id="new-month" v-model="newMonth" type="month" @keyup.enter="createMonth" />
+        <div class="grid grid-cols-2 gap-2">
+          <div class="flex flex-col gap-1.5">
+            <Label>Mes</Label>
+            <Select :model-value="newMonthMes" @update:model-value="newMonthMes = String($event ?? '')">
+              <SelectTrigger class="w-full"><SelectValue placeholder="Mes" /></SelectTrigger>
+              <SelectContent><SelectItem v-for="m in MESES" :key="m.v" :value="m.v">{{ m.l }}</SelectItem></SelectContent>
+            </Select>
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <Label>Año</Label>
+            <Select :model-value="newMonthAnio" @update:model-value="newMonthAnio = String($event ?? '')">
+              <SelectTrigger class="w-full"><SelectValue placeholder="Año" /></SelectTrigger>
+              <SelectContent><SelectItem v-for="y in ANIOS" :key="y" :value="y">{{ y }}</SelectItem></SelectContent>
+            </Select>
+          </div>
         </div>
         <DialogFooter>
           <Button variant="secondary" @click="newMonthOpen = false">Cancelar</Button>
-          <Button :disabled="!/^\d{4}-\d{2}$/.test(newMonth) || creatingMonth" @click="createMonth">{{ creatingMonth ? 'Creando…' : 'Crear mes' }}</Button>
+          <Button :disabled="!newMonthValue || creatingMonth" @click="createMonth">{{ creatingMonth ? 'Creando…' : 'Crear mes' }}</Button>
         </DialogFooter>
-      </DialogContent>
-    </Dialog>
-
-    <!-- Elegir Excel de la carpeta para un mes -->
-    <Dialog :open="loadPickerFor !== null" @update:open="(v) => { if (!v) loadPickerFor = null }">
-      <DialogContent class="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Cargar Excel {{ loadPickerFor ? `— ${monthLabel(loadPickerFor)}` : '' }}</DialogTitle>
-          <DialogDescription>Elige el reporte de la DIAN (de tu carpeta de Excels) para este mes.</DialogDescription>
-        </DialogHeader>
-        <div class="flex max-h-80 flex-col gap-1.5 overflow-y-auto">
-          <p v-if="!excelChoices.length" class="py-6 text-center text-sm text-muted-foreground">No hay Excels en la carpeta de la empresa.</p>
-          <button v-for="f in excelChoices" :key="f.path" type="button" class="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-left text-sm transition-colors hover:bg-accent disabled:opacity-50" :disabled="busy" @click="loadPickerFor && importInto(loadPickerFor, f.path)">
-            <FileSpreadsheet class="size-4 shrink-0 text-muted-foreground" />
-            <span class="min-w-0 flex-1 truncate">{{ f.name }}</span>
-            <span v-if="f.imported" class="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">ya cargado</span>
-          </button>
-        </div>
       </DialogContent>
     </Dialog>
 

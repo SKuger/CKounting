@@ -58,6 +58,14 @@ export default defineEventHandler(async (event) => {
     return { ok: false, error: 'empty db_path' }
   }
 
+  // El modelo por meses exige el periodo destino: el Excel se carga DENTRO de un mes.
+  const periodoPart = parts.find((p) => p.name === 'periodo')
+  const periodo = periodoPart?.data ? periodoPart.data.toString('utf-8').trim() : ''
+  if (!periodo) {
+    setResponseStatus(event, 400)
+    return { ok: false, error: 'falta el mes (periodo) destino' }
+  }
+
   // Look up the empresa's default_folder to decide where to save the upload.
   let targetDir: string
   try {
@@ -89,6 +97,7 @@ export default defineEventHandler(async (event) => {
     const result = await callSidecar('import_excel', {
       db_path: dbPath,
       source_path: savedPath,
+      periodo,
     })
     return { ok: true, result, saved_to: savedPath }
   } catch (err) {
