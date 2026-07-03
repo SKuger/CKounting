@@ -7,16 +7,26 @@ export type TourDef = { id: string; label: string; description: string; icon: st
 
 export const TOURS: Record<string, TourDef> = {
   '/': {
-    id: 'empresas',
-    label: 'Empresas (inicio)',
-    description: 'Crear tu primera empresa y moverte por la pantalla principal.',
-    icon: 'Building2',
+    id: 'inicio',
+    label: 'Inicio',
+    description: 'Un vistazo a la pantalla de inicio y sus módulos.',
+    icon: 'Home',
     route: '/',
     steps: [
-      { title: '¡Bienvenido a Contab!', body: 'Te muestro lo esencial en unos pasos. Puedes saltar el tutorial cuando quieras.' },
-      { target: '[data-tour="nueva-empresa"]', title: 'Crear una empresa', body: 'Cada empresa es un libro independiente. Empieza aquí, con su NIT y razón social.' },
+      { title: '¡Bienvenido a Contab!', body: 'Esta es tu pantalla de inicio. Te muestro los módulos en unos pasos; puedes saltar cuando quieras.' },
+      { target: '[data-tour="inicio-empresas"]', title: 'Empresas', body: 'Tus libros contables, uno por empresa. Aquí cargas los reportes de la DIAN y validas.' },
+      { target: '[data-tour="inicio-dian"]', title: 'Consulta DIAN', body: 'Consulta el RUT de terceros a partir de sus NIT.' },
+    ],
+  },
+  '/empresas': {
+    id: 'empresas',
+    label: 'Empresas',
+    description: 'Crear una empresa y abrir su detalle.',
+    icon: 'Building2',
+    route: '/empresas',
+    steps: [
+      { target: '[data-tour="nueva-empresa"]', title: 'Crear una empresa', body: 'Cada empresa es un libro independiente. Créala con su NIT y razón social.' },
       { target: '[data-tour="empresas-lista"]', title: 'Tus empresas', body: 'Tus empresas aparecen en esta lista. Haz clic en una para abrir su detalle.' },
-      { target: '[data-tour="consulta-dian"]', title: 'Consulta DIAN', body: 'Desde aquí consultas el RUT de terceros a partir de sus NIT.' },
     ],
   },
   '/empresa': {

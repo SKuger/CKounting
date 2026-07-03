@@ -1,15 +1,15 @@
 <script setup lang="ts">
-import { Building2, FolderOpen, FileSearch, PlayCircle, LifeBuoy, ArrowRight } from 'lucide-vue-next'
+import { Home, Building2, FolderOpen, FileSearch, PlayCircle, LifeBuoy, ArrowRight } from 'lucide-vue-next'
 import { TOUR_LIST } from '~/lib/tours'
 
-const ICONS: Record<string, unknown> = { Building2, FolderOpen, FileSearch }
+const ICONS: Record<string, unknown> = { Home, Building2, FolderOpen, FileSearch }
 
 // Los tutoriales de empresa/carga resaltan elementos que solo existen con una empresa abierta:
 // desde el hub llevamos al inicio y el botón "?" de esa vista lanza el tutorial en contexto.
 const CONTEXTUAL = new Set(['/empresa', '/load'])
 
 function launch(route: string) {
-  if (CONTEXTUAL.has(route)) return navigateTo('/')
+  if (CONTEXTUAL.has(route)) return navigateTo('/empresas')
   return navigateTo({ path: route, query: { tour: '1' } })
 }
 </script>

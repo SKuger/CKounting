@@ -4,7 +4,7 @@
 // notificaciones mock y el beacon de estado ficticio se retiraron (0.1.4 #7) hasta que exista
 // una fuente real. Playground-only pieces (Control de marca panel, resizable grid, resolution
 // letterbox, Helm/Timón spines) are intentionally absent.
-import { Sun, Moon, Building2, FileSearch, LifeBuoy, HelpCircle, Bell, ChevronDown } from 'lucide-vue-next'
+import { Sun, Moon, Home, Building2, FileSearch, LifeBuoy, HelpCircle, Bell, ChevronDown } from 'lucide-vue-next'
 import { Popover, PopoverContent, PopoverTrigger } from '~/components/ui/popover'
 import { Button } from '~/components/ui/button'
 import { useTour } from '~/composables/useTour'
@@ -27,7 +27,8 @@ type NavItem = NavLeaf | { label: string; icon: unknown; children: NavLeaf[] }
 // Real Contab nav. Empresas owns the company sub-routes (detail + carga); Consulta DIAN is its
 // own area. `{ label, to, icon }` (+ optional children for groups) — flattened for ⌘K + crumb.
 const nav: (NavLeaf & { icon: unknown })[] = [
-  { label: 'Empresas',     to: '/',              icon: Building2, match: p => p === '/' || p === '/empresa' || p === '/load' },
+  { label: 'Inicio', to: '/', icon: Home, match: p => p === '/' },
+  { label: 'Empresas', to: '/empresas', icon: Building2, match: p => p === '/empresas' || p === '/empresa' || p === '/load' },
   { label: 'Consulta DIAN', to: '/consulta-dian', icon: FileSearch },
   { label: 'Ayuda', to: '/ayuda', icon: LifeBuoy },
 ]
