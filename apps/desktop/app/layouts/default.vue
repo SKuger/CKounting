@@ -4,7 +4,7 @@
 // notificaciones mock y el beacon de estado ficticio se retiraron (0.1.4 #7) hasta que exista
 // una fuente real. Playground-only pieces (Control de marca panel, resizable grid, resolution
 // letterbox, Helm/Timón spines) are intentionally absent.
-import { Sun, Moon, Building2, FileSearch, ChevronDown } from 'lucide-vue-next'
+import { Sun, Moon, Building2, FileSearch, LifeBuoy, ChevronDown } from 'lucide-vue-next'
 import { Popover, PopoverContent, PopoverTrigger } from '~/components/ui/popover'
 import { Button } from '~/components/ui/button'
 
@@ -27,6 +27,7 @@ type NavItem = NavLeaf | { label: string; icon: unknown; children: NavLeaf[] }
 const nav: (NavLeaf & { icon: unknown })[] = [
   { label: 'Empresas',     to: '/',              icon: Building2, match: p => p === '/' || p === '/empresa' || p === '/load' },
   { label: 'Consulta DIAN', to: '/consulta-dian', icon: FileSearch },
+  { label: 'Ayuda', to: '/ayuda', icon: LifeBuoy },
 ]
 const flatNav = computed<NavLeaf[]>(() => nav.map(n => ({ label: n.label, to: n.to, match: n.match })))
 
