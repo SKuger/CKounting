@@ -198,3 +198,20 @@ Verificado en vivo: todas las preferencias con efecto + CRUD de cuentas; cero er
 - Build real + prueba del instalable en **Windows** (CI o máquina): ventana Electron, sin procesos huérfanos al cerrar, Poppler extrae CUFE, WS DIAN, SmartScreen.
 - **Hosting de auto-update**: crear el repo público de releases y pasar el CI a `--publish always`.
 - Pulido: `DIAN_PORT` dinámico, `playwright install` on-demand opcional, splash/logging.
+
+---
+
+## Sesión 5 — 2026-07-03: Consulta de Inconsistencias DIAN + release 0.1.5
+
+**Resultado**: nueva **Consulta de Inconsistencias** (razón social por NIT+DV) integrada en Contab, por el sidecar de `apps/core` con **scraping HTTP plano** de MUISCA (`DefSelPublicacionesExterna.faces`, JSF/Mojarra, **sin Cloudflare** — a diferencia de Terceros que usa Playwright). Decisión **D-065**. Release **0.1.5**.
+
+### Qué se hizo
+- **Backend** (`apps/core`, sin dependencias nuevas — solo `urllib`): módulo `dian_inconsistencias.py` (scraper GET→ViewState→POST→Razón Social; parser Excel NIT/DV con autocálculo de DV; export xlsxwriter) + 3 RPCs en `sidecar.py`: `parse_nit_dv`, `consulta_inconsistencias`, `export_inconsistencias`.
+- **Frontend** (Nuxt/Órbita): página `/consulta-inconsistencias` (subir → tabla en vivo, consulta fila por fila con progreso/cancelar/reintentar, pausa 450 ms → export con `DirectoryPicker`); ruta `server/api/consulta-inconsistencias/upload.post.ts`; sidebar reorganizado en grupo desplegable **"Consultas DIAN" → Terceros + Inconsistencias** (reka-ui Collapsible + `SidebarMenuSub`), con `flatNav` aplanado para ⌘K/breadcrumb.
+
+### Verificado
+Scrape real (NIT 860002180 → "SEGUROS COMERCIALES BOLIVAR S.A."); upload+parse (autocalcula DV faltante); export; ambas páginas 200; **prueba real con 115 NITs (102 encontrados, 13 sin resultado, 0 errores)**. 73/73 tests del core verdes.
+
+### Notas
+- Entorno: `ENOSPC` de file watchers (inotify) hace reiniciar Nuxt en dev; subir `fs.inotify.max_user_watches`.
+- La clave de la IA (Haiku) sigue fuera de alcance; esta consulta es pública (sin token/login).

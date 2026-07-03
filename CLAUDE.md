@@ -2,11 +2,12 @@
 
 Software de contabilidad multi-empresa para escritorio (Windows). Este archivo es el punto de entrada que Claude debe leer en cada sesión.
 
-## Estado actual (último update 2026-05-28)
+## Estado actual (último update 2026-07-03)
 
 - **E1 completada ✅** end-to-end con muestras reales del usuario. Ver [`docs/session_log.md`](docs/session_log.md) para el resumen detallado.
 - **37/37 tests Python verdes** (Excel parser, NIT DV, V1/V2/V3, PDF CUFE extraction incluido QR scan).
 - **Dev server**: `cd apps/desktop && npm run dev` → http://localhost:3000. El sidecar Python se levanta automáticamente como subprocess.
+- **Consultas DIAN (0.1.5)**: el sidebar agrupa **Terceros** (scraper Playwright, `apps/dian-rut`, sortea Cloudflare) e **Inconsistencias** (nueva — razón social por NIT+DV vía sidecar `apps/core`, **HTTP plano sin navegador**, MUISCA `DefSelPublicacionesExterna.faces`). RPCs: `parse_nit_dv`, `consulta_inconsistencias`, `export_inconsistencias`. Ver D-065.
 - **Próximo natural**: E2 (catálogo de empresas robusto) o E5 (PUC + terceros). Ver `## Próxima sesión` en `docs/plan.md`.
 
 ## Qué es Contab

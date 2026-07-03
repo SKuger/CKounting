@@ -286,6 +286,9 @@ End-to-end sin intervención del desarrollador:
 
 **Arranque en dev**: requiere venv propio en `apps/dian-rut/.venv` (`python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/playwright install chromium`). Nuxt levanta el sidecar solo al entrar a `/consulta-dian`.
 
+### Consulta de Inconsistencias — razón social por NIT+DV ✅ 2026-07-03 (0.1.5)
+Segunda consulta DIAN, servida por el **sidecar de `apps/core`** (HTTP plano, sin navegador ni Cloudflare — MUISCA `DefSelPublicacionesExterna.faces`). El sidebar se reorganizó en grupo **"Consultas DIAN" → Terceros + Inconsistencias**. Sube un Excel con columnas `NIT` y `DV` (si falta el DV se calcula) → tabla en vivo (consulta fila por fila con progreso, reintentar fallidos, pausa cortés) → export `.xlsx` con NIT/DV/Razón Social. RPCs `parse_nit_dv` / `consulta_inconsistencias` / `export_inconsistencias`. Ver **D-065**. **Probado**: 115 NITs reales (102 encontrados, 13 sin resultado, 0 errores).
+
 ---
 
 ## E2 — Catálogo de empresas robusto

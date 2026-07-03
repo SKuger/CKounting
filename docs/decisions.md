@@ -580,6 +580,12 @@ Sino, sea base_19 = IVA / 0.19
 **Fecha**: 2026-07-03 (0.1.4)
 **Decisión**: Como no se opera a nivel de fila, `get_load_rows`/`fetch_load_rows` **quedan como estaban** (no inyectan `row_index`/`periodo` en las filas) y `run_validations` mapea fallas/overrides por **posición** (igual que antes). El intento previo de transportar `row_index` explícito (necesario solo si se filtraban filas) se **revirtió** al eliminarse las operaciones por fila.
 
+## D-065 — Consulta de Inconsistencias DIAN (razón social por NIT+DV) ✅
+**Fecha**: 2026-07-03 (0.1.5)
+**Decisión**: Segunda consulta DIAN, **separada de Terceros** (D-050..D-052). El botón "Consulta DIAN" del sidebar pasa a ser el grupo desplegable **"Consultas DIAN" → Terceros + Inconsistencias**, cada una con su página (`/consulta-dian`, `/consulta-inconsistencias`); `flatNav` se aplana para que ⌘K y el breadcrumb sigan operando con hojas.
+A diferencia de Terceros (FastAPI + Playwright, sortea Cloudflare), **Inconsistencias scrapea `DefSelPublicacionesExterna.faces` (MUISCA, JSF/Mojarra, sin Cloudflare) por HTTP plano desde el sidecar de `apps/core`** (solo `urllib`, sin dependencias nuevas). Flujo: GET (ViewState + cookies) → POST (numNit + dv) → la respuesta ya trae la Razón Social. Tres RPCs: `parse_nit_dv` (lee Excel NIT/DV, normaliza NITs, **autocalcula el DV faltante** con módulo 11), `consulta_inconsistencias` (una fila → razón social; **nunca lanza**, el error viaja en el payload) y `export_inconsistencias` (xlsx NIT/DV/Razón Social vía xlsxwriter).
+La UI consulta **fila por fila desde el cliente** (progreso en vivo + reintentar fallidos + pausa cortés de 450 ms), **no en lote**: respeta el timeout de 30 s de `callSidecar` y evita martillar el balanceador de la DIAN. Es una consulta **pública** (sin token/login). Probado con 115 NITs reales (102 encontrados, 0 errores).
+
 ---
 
 ## Decisiones pendientes (a tomar más adelante)

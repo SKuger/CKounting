@@ -22,6 +22,7 @@ from . import export as export_module
 from . import pdf_cufe as pdf_cufe_module
 from . import backup as backup_module
 from . import program_db as program_db_module
+from . import dian_inconsistencias as dian_inc_module
 
 
 # ---------- handlers ----------
@@ -714,6 +715,36 @@ def _h_program_touch_empresa(params: dict) -> dict:
     return {"ok": True}
 
 
+# ---------- Consulta de Inconsistencias DIAN (razón social por NIT+DV) ----------
+
+def _h_consulta_inconsistencias(params: dict) -> dict:
+    """Una consulta NIT+DV → razón social (scrape HTTP-plano de MUISCA)."""
+    nit = str(params.get("nit", "")).strip()
+    dv = str(params.get("dv", "")).strip()
+    if not nit:
+        raise ValueError("nit requerido")
+    return dian_inc_module.consultar(nit, dv)
+
+
+def _h_parse_nit_dv(params: dict) -> dict:
+    """Lee un .xlsx con columnas NIT y DV → filas normalizadas."""
+    source_path = params.get("source_path")
+    if not isinstance(source_path, str) or not source_path.strip():
+        raise ValueError("source_path requerido (string)")
+    return dian_inc_module.parse_nit_dv(source_path)
+
+
+def _h_export_inconsistencias(params: dict) -> dict:
+    """Escribe el .xlsx de salida con NIT, DV y Razón Social."""
+    rows = params.get("rows")
+    output_path = params.get("output_path")
+    if not isinstance(rows, list):
+        raise ValueError("rows requerido (lista)")
+    if not isinstance(output_path, str) or not output_path.strip():
+        raise ValueError("output_path requerido (string)")
+    return dian_inc_module.export_inconsistencias(rows, output_path)
+
+
 HANDLERS: dict[str, Callable[[dict], Any]] = {
     "ping": _h_ping,
     "list_empresas": _h_list_empresas,
@@ -754,6 +785,10 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "program_save_settings": _h_program_save_settings,
     "program_list_empresas": _h_program_list_empresas,
     "program_touch_empresa": _h_program_touch_empresa,
+    # Consulta de Inconsistencias DIAN (razón social por NIT+DV)
+    "consulta_inconsistencias": _h_consulta_inconsistencias,
+    "parse_nit_dv": _h_parse_nit_dv,
+    "export_inconsistencias": _h_export_inconsistencias,
 }
 
 

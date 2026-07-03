@@ -4,7 +4,8 @@
 // notificaciones mock y el beacon de estado ficticio se retiraron (0.1.4 #7) hasta que exista
 // una fuente real. Playground-only pieces (Control de marca panel, resizable grid, resolution
 // letterbox, Helm/Timón spines) are intentionally absent.
-import { Sun, Moon, Home, Building2, FileSearch, LifeBuoy, HelpCircle, Bell, ChevronDown } from 'lucide-vue-next'
+import { Sun, Moon, Home, Building2, FileSearch, LifeBuoy, HelpCircle, Bell, ChevronDown, ChevronRight } from 'lucide-vue-next'
+import { CollapsibleRoot, CollapsibleTrigger, CollapsibleContent } from 'reka-ui'
 import { Popover, PopoverContent, PopoverTrigger } from '~/components/ui/popover'
 import { Button } from '~/components/ui/button'
 import { useTour } from '~/composables/useTour'
@@ -21,20 +22,35 @@ const isDark = computed(() =>
 )
 function toggleTheme() { prefs.setPref('theme', isDark.value ? 'light' : 'dark') }
 
-type NavLeaf = { label: string; to: string; match?: (p: string) => boolean }
-type NavItem = NavLeaf | { label: string; icon: unknown; children: NavLeaf[] }
+type NavLeaf = { label: string; to: string; icon?: unknown; match?: (p: string) => boolean }
+type NavGroup = { label: string; icon: unknown; children: NavLeaf[] }
+type NavItem = (NavLeaf & { icon: unknown }) | NavGroup
 
-// Real Contab nav. Empresas owns the company sub-routes (detail + carga); Consulta DIAN is its
-// own area. `{ label, to, icon }` (+ optional children for groups) — flattened for ⌘K + crumb.
-const nav: (NavLeaf & { icon: unknown })[] = [
+// Real Contab nav. Empresas owns the company sub-routes (detail + carga); las Consultas DIAN son
+// un grupo desplegable (Terceros + Inconsistencias), cada una con su página. `flatNav` aplana los
+// hijos para que ⌘K y el breadcrumb sigan funcionando con una lista de hojas.
+const nav: NavItem[] = [
   { label: 'Inicio', to: '/', icon: Home, match: p => p === '/' },
   { label: 'Empresas', to: '/empresas', icon: Building2, match: p => p === '/empresas' || p === '/empresa' || p === '/load' },
-  { label: 'Consulta DIAN', to: '/consulta-dian', icon: FileSearch },
+  {
+    label: 'Consultas DIAN', icon: FileSearch, children: [
+      { label: 'Terceros', to: '/consulta-dian' },
+      { label: 'Inconsistencias', to: '/consulta-inconsistencias' },
+    ],
+  },
   { label: 'Ayuda', to: '/ayuda', icon: LifeBuoy },
 ]
-const flatNav = computed<NavLeaf[]>(() => nav.map(n => ({ label: n.label, to: n.to, match: n.match })))
+
+function isGroup(n: NavItem): n is NavGroup { return 'children' in n }
+
+const flatNav = computed<NavLeaf[]>(() =>
+  nav.flatMap(n => isGroup(n)
+    ? n.children.map(c => ({ label: c.label, to: c.to, match: c.match }))
+    : [{ label: n.label, to: n.to, match: n.match }]),
+)
 
 const leafActive = (n: NavLeaf) => (n.match ? n.match(route.path) : route.path === n.to)
+const groupActive = (g: NavGroup) => g.children.some(leafActive)
 const crumbLeaf = computed(() => flatNav.value.find(leafActive)?.label ?? 'Contab')
 
 // Tutoriales interactivos: el botón "?" del topbar lanza el tour de la vista actual; al llegar
@@ -64,14 +80,46 @@ watch(() => route.query.tour, (v) => {
           <SidebarGroupLabel>General</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              <SidebarMenuItem v-for="item in nav" :key="item.to">
-                <SidebarMenuButton as-child :is-active="leafActive(item)" :tooltip="item.label">
-                  <NuxtLink :to="item.to">
-                    <component :is="item.icon" />
-                    <span class="truncate group-data-[collapsible=icon]:hidden">{{ item.label }}</span>
-                  </NuxtLink>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
+              <template v-for="item in nav" :key="item.label">
+                <!-- grupo desplegable (Consultas DIAN) -->
+                <CollapsibleRoot
+                  v-if="isGroup(item)"
+                  as-child
+                  :default-open="groupActive(item)"
+                  class="group/collapsible"
+                >
+                  <SidebarMenuItem>
+                    <CollapsibleTrigger as-child>
+                      <SidebarMenuButton :is-active="groupActive(item)" :tooltip="item.label">
+                        <component :is="item.icon" />
+                        <span class="truncate group-data-[collapsible=icon]:hidden">{{ item.label }}</span>
+                        <ChevronRight class="ml-auto size-4 shrink-0 transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90 group-data-[collapsible=icon]:hidden" />
+                      </SidebarMenuButton>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <SidebarMenuSub>
+                        <SidebarMenuSubItem v-for="child in item.children" :key="child.to">
+                          <SidebarMenuSubButton as-child :is-active="leafActive(child)">
+                            <NuxtLink :to="child.to">
+                              <span class="truncate">{{ child.label }}</span>
+                            </NuxtLink>
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                      </SidebarMenuSub>
+                    </CollapsibleContent>
+                  </SidebarMenuItem>
+                </CollapsibleRoot>
+
+                <!-- hoja simple -->
+                <SidebarMenuItem v-else>
+                  <SidebarMenuButton as-child :is-active="leafActive(item)" :tooltip="item.label">
+                    <NuxtLink :to="item.to">
+                      <component :is="item.icon" />
+                      <span class="truncate group-data-[collapsible=icon]:hidden">{{ item.label }}</span>
+                    </NuxtLink>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </template>
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
