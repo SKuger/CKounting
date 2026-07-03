@@ -4,7 +4,7 @@
 // notificaciones mock y el beacon de estado ficticio se retiraron (0.1.4 #7) hasta que exista
 // una fuente real. Playground-only pieces (Control de marca panel, resizable grid, resolution
 // letterbox, Helm/Timón spines) are intentionally absent.
-import { Sun, Moon, Building2, FileSearch, LifeBuoy, HelpCircle, ChevronDown } from 'lucide-vue-next'
+import { Sun, Moon, Building2, FileSearch, LifeBuoy, HelpCircle, Bell, ChevronDown } from 'lucide-vue-next'
 import { Popover, PopoverContent, PopoverTrigger } from '~/components/ui/popover'
 import { Button } from '~/components/ui/button'
 import { useTour } from '~/composables/useTour'
@@ -128,6 +128,18 @@ watch(() => route.query.tour, (v) => {
         </div>
 
         <div class="ml-auto flex items-center gap-3">
+          <!-- notificaciones (sin badge ni datos ficticios; se poblará cuando haya una fuente real) -->
+          <Popover>
+            <PopoverTrigger aria-label="Notificaciones"
+              class="inline-flex size-9 items-center justify-center rounded-full border border-border bg-muted text-foreground transition-colors hover:bg-accent">
+              <Bell class="size-[18px]" />
+            </PopoverTrigger>
+            <PopoverContent align="end" :side-offset="8" class="w-72 p-0">
+              <div class="border-b border-border px-3 py-2 text-sm font-medium">Notificaciones</div>
+              <div class="px-3 py-6 text-center text-sm text-muted-foreground">No tienes notificaciones.</div>
+            </PopoverContent>
+          </Popover>
+
           <!-- tutorial de la vista actual -->
           <Button v-if="currentTour" variant="outline" size="icon" aria-label="Ver tutorial de esta pantalla"
             title="Ver tutorial de esta pantalla" class="rounded-full bg-muted text-foreground" @click="startTour">
