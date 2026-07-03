@@ -22,13 +22,13 @@ export const TOURS: Record<string, TourDef> = {
   '/empresa': {
     id: 'empresa',
     label: 'Detalle de empresa',
-    description: 'Configurar carpetas, organizar por mes y abrir una carga.',
+    description: 'Crear meses, cargar el Excel y los soportes de cada uno, y validar.',
     icon: 'FolderOpen',
     route: '/empresa',
     steps: [
       { target: '[data-tour="empresa-carpeta"]', title: 'Carpeta de Excels', body: 'Elige la carpeta donde guardas los reportes de la DIAN. Contab los lista solo, sin escribir rutas.' },
-      { target: '[data-tour="empresa-periodos"]', title: 'Periodos (meses)', body: 'Cada mes tiene su Excel y su propia carpeta de soportes. Elige aquí los soportes de cada mes.' },
-      { target: '[data-tour="empresa-cargas"]', title: 'Cargas', body: 'Abre una carga para ver sus filas, validar y exportar.' },
+      { target: '[data-tour="empresa-crear-mes"]', title: 'Crea un mes', body: 'Cada mes es un ambiente independiente. Créalo y luego carga su Excel dentro.' },
+      { target: '[data-tour="empresa-periodos"]', title: 'Los meses', body: 'Dentro de cada mes: carga su Excel, elige su carpeta de soportes, valídalo y ábrelo. También puedes mover el Excel a otro mes o enviarlo a la papelera.' },
     ],
   },
   '/load': {
