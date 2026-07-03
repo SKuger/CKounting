@@ -560,6 +560,26 @@ Sino, sea base_19 = IVA / 0.19
 
 ---
 
+## D-061 — BD del programa (contab.db): modelo de DOS niveles (no monolito) ✅
+**Fecha**: 2026-07-03 (0.1.4)
+**Decisión**: Se añade una **BD global del programa** en `%APPDATA%\Contab\contab.db` (`program_db.py`) para datos **transversales**: perfil de **usuario** (persiste al cerrar — antes se perdía), **ajustes**, y un **registro central de empresas** (`empresa_registry`: nit, dv, razón, `db_path`, fechas, `meta_json` para firmas/correos/fechas futuros). **Complementa D-003, no lo revisa**: los datos fiscales siguen **una `.db` por empresa** (aislados); el registro solo *referencia* cada `.db` por ruta.
+**Descartado explícitamente (con el usuario)**: el **monolito** (una sola DB con `empresa_id` por fila) — mezcla datos en un archivo (contra D-003), riesgo de fuga si se olvida filtrar, y una corrupción afecta a todas. SQLite además **no tiene esquemas** (no hay `CREATE SCHEMA`), así que "esquemas por empresa" no aplica.
+**Migración**: `sync_registry()` al arrancar el sidecar registra en el catálogo las empresas ya existentes en disco; `create_empresa` registra las nuevas. Comandos: `program_get/save_user`, `program_get/save_settings`, `program_list_empresas`, `program_touch_empresa`.
+
+## D-062 — Periodo (mes) por fila + carpeta de soportes por mes ✅
+**Fecha**: 2026-07-03 (0.1.4)
+**Decisión**: Los documentos se organizan por **periodo = mes calendario `YYYY-MM`**. Modelo: `excel_load.periodo` (mes dominante del lote) + `excel_row.periodo` (por fila, **movible** entre meses). El periodo se **deriva de "Fecha Emisión"** al importar (o se fuerza con `import_excel {periodo}`); en BD viejas se hace **backfill** en la migración. La **carpeta de soportes pasa a ser por mes** (tabla `periodo_folder`, fallback a `empresa_info.pdfs_folder`): `run_validations` cruza el Excel del mes contra la carpeta de **ese** mes. Comandos: `list_periodos`, `set_periodo_pdfs_folder`, `set_load_periodo`, `move_rows_periodo`.
+
+## D-063 — Papelera (soft-delete) de documentos y lotes ✅
+**Fecha**: 2026-07-03 (0.1.4)
+**Decisión**: `deleted_at` (nullable) en `excel_load` y `excel_row`. Los borrados **permanecen en BD** pero se ocultan del front y de los conteos/exports por defecto (`include_deleted?` para verlos). Comandos: `soft_delete_rows`/`restore_rows`, `soft_delete_load`/`restore_load`. `get_load_rows`/`list_loads`/`fetch_load_rows` filtran papelera salvo `include_deleted`.
+
+## D-064 — Identidad de fila explícita por `row_index` (no posicional) ✅
+**Fecha**: 2026-07-03 (0.1.4)
+**Decisión**: `get_load_rows`/`fetch_load_rows` transportan el `row_index` REAL de cada fila; `run_validations` mapea fallas y overrides V3 por ese `row_index`, **no por la posición del array**. Prerrequisito de D-062/D-063: al filtrar/ocultar filas la posición dejaba de coincidir con `row_index` y desincronizaba validaciones y aprobaciones. Blindado con `test_validations_key_by_row_index_survive_soft_delete`.
+
+---
+
 ## Decisiones pendientes (a tomar más adelante)
 
 - **D-E1-13** ⏸ Behavior de R-V3 cuando IVA = 0 (default actual: skip). Confirmar si lo cambiamos a "marcar excluido" o "tarifa 0%".
