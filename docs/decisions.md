@@ -566,17 +566,19 @@ Sino, sea base_19 = IVA / 0.19
 **Descartado explícitamente (con el usuario)**: el **monolito** (una sola DB con `empresa_id` por fila) — mezcla datos en un archivo (contra D-003), riesgo de fuga si se olvida filtrar, y una corrupción afecta a todas. SQLite además **no tiene esquemas** (no hay `CREATE SCHEMA`), así que "esquemas por empresa" no aplica.
 **Migración**: `sync_registry()` al arrancar el sidecar registra en el catálogo las empresas ya existentes en disco; `create_empresa` registra las nuevas. Comandos: `program_get/save_user`, `program_get/save_settings`, `program_list_empresas`, `program_touch_empresa`.
 
-## D-062 — Periodo (mes) por fila + carpeta de soportes por mes ✅
-**Fecha**: 2026-07-03 (0.1.4)
-**Decisión**: Los documentos se organizan por **periodo = mes calendario `YYYY-MM`**. Modelo: `excel_load.periodo` (mes dominante del lote) + `excel_row.periodo` (por fila, **movible** entre meses). El periodo se **deriva de "Fecha Emisión"** al importar (o se fuerza con `import_excel {periodo}`); en BD viejas se hace **backfill** en la migración. La **carpeta de soportes pasa a ser por mes** (tabla `periodo_folder`, fallback a `empresa_info.pdfs_folder`): `run_validations` cruza el Excel del mes contra la carpeta de **ese** mes. Comandos: `list_periodos`, `set_periodo_pdfs_folder`, `set_load_periodo`, `move_rows_periodo`.
+## D-062 — El MES es el contenedor: crear mes → cargar su Excel + su carpeta de soportes ✅
+**Fecha**: 2026-07-03 (0.1.4) · *revisa la idea inicial de "mover por documento"*
+**Decisión**: La unidad organizadora es el **mes (`periodo` = `YYYY-MM`)**, un **contenedor/ambiente** que el usuario **crea** (`create_periodo`) y **dentro** del cual carga **su** Excel (`import_excel {periodo REQUERIDO}` → `excel_load.periodo`) y elige **su** carpeta de soportes (`set_periodo_pdfs_folder`, tabla `periodo_folder`). `run_validations` cruza el Excel del mes contra la carpeta **de ese mes**. Comandos: `create_periodo`, `list_periodos` (incluye meses vacíos), `set_periodo_pdfs_folder`, `delete_periodo`, `set_load_periodo` (mover el Excel a otro mes).
+**NO hay carpeta de soportes global** — `periodo_pdfs_folder` **no** cae a `empresa_info.pdfs_folder`; sin carpeta del mes → V1 inactivo con aviso. `set_pdfs_folder` (empresa) queda obsoleto.
+**El periodo vive a nivel de LOTE (Excel), no por fila.** Migración: `excel_load.periodo` se backfillea del mes dominante de "Fecha Emisión" en BD viejas.
 
-## D-063 — Papelera (soft-delete) de documentos y lotes ✅
+## D-063 — Papelera / borrado a nivel de Excel y de mes (NO por fila) ✅
 **Fecha**: 2026-07-03 (0.1.4)
-**Decisión**: `deleted_at` (nullable) en `excel_load` y `excel_row`. Los borrados **permanecen en BD** pero se ocultan del front y de los conteos/exports por defecto (`include_deleted?` para verlos). Comandos: `soft_delete_rows`/`restore_rows`, `soft_delete_load`/`restore_load`. `get_load_rows`/`list_loads`/`fetch_load_rows` filtran papelera salvo `include_deleted`.
+**Decisión**: Lo que se mueve/borra es el **Excel cargado** y el **mes**, nunca filas sueltas. `excel_load.deleted_at` (papelera del Excel): `soft_delete_load`/`restore_load`; `list_loads` la oculta salvo `include_deleted`. `delete_periodo` borra el mes y su(s) Excel (hard delete, cascada). **La tabla del Excel NO tiene acciones por fila** (sin mover-de-mes ni papelera por fila). *(Descarta la variante inicial `soft_delete_rows`/`move_rows_periodo`.)*
 
-## D-064 — Identidad de fila explícita por `row_index` (no posicional) ✅
+## D-064 — La tabla del Excel se mantiene igual (mapeo posicional) ✅ (revisa el intento de row_index explícito)
 **Fecha**: 2026-07-03 (0.1.4)
-**Decisión**: `get_load_rows`/`fetch_load_rows` transportan el `row_index` REAL de cada fila; `run_validations` mapea fallas y overrides V3 por ese `row_index`, **no por la posición del array**. Prerrequisito de D-062/D-063: al filtrar/ocultar filas la posición dejaba de coincidir con `row_index` y desincronizaba validaciones y aprobaciones. Blindado con `test_validations_key_by_row_index_survive_soft_delete`.
+**Decisión**: Como no se opera a nivel de fila, `get_load_rows`/`fetch_load_rows` **quedan como estaban** (no inyectan `row_index`/`periodo` en las filas) y `run_validations` mapea fallas/overrides por **posición** (igual que antes). El intento previo de transportar `row_index` explícito (necesario solo si se filtraban filas) se **revirtió** al eliminarse las operaciones por fila.
 
 ---
 
