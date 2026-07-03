@@ -25,6 +25,15 @@ def empresas_dir() -> Path:
     return p
 
 
+def program_db_path() -> Path:
+    """The program-level DB (contab.db): user, settings, empresa registry.
+    Complements D-003 (per-empresa DBs stay isolated); this only holds
+    cross-empresa/app-level data."""
+    base = data_dir()
+    base.mkdir(parents=True, exist_ok=True)
+    return base / "contab.db"
+
+
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 
