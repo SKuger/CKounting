@@ -121,6 +121,7 @@ CREATE TABLE IF NOT EXISTS pdf_cufe_index (
   pdf_size_bytes    INTEGER NOT NULL,
   extraction_status TEXT NOT NULL,
   extraction_error  TEXT,
+  extractor_version INTEGER NOT NULL DEFAULT 0,  -- bumped when the algorithm improves → old entries re-extract (D-067)
   indexed_at        TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE(folder_path, pdf_path)
 );
@@ -192,6 +193,12 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     # índice del periodo: aquí (no en SCHEMA_SQL) porque la columna puede acabar de
     # crearse por ALTER; IF NOT EXISTS lo hace idempotente para BD nuevas y viejas.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_excel_row_periodo ON excel_row(periodo)")
+
+    # 0.1.6 (D-067) — extractor_version en pdf_cufe_index: entradas cacheadas por
+    # el extractor viejo (version 0) se re-extraen al subir pdf_cufe.EXTRACTOR_VERSION.
+    idx_cols = {r["name"] for r in conn.execute("PRAGMA table_info(pdf_cufe_index)").fetchall()}
+    if "extractor_version" not in idx_cols:
+        conn.execute("ALTER TABLE pdf_cufe_index ADD COLUMN extractor_version INTEGER NOT NULL DEFAULT 0")
 
     load_cols = {r["name"] for r in conn.execute("PRAGMA table_info(excel_load)").fetchall()}
     if "deleted_at" not in load_cols:

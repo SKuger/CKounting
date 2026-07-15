@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Search, ArrowLeft, FolderOpen } from 'lucide-vue-next'
+import { Search, ArrowLeft, FolderOpen, Pencil, RefreshCw, ChevronRight } from 'lucide-vue-next'
 import {
   FlexRender,
   createColumnHelper,
@@ -196,6 +196,8 @@ async function refresh() {
     } catch { /* ignore */ }
     // Auto-validate if there's no prior run, so the chips show up immediately.
     if (!latestRun.value?.run) ejecutarValidaciones({ silent: true })
+    // Panel de soportes del mes (solo lectura; se puebla del índice ya existente).
+    refreshSoportes()
   } catch (exc) {
     toast.error('No se pudieron cargar las filas', String(exc))
   } finally {
@@ -297,9 +299,12 @@ const columns = computed<ColumnDef<Row>[]>(() => {
 })
 
 const tableData = computed<Row[]>(() => {
-  const all = data.value?.rows ?? []
+  // Cada fila lleva su índice ORIGINAL (__idx). Es lo que usa `getRowId` para que
+  // `row.id` NO se desalinee al filtrar "Solo no conformes": failuresByRow / v3Overrides
+  // están indexados por ese índice absoluto, no por la posición dentro del subconjunto.
+  const all = (data.value?.rows ?? []).map((r, i) => ({ ...r, __idx: i })) as Row[]
   if (!onlyFailing.value) return all
-  return all.filter((_, idx) => failuresByRow.value.has(idx))
+  return all.filter((r) => failuresByRow.value.has((r as Row & { __idx: number }).__idx))
 })
 
 const tableMeta = ref({
@@ -322,10 +327,11 @@ const table = useVueTable({
   globalFilterFn: (row, _id, filter) => {
     if (!filter) return true
     const needle = String(filter).toLowerCase()
-    return Object.values(row.original as Row).some((cell) =>
-      String(cell ?? '').toLowerCase().includes(needle),
-    )
+    return Object.entries(row.original as Row)
+      .filter(([k]) => k !== '__idx')
+      .some(([, cell]) => String(cell ?? '').toLowerCase().includes(needle))
   },
+  getRowId: (row) => String((row as Row & { __idx: number }).__idx),
   getCoreRowModel: getCoreRowModel(),
   getFilteredRowModel: getFilteredRowModel(),
 })
@@ -339,6 +345,8 @@ async function ejecutarValidaciones(opts: { silent?: boolean } = {}) {
     })
     validationRun.value = result
     v3Overrides.value = new Set(result.v3_overrides ?? Array.from(v3Overrides.value))
+    // run_validations re-indexa la carpeta del mes → refrescar el panel de soportes.
+    refreshSoportes()
     if (!opts.silent) {
       const detail =
         `${result.failing_rows} / ${result.total_rows} no conformes · ` +
@@ -352,6 +360,98 @@ async function ejecutarValidaciones(opts: { silent?: boolean } = {}) {
     toast.error('Error al validar', String(exc))
   } finally {
     validating.value = false
+  }
+}
+
+// ── Renombrado de soportes (DD-MM_NIT_RAZON-SOCIAL_FACTURA) ──
+type RenameItem = { path: string; current_name: string; new_name: string | null; matched: boolean; status: string; reason: string | null; cufe: string | null }
+type RenameResult = { folder: string; date_field: string; dry_run: boolean; items: RenameItem[]; counts: Record<string, number>; manifest: string | null }
+const renaming = ref(false)
+const applyingRename = ref(false)
+const renameOpen = ref(false)
+const renameApplied = ref(false)
+const renamePlan = ref<RenameResult | null>(null)
+
+async function previewRename() {
+  if (renaming.value) return
+  renaming.value = true
+  renameApplied.value = false
+  try {
+    renamePlan.value = await rpc<RenameResult>('rename_soportes', {
+      db_path: dbPath.value, load_id: loadId.value, dry_run: true,
+    })
+    renameOpen.value = true
+    const c = renamePlan.value.counts
+    if (!c.rename && !c.already) {
+      toast.warn('Nada para renombrar', 'Ningún PDF coincide con una fila del Excel de este mes.')
+    }
+  } catch (exc) {
+    toast.error('No se pudo analizar la carpeta', String(exc))
+  } finally {
+    renaming.value = false
+  }
+}
+
+async function applyRename() {
+  if (applyingRename.value) return
+  applyingRename.value = true
+  try {
+    renamePlan.value = await rpc<RenameResult>('rename_soportes', {
+      db_path: dbPath.value, load_id: loadId.value, dry_run: false,
+    })
+    renameApplied.value = true
+    const c = renamePlan.value.counts
+    toast.success(
+      `${c.renamed} archivo(s) renombrado(s)`,
+      c.error ? `${c.error} con error` : (renamePlan.value.manifest || undefined),
+    )
+    // los nombres cambiaron → el índice de esa carpeta quedó obsoleto; refrescar panel.
+    refreshSoportes()
+  } catch (exc) {
+    toast.error('Error al renombrar', String(exc))
+  } finally {
+    applyingRename.value = false
+  }
+}
+
+// ── Soportes del mes (visor con/sin CUFE + re-verificar sin re-subir Excel, D-068) ──
+type SoporteFile = {
+  name: string; path: string; has_cufe: boolean
+  extraction_status: string | null; cufe: string | null; label: string | null
+}
+type SoportesInfo = {
+  folder: string | null; periodo: string | null; files: SoporteFile[]
+  counts: { total: number; with_cufe: number; without_cufe: number }
+  reindexed: boolean; error: string | null
+}
+const soportes = ref<SoportesInfo | null>(null)
+const reverifying = ref(false)
+const soportesOpen = ref(false)
+
+async function refreshSoportes(opts: { reindex?: boolean; force?: boolean } = {}) {
+  if (!dbPath.value || !loadId.value) return
+  try {
+    soportes.value = await rpc<SoportesInfo>('list_load_soportes', {
+      db_path: dbPath.value, load_id: loadId.value,
+      reindex: opts.reindex ?? false, force: opts.force ?? false,
+    })
+  } catch { /* el panel es auxiliar: no romper la página si falla */ }
+}
+
+async function reverificarSoportes() {
+  if (reverifying.value) return
+  reverifying.value = true
+  try {
+    await refreshSoportes({ reindex: true, force: true })
+    // re-correr V1 para que la tabla refleje los CUFE recién leídos.
+    await ejecutarValidaciones({ silent: true })
+    const c = soportes.value?.counts
+    if (soportes.value?.error) toast.warn('Soportes', soportes.value.error)
+    else if (c) toast.success('Soportes re-verificados', `${c.with_cufe}/${c.total} con CUFE encontrado`)
+  } catch (exc) {
+    toast.error('No se pudieron re-verificar los soportes', String(exc))
+  } finally {
+    reverifying.value = false
   }
 }
 
@@ -500,10 +600,75 @@ watch(loadId, refresh)
         <Button data-tour="load-exportar" :disabled="exporting || !exportPath" @click="exportar">
           {{ exporting ? 'Exportando…' : 'Exportar faltantes de soporte' }}
         </Button>
+        <Button data-tour="load-renombrar" variant="secondary" :disabled="renaming || !data" title="Renombra los PDF del mes según el Excel" @click="previewRename">
+          <Pencil class="size-4" /> {{ renaming ? 'Analizando…' : 'Renombrar soportes' }}
+        </Button>
       </div>
       <p v-if="exportPath" class="break-all font-mono text-xs text-muted-foreground">
         Se guardará en: {{ exportPath }}
       </p>
+    </section>
+
+    <section v-if="data && soportes" data-tour="load-soportes" class="rounded-lg border border-border bg-card">
+      <div class="flex flex-wrap items-center gap-2 px-3 py-2">
+        <button
+          type="button"
+          class="inline-flex items-center gap-1.5 text-sm font-medium transition-colors hover:text-foreground"
+          @click="soportesOpen = !soportesOpen"
+        >
+          <ChevronRight class="size-4 text-muted-foreground transition-transform" :class="soportesOpen ? 'rotate-90' : ''" />
+          📎 Soportes del mes
+        </button>
+        <span v-if="soportes.error" class="text-xs text-muted-foreground">· {{ soportes.error }}</span>
+        <span v-else class="text-xs text-muted-foreground">
+          · <strong class="text-foreground">{{ soportes.counts.total }}</strong> archivos ·
+          <span class="text-status-success">{{ soportes.counts.with_cufe }} con CUFE</span>
+          <template v-if="soportes.counts.without_cufe">
+            · <span class="text-status-error">{{ soportes.counts.without_cufe }} sin CUFE</span>
+          </template>
+        </span>
+        <span class="flex-1" />
+        <Button
+          variant="secondary"
+          size="sm"
+          :disabled="reverifying || !data"
+          title="Re-lee los CUFE de la carpeta del mes y refresca las validaciones, sin re-subir el Excel"
+          @click="reverificarSoportes"
+        >
+          <RefreshCw class="size-3.5" :class="reverifying ? 'animate-spin' : ''" />
+          {{ reverifying ? 'Verificando…' : 'Re-verificar soportes' }}
+        </Button>
+      </div>
+
+      <div v-if="soportesOpen && soportes.files.length" class="max-h-64 overflow-auto border-t border-border">
+        <table class="w-full text-xs">
+          <tbody>
+            <tr
+              v-for="f in soportes.files"
+              :key="f.path"
+              class="border-b border-border/60"
+              :class="!f.has_cufe && f.extraction_status ? 'bg-status-error-bg/40' : ''"
+            >
+              <td class="w-6 px-3 py-1.5 text-center align-top">
+                <span v-if="f.has_cufe" class="text-status-success" title="CUFE encontrado">✓</span>
+                <span v-else-if="f.extraction_status" class="text-status-error" title="No se encontró CUFE">⚠</span>
+                <span v-else class="text-muted-foreground" title="Sin verificar aún">•</span>
+              </td>
+              <td class="px-2 py-1.5 align-top font-mono break-all">{{ f.name }}</td>
+              <td class="px-3 py-1.5 align-top text-right font-mono text-muted-foreground">
+                <span v-if="f.cufe" :title="f.cufe">
+                  <span v-if="f.label" class="mr-1 rounded bg-muted px-1 text-[10px] uppercase">{{ f.label }}</span>{{ f.cufe.slice(0, 12) }}…{{ f.cufe.slice(-8) }}
+                </span>
+                <span v-else-if="f.extraction_status" class="italic text-status-error">sin CUFE</span>
+                <span v-else class="italic">sin verificar</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div v-else-if="soportesOpen" class="border-t border-border px-3 py-4 text-center text-xs text-muted-foreground">
+        {{ soportes.error || 'No hay PDFs en la carpeta de este mes.' }}
+      </div>
     </section>
 
     <DirectoryPicker
@@ -513,6 +678,65 @@ watch(loadId, refresh)
       @pick="onExportFolderPicked"
       @close="exportPickerOpen = false"
     />
+
+    <Dialog v-model:open="renameOpen">
+      <DialogContent class="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Renombrar soportes</DialogTitle>
+          <DialogDescription>
+            Patrón <span class="font-mono">DD-MM_NIT_RAZÓN-SOCIAL_FACTURA</span>, tomado del cruce con el Excel del mes.
+            Se renombran en la misma carpeta y se deja un manifiesto <span class="font-mono">_renombrados.csv</span> para revertir.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div v-if="renamePlan" class="flex flex-col gap-3">
+          <p class="text-sm text-muted-foreground">
+            <span class="font-medium text-status-success">{{ (renamePlan.counts.rename || 0) + (renamePlan.counts.renamed || 0) }} a renombrar</span>
+            <template v-if="renamePlan.counts.already"> · {{ renamePlan.counts.already }} ya con su nombre</template>
+            <template v-if="(renamePlan.counts.nomatch || 0) + (renamePlan.counts.skip || 0)"> · {{ (renamePlan.counts.nomatch || 0) + (renamePlan.counts.skip || 0) }} sin identificar</template>
+            <template v-if="renamePlan.counts.error"> · <span class="text-status-error">{{ renamePlan.counts.error }} con error</span></template>
+          </p>
+
+          <div class="max-h-[46vh] overflow-auto rounded-md border border-border">
+            <table class="w-full text-xs">
+              <thead class="sticky top-0 bg-muted">
+                <tr class="text-left text-muted-foreground">
+                  <th class="px-2 py-1.5 font-medium">Actual</th>
+                  <th class="px-2 py-1.5 font-medium"></th>
+                  <th class="px-2 py-1.5 font-medium">Nuevo / motivo</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(it, i) in renamePlan.items" :key="i" class="border-t border-border/60 align-top">
+                  <td class="px-2 py-1 font-mono break-all">{{ it.current_name }}</td>
+                  <td class="px-2 py-1 text-muted-foreground">→</td>
+                  <td class="px-2 py-1 font-mono break-all">
+                    <span v-if="it.new_name" :class="it.status === 'renamed' ? 'text-status-success' : it.status === 'already' ? 'text-muted-foreground' : ''">{{ it.new_name }}</span>
+                    <span v-else class="italic text-muted-foreground">{{ it.reason }}</span>
+                    <span v-if="it.status === 'error'" class="text-status-error"> · {{ it.reason }}</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <p v-if="renameApplied && renamePlan.manifest" class="break-all font-mono text-xs text-status-success">
+            ✓ Aplicado. Manifiesto: {{ renamePlan.manifest }}
+          </p>
+        </div>
+
+        <DialogFooter>
+          <Button variant="ghost" @click="renameOpen = false">{{ renameApplied ? 'Cerrar' : 'Cancelar' }}</Button>
+          <Button
+            v-if="!renameApplied"
+            :disabled="applyingRename || !(renamePlan && renamePlan.counts.rename)"
+            @click="applyRename"
+          >
+            {{ applyingRename ? 'Renombrando…' : `Aplicar (${renamePlan?.counts.rename ?? 0})` }}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
 
     <section v-if="loading && !data" class="min-h-0 flex-1 overflow-hidden rounded-lg border border-border bg-card">
       <div class="data-table-wrapper">

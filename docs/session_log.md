@@ -215,3 +215,21 @@ Scrape real (NIT 860002180 → "SEGUROS COMERCIALES BOLIVAR S.A."); upload+parse
 ### Notas
 - Entorno: `ENOSPC` de file watchers (inotify) hace reiniciar Nuxt en dev; subir `fs.inotify.max_user_watches`.
 - La clave de la IA (Haiku) sigue fuera de alcance; esta consulta es pública (sin token/login).
+
+---
+
+## Sesión 6 — 2026-07-14: renombrar soportes + fix extracción de CUFE (números pegados) + QR de verificación
+
+**Resultado**: nueva acción **Renombrar soportes** (D-066), fix de la tabla de validaciones con filtro "solo no conformes", y **corrección de la extracción de CUFE** (D-067) que fallaba en facturas donde el número de autorización DIAN (16 dígitos) se pegaba al CUFE. 74/74 tests del core verdes.
+
+### Qué se hizo
+- **Renombrar soportes** (D-066): módulo `rename_soportes.py` + RPC `rename_soportes`; renombra IN PLACE al patrón `DD-MM_NIT_RAZON-SOCIAL_FACTURA.pdf` cruzando CUFE↔fila del Excel; deja manifiesto `_renombrados.csv` (reversible); PDFs sin match se dejan intactos y se reportan; nunca sobreescribe (sufijo `_2`); idempotente. UI en `load.vue`: botón + modal con preview (dry-run) antes de aplicar.
+- **Fix tabla** (`load.vue`): con el filtro "solo no conformes" activo, validar mostraba errores/hovers en filas equivocadas. Causa: pre-filtrar `tableData` rompía el `row.id`↔índice original de @tanstack/vue-table. Fix: `getRowId` sobre un `__idx` absoluto + `globalFilterFn` que ignora `__idx`.
+- **Fix extracción CUFE** (D-067): el regex viejo `(?:[a-f0-9]\s*){96}` colapsaba los espacios y **pegaba** el nº de autorización (16 dígitos, también hex) al CUFE, devolviendo un token de 96 chars equivocado (caso Telesentinel). Ahora se reconstruye el CUFE agrupando **segmentos hex separados por espacios** que sumen exactamente 96 (respeta límites de token) + prioridad CUDS>CUDE>CUFE (D-033) intacta. Además el **QR se usa como verificación** de las lecturas dudosas (texto sin etiqueta o vacío) — no en todas (medido: 37 PDFs≈136 s excedía el timeout de 30 s; limitado a los ~8 dudosos≈29 s, decisión del usuario), y es **autoritativo** (fuente machine-readable de la DIAN). Nuevo `extractor_version` en `pdf_cufe_index` (migración) invalida el caché viejo automáticamente.
+
+### Verificado
+- Telesentinel **julio** (329485) → `b55c…683441` = Excel ✓ (vía QR, label CUFE). Telesentinel **mayo** (325044) → `2074facb…f48a93` = Excel ✓ (vía fix de texto). El caché viejo tenía literalmente `0229510000325044`+CUFE cortado; tras la migración+re-index quedó corregido.
+- 74/74 tests del core verdes; carpeta real de mayo (31 PDFs) sin regresiones; NC Éxito (CUDE) y Movistar (QR) intactos.
+
+### Pendiente
+- Commit de esta sesión (rename + fix tabla + fix CUFE + migración + docs) y decidir release **0.1.6**.

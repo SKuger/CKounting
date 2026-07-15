@@ -2,10 +2,12 @@
 
 Software de contabilidad multi-empresa para escritorio (Windows). Este archivo es el punto de entrada que Claude debe leer en cada sesión.
 
-## Estado actual (último update 2026-07-03)
+## Estado actual (último update 2026-07-14)
 
 - **E1 completada ✅** end-to-end con muestras reales del usuario. Ver [`docs/session_log.md`](docs/session_log.md) para el resumen detallado.
-- **37/37 tests Python verdes** (Excel parser, NIT DV, V1/V2/V3, PDF CUFE extraction incluido QR scan).
+- **74/74 tests Python verdes** (Excel parser, NIT DV, V1/V2/V3, PDF CUFE extraction incluido QR scan + invalidación de caché por versión).
+- **Extracción CUFE robusta (D-067)**: reconstruye el CUFE por segmentos hex (no pega el nº de autorización) + QR como verificación de lecturas dudosas + `extractor_version` que re-extrae el caché viejo. **Panel "Soportes del mes" (D-068)**: en Carga, ve cuáles PDFs tienen/no tienen CUFE y re-verifica sin re-subir el Excel.
+- **Renombrar soportes (D-066)**: en Carga, renombra los PDF del mes al patrón `DD-MM_NIT_RAZON-SOCIAL_FACTURA` con manifiesto reversible.
 - **Dev server**: `cd apps/desktop && npm run dev` → http://localhost:3000. El sidecar Python se levanta automáticamente como subprocess.
 - **Consultas DIAN (0.1.5)**: el sidebar agrupa **Terceros** (scraper Playwright, `apps/dian-rut`, sortea Cloudflare) e **Inconsistencias** (nueva — razón social por NIT+DV vía sidecar `apps/core`, **HTTP plano sin navegador**, MUISCA `DefSelPublicacionesExterna.faces`). RPCs: `parse_nit_dv`, `consulta_inconsistencias`, `export_inconsistencias`. Ver D-065.
 - **Próximo natural**: E2 (catálogo de empresas robusto) o E5 (PUC + terceros). Ver `## Próxima sesión` en `docs/plan.md`.

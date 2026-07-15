@@ -23,6 +23,7 @@ from . import pdf_cufe as pdf_cufe_module
 from . import backup as backup_module
 from . import program_db as program_db_module
 from . import dian_inconsistencias as dian_inc_module
+from . import rename_soportes as rename_module
 
 
 # ---------- handlers ----------
@@ -258,6 +259,75 @@ def _h_reindex_pdfs(params: dict) -> dict:
     finally:
         conn.close()
     return {"folder": stats.folder, "stats": stats.to_dict(), "error": None}
+
+
+def _h_list_load_soportes(params: dict) -> dict:
+    """Soportes del MES de este load (carpeta del periodo): un item por PDF con su
+    estado de extracción y el CUFE encontrado, para ver CUÁLES soportes no se
+    leyeron y re-verificarlos sin re-subir el Excel (D-068).
+
+    `reindex=True` re-verifica (re-extrae lo pendiente / lo de un extractor viejo);
+    `force=True` además limpia el caché de la carpeta y re-extrae todo. Sin
+    `reindex` es solo lectura (para pintar el panel sin re-escanear)."""
+    db_path = Path(params["db_path"])
+    load_id = int(params["load_id"])
+    reindex = bool(params.get("reindex", False))
+    force = bool(params.get("force", False))
+    empty = {"total": 0, "with_cufe": 0, "without_cufe": 0}
+
+    conn = storage_module.connect(db_path)
+    try:
+        periodo = _load_periodo(conn, load_id)
+        folder = (storage_module.periodo_pdfs_folder(conn, periodo) or "").strip()
+        if not folder:
+            return {"folder": None, "periodo": periodo, "files": [], "counts": empty,
+                    "reindexed": False, "error": "Este mes no tiene carpeta de soportes configurada."}
+        folder_path = Path(folder)
+        if not folder_path.is_dir():
+            return {"folder": str(folder_path), "periodo": periodo, "files": [], "counts": empty,
+                    "reindexed": False, "error": f"La carpeta de soportes no existe: {folder_path}"}
+
+        if reindex:
+            with storage_module.transaction(conn):
+                if force:
+                    conn.execute("DELETE FROM pdf_cufe_index WHERE folder_path = ?",
+                                 (str(folder_path.resolve()),))
+                pdf_cufe_module.index_folder(conn, folder_path)
+
+        indexed_by_path = {r["pdf_path"]: r for r in pdf_cufe_module.list_indexed_pdfs(conn, folder_path)}
+    finally:
+        conn.close()
+
+    try:
+        children = sorted(folder_path.iterdir(), key=lambda p: p.name.lower())
+    except OSError as exc:
+        return {"folder": str(folder_path), "periodo": periodo, "files": [], "counts": empty,
+                "reindexed": reindex, "error": str(exc)}
+
+    files: list[dict] = []
+    with_cufe = 0
+    for p in children:
+        if not p.is_file() or p.suffix.lower() != ".pdf" or p.name.startswith("~"):
+            continue
+        cached = indexed_by_path.get(str(p.resolve()))
+        cufes = (cached["cufes"] if cached else []) or []
+        if cufes:
+            with_cufe += 1
+        files.append({
+            "name": p.name,
+            "path": str(p.resolve()),
+            "has_cufe": bool(cufes),
+            "extraction_status": cached["extraction_status"] if cached else None,
+            "cufe": cufes[0]["value"] if cufes else None,
+            "label": cufes[0]["label"] if cufes else None,
+        })
+
+    total = len(files)
+    return {
+        "folder": str(folder_path), "periodo": periodo, "files": files,
+        "counts": {"total": total, "with_cufe": with_cufe, "without_cufe": total - with_cufe},
+        "reindexed": reindex, "error": None,
+    }
 
 
 def _h_import_excel(params: dict) -> dict:
@@ -745,6 +815,34 @@ def _h_export_inconsistencias(params: dict) -> dict:
     return dian_inc_module.export_inconsistencias(rows, output_path)
 
 
+# ---------- Renombrado de soportes (DD-MM_NIT_RAZON-SOCIAL_FACTURA) ----------
+
+def _h_rename_soportes(params: dict) -> dict:
+    """Renombra los PDFs del mes según el cruce CUFE↔fila del Excel.
+    dry_run=True (por defecto) solo devuelve el plan; dry_run=False aplica."""
+    db_path = Path(params["db_path"])
+    load_id = int(params["load_id"])
+    dry_run = bool(params.get("dry_run", True))
+    conn = storage_module.connect(db_path)
+    try:
+        periodo = _load_periodo(conn, load_id)
+        folder = storage_module.periodo_pdfs_folder(conn, periodo)
+        if not folder or not Path(folder).is_dir():
+            raise ValueError("La carpeta de soportes de este mes no está configurada o no existe.")
+        with storage_module.transaction(conn):
+            pdf_cufe_module.index_folder(conn, folder)
+        rows = excel_module.fetch_load_rows(conn, load_id)
+        pdfs = pdf_cufe_module.list_indexed_pdfs(conn, folder)
+        result = rename_module.rename_soportes(rows, pdfs, folder, dry_run=dry_run)
+        if not dry_run:
+            # tras renombrar, refrescar el índice para que la app vea los nombres nuevos
+            with storage_module.transaction(conn):
+                pdf_cufe_module.index_folder(conn, folder)
+        return result
+    finally:
+        conn.close()
+
+
 HANDLERS: dict[str, Callable[[dict], Any]] = {
     "ping": _h_ping,
     "list_empresas": _h_list_empresas,
@@ -761,6 +859,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "delete_empresa": _h_delete_empresa,
     "list_pdfs_folder_files": _h_list_pdfs_folder_files,
     "reindex_pdfs": _h_reindex_pdfs,
+    "list_load_soportes": _h_list_load_soportes,
     "import_excel": _h_import_excel,
     "list_loads": _h_list_loads,
     "list_folder_files": _h_list_folder_files,
@@ -789,6 +888,8 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "consulta_inconsistencias": _h_consulta_inconsistencias,
     "parse_nit_dv": _h_parse_nit_dv,
     "export_inconsistencias": _h_export_inconsistencias,
+    # Renombrado de soportes PDF (DD-MM_NIT_RAZON-SOCIAL_FACTURA)
+    "rename_soportes": _h_rename_soportes,
 }
 
 

@@ -1,100 +1,149 @@
 # Contab
 
-Software de escritorio para contadores que manejan **múltiples empresas**. Procesa el reporte Excel "Documentos Electrónicos" descargado del portal MUISCA / DIAN, lo cruza contra los PDFs de soporte de cada empresa, y exporta las filas no conformes con su razón.
+Software de escritorio para contadores que manejan **múltiples empresas**. Procesa el reporte Excel "Documentos Electrónicos" que se descarga del portal MUISCA / DIAN, lo cruza contra los PDFs de soporte de cada empresa, marca y exporta las filas no conformes, renombra los soportes de forma ordenada, y consulta datos de terceros en la DIAN.
 
-**Stack**: Tauri (futuro empaquetado) + Nuxt 4 (frontend) + Python sidecar (lógica/parser/DB/extracción PDF) + SQLite (una `.db` por empresa).
+**Stack**: Electron (shell de escritorio) + Nuxt 4 / Vue 3 (frontend, `ssr: false`) + Python como *sidecar* (parser, validaciones, DB, extracción de CUFE) + SQLite (**una `.db` por empresa**). Un segundo sidecar (FastAPI + Playwright) resuelve la Consulta de Terceros contra la DIAN.
 
-Documentación:
-- [CLAUDE.md](CLAUDE.md) — guía para Claude en cada sesión.
-- [docs/plan.md](docs/plan.md) — roadmap por Entregas (E1–E11).
-- [docs/decisions.md](docs/decisions.md) — registro de decisiones (D-001..D-040).
-- [docs/excel-structure.md](docs/excel-structure.md) — análisis del Excel DIAN.
+- UI en **español (Colombia)**, contexto **DIAN**.
+- Diseño **Dandelyon · Órbita** (shadcn + Tailwind v4 + reka-ui).
+
+Documentación interna:
+- [CLAUDE.md](CLAUDE.md) — guía de arranque + decisiones inmutables.
+- [docs/plan.md](docs/plan.md) — roadmap por Entregas.
+- [docs/decisions.md](docs/decisions.md) — registro de decisiones (D-001…D-068).
+- [docs/excel-structure.md](docs/excel-structure.md) — estructura verificada del Excel DIAN.
 - [docs/glosario.md](docs/glosario.md) — términos del dominio contable colombiano.
 - [docs/session_log.md](docs/session_log.md) — bitácora de sesiones.
-- [docs/samples/](docs/samples/) — Excel + 6 PDFs de muestra (datos falsos).
+- [docs/samples/](docs/samples/) — Excel + 6 PDFs de muestra (datos falsos, commiteables).
 
-## Estado: Entrega 1 ✅ (funcional end-to-end)
+---
 
-Lo que ya corre y está probado contra los samples reales:
+## Modelo mental (importante)
 
-- Crear empresas con validación de NIT (módulo 11 DIAN).
-- Configurar **dos carpetas por empresa** (con folder picker propio, sin escribir rutas):
-  - `default_folder` — donde viven los Excels DIAN.
-  - `pdfs_folder` — donde viven los PDFs de soporte.
-- **Auto-listado** de Excels en `default_folder` con badge `importado` por archivo, botón "Importar" y "Importar pendientes (N)" para batch.
-- **Auto-indexing** de PDFs en `pdfs_folder` con:
-  - `pdftotext -raw` → captura CUFE/CUDE/CUDS labeled (5/6 samples).
-  - `pdftotext -layout` → fallback si el raw devuelve nada.
-  - `cv2.QRCodeDetector` multi-DPI (300/400/220) sobre páginas renderizadas con `pypdfium2` → captura el CUFE del QR DIAN cuando la fuente está obfuscada (Movistar).
-  - Cache incremental por `(folder, path, mtime, size)`.
-  - **Regla 1-CUFE-por-PDF** con prioridad CUDS > CUDE > CUFE (NC de Éxito da solo su CUDE, no el CUFE del padre).
-- Tabla con las 32 columnas DIAN + 3 derivadas (`# de factura` = `Prefijo-Folio`, `Valor Base` = `Total−IVA`, `Base IVA` = `IVA/0.19`).
-  - **14 columnas visibles por defecto**, 21 ocultas pero filtrables (panel de visibilidad).
-  - Búsqueda global, badge `NC` para Notas Crédito.
-- Tres validaciones del flujo real del usuario:
-  - **V1 — CUFE/CUDE/CUDS de la fila debe existir en algún PDF de la carpeta** (real, no stub).
-  - **V2 — Notas Crédito × −1**: `IVA` y `Total` se invierten en memoria al evaluar y al exportar; BD guarda originales.
-  - **V3 — Tarifa IVA**: 19% primero, fallback 5%, skip si `IVA = 0`.
-- Exportar `.xlsx` de **filas no conformes** con las 36 columnas (32 originales + 3 derivadas + `razon_falla`), valores invertidos en NCs, motivos múltiples separados por `; `.
-- Persistencia completa por empresa en SQLite con migraciones idempotentes.
+La app se organiza en tres niveles:
 
-**Tests**: 37 pasando contra `docs/samples/`.
+```
+Empresa  (un libro contable, una .db)
+  └── Mes / periodo  (AAAA-MM — un "ambiente" independiente)
+        ├── Excel DIAN del mes         (los documentos electrónicos)
+        └── Carpeta de soportes del mes (los PDF que envía el cliente)
+```
+
+Cada **mes** es su propio ambiente: tiene su Excel y **su** carpeta de soportes. No hay carpeta global de PDFs — la validación de un mes usa la carpeta de ese mes.
+
+---
+
+## Qué puedes hacer hoy
+
+### 1. Empresas
+- Crear empresas con validación de **NIT (módulo 11 DIAN)**; el dígito de verificación (DV) se calcula solo.
+- Cada empresa vive en su propia `.db` (aislamiento total entre empresas).
+
+### 2. Meses y carga del Excel
+- Crear un mes (`AAAA-MM`) dentro de la empresa.
+- Subir el **Excel DIAN** de ese mes y elegir su **carpeta de soportes** (con un selector de carpetas propio; no escribes rutas).
+- Mover un Excel a otro mes o enviarlo a la papelera.
+
+### 3. Tabla de la carga y validaciones
+Al abrir una carga ves la tabla con las columnas DIAN + 3 derivadas (`# de factura` = `Prefijo-Folio`, `Valor Base` = `Total − IVA`, `Base IVA`), con:
+- Búsqueda global, panel de columnas (mostrar/ocultar), badge `NC` para Notas Crédito.
+- Botón **Validar** que corre las tres validaciones y marca cada fila (✓ / ⚠ con el motivo al pasar el mouse):
+  - **V1 — Soporte**: el CUFE/CUDE/CUDS de la fila debe existir en algún PDF de la carpeta del mes.
+  - **V2 — Notas Crédito**: `IVA` y `Total` se invierten al evaluar/exportar (la BD guarda los originales).
+  - **V3 — Tarifa de IVA**: 19% primero, 5% como fallback; se omite si `IVA = 0`.
+- Filtro **Solo no conformes** y casilla **Aprobar** para marcar manualmente una fila que falla V3 como aceptada.
+- **Exportar faltantes de soporte** → `.xlsx` con las columnas originales + derivadas + `razon_falla`.
+
+### 4. Soportes del mes  ·  Re-verificar  *(nuevo)*
+En la página de la carga, el panel **📎 Soportes del mes** muestra:
+- Un conteo: `N archivos · M con CUFE · K sin CUFE`.
+- Al desplegarlo, la lista archivo por archivo con su estado (✓ con CUFE / ⚠ sin CUFE / • sin verificar) y **el CUFE encontrado** cuando lo hay. Así ves exactamente **cuáles** PDFs no se pudieron leer.
+- Botón **Re-verificar soportes**: vuelve a leer los CUFE de la carpeta del mes y refresca las validaciones **sin re-subir el Excel**. Úsalo cuando agregues, reemplaces o renombres PDFs, o cuando quieras forzar una relectura.
+
+> La extracción de CUFE quedó cacheada; si mejora el algoritmo de lectura, el caché viejo se re-lee solo. "Re-verificar" fuerza una relectura completa de esa carpeta.
+
+### 5. Renombrar soportes  *(nuevo)*
+Botón **Renombrar soportes** en la página de la carga. Renombra los PDF del mes al patrón:
+
+```
+DD-MM_NIT_RAZON-SOCIAL_FACTURA.pdf
+```
+
+- La fecha `DD-MM` sale de la **Fecha de Emisión** de la fila del Excel; el NIT, la razón social y el número de factura, del cruce por **CUFE** entre el PDF y su fila.
+- Primero muestra una **vista previa** (nombre actual → nombre nuevo) con conteos; nada se toca hasta que confirmes **Aplicar**.
+- Se renombra **en la misma carpeta** y se deja un manifiesto **`_renombrados.csv`** (nombre nuevo, nombre original, CUFE, fecha) para poder revertir/auditar.
+- Es seguro: nunca sobreescribe (si hay choque agrega `_2`, `_3`…), es idempotente (un PDF ya con su nombre destino se salta) y **los PDF sin CUFE o que no cruzan con el Excel se dejan intactos y se reportan**.
+
+### 6. Consultas DIAN
+En el sidebar, el grupo **Consultas DIAN**:
+- **Terceros** — consulta el RUT / razón social de terceros a partir de sus NIT (abre un navegador dedicado que sortea el "Soy humano" de Cloudflare; sidecar Playwright).
+- **Inconsistencias** — obtiene la razón social por **NIT + DV** consultando MUISCA por HTTP plano (sin navegador). Subes un Excel con columnas NIT y DV, consulta fila por fila (con progreso, cancelar y reintentar fallidos) y exportas el resultado.
+
+### 7. Ayuda in-app
+El botón **"?"** del topbar lanza un **tour guiado** de la vista actual (incluye los pasos de validar, soportes, re-verificar, renombrar y exportar). Los iconos de ayuda contextual (`HelpHint`) explican conceptos como "no conforme".
+
+---
+
+## Cómo funciona la extracción de CUFE
+
+Cada PDF de soporte se identifica por su **CUFE / CUDE / CUDS** (96 hex). El extractor (D-017, D-033, D-067) intenta, en orden:
+
+1. **`pdftotext -raw`** — reconstruye el código agrupando segmentos hex separados por espacios que sumen exactamente 96 (maneja CUFEs partidos en varias líneas **sin** pegarles números vecinos, como el número de autorización). Si el código viene **etiquetado** (`CUFE:`/`CUDE:`/`CUDS:`) se toma con prioridad **CUDS > CUDE > CUFE** (una Nota Crédito devuelve su propio CUDE, no el CUFE del padre).
+2. **`pdftotext -layout`** — por si el layout ayuda a exponer la etiqueta.
+3. **Escaneo del QR** (pypdfium2 + `cv2.QRCodeDetector`, multi-DPI) — el QR de la DIAN trae el CUFE en claro. Se usa **como verificación de las lecturas dudosas** (cuando el texto no da nada o da un código sin etiqueta) y es **autoritativo** (es la fuente machine-readable de la DIAN).
+
+El resultado se cachea por `(carpeta, archivo, mtime, tamaño, versión-del-extractor)`; solo se re-lee lo que cambió o lo que quedó de una versión anterior del extractor.
+
+---
 
 ## Setup (primera vez)
 
-Requisitos del sistema:
-- **Node ≥ 20** y **npm ≥ 10**.
-- **Python ≥ 3.10**.
-- **Poppler** (`pdftotext` binary). En Debian/Ubuntu: `sudo apt install poppler-utils`. En macOS: `brew install poppler`. En Windows: incluido en el bundle de poppler.
-- (Opcional para futuro Tauri en Linux dev) `libwebkit2gtk-4.1-dev`, `libjavascriptcoregtk-4.1-dev`, `libsoup-3.0-dev`.
+Requisitos:
+- **Node ≥ 20**, **npm ≥ 10**
+- **Python ≥ 3.10**
+- **Poppler** (binario `pdftotext`). Debian/Ubuntu: `sudo apt install poppler-utils` · macOS: `brew install poppler` · Windows: viene en el bundle.
 
 ```bash
-# Python sidecar — crear venv e instalar paquete en modo editable
+# Sidecar Python (core)
 cd apps/core
 python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
-.venv/bin/pytest          # 37 tests deben pasar
+.venv/bin/pytest -q                 # 74 tests deben pasar
 
 # Frontend
 cd ../desktop
 npm install
 ```
 
+Para la Consulta de **Terceros** (opcional) hace falta el sidecar DIAN:
+
+```bash
+cd apps/dian-rut
+python3 -m venv .venv
+.venv/bin/pip install -e .
+.venv/bin/playwright install chromium
+```
+
 ## Correr en dev
 
 ```bash
 cd apps/desktop
-npm run dev               # http://localhost:3000
+npm run dev                          # http://localhost:3000
 ```
 
-El frontend Nuxt arranca el sidecar Python automáticamente como subproceso. Resuelve la ruta del `python` desde `apps/core/.venv/bin/python` o desde la variable de entorno `CONTAB_PYTHON`.
+Nuxt arranca el sidecar Python automáticamente. Si tu sistema tiene pocos *file watchers* (`ENOSPC` de inotify en Linux), súbelos: `sudo sysctl fs.inotify.max_user_watches=524288`.
 
-## Flujo de prueba end-to-end
+> Alternativa sin watchers: `npm run build && PORT=3000 node .output/server/index.mjs`.
 
-1. Abre [http://localhost:3000](http://localhost:3000).
-2. Crea la empresa **"REAL Seguros Ltda."** con NIT `900181831` (el DV `4` se calcula y muestra automáticamente).
-3. En la página de la empresa, pulsa **"📂 Elegir carpeta"** en el panel **"Carpeta de archivos de la empresa"** y selecciona el directorio donde tienes tus Excels DIAN (por ejemplo `<repo>/docs/samples/`).
-4. Pulsa **"📂 Elegir carpeta"** en el panel **"Soportes PDF"** y selecciona la carpeta de PDFs (por ejemplo `<repo>/docs/samples/pdfs/`).
-5. El panel de PDFs mostrará los 6 archivos con su CUFE extraído debajo. La primera indexación toma unos segundos por el QR scan; las siguientes son instantáneas (cache).
-6. En el panel "Archivos en la carpeta", pulsa **"Importar"** en el Excel.
-7. Abre la carga creada → ves la tabla con 14 columnas visibles + búsqueda + panel de columnas.
-8. Pulsa **"Validar"** → ves **"7 / 11 filas no conformes · V1 activa (6 CUFE indexados)"**.
-9. Pulsa **"📂 Carpeta de salida"**, elige un destino, y pulsa **"Exportar no conformes"** → genera el `.xlsx`.
+Al cambiar código **Python**, refresca el sidecar: `pkill -f '[c]ontab_core.sidecar'` (el siguiente request lo levanta).
 
-## Resultado esperado con los samples del repo
+## Empaquetado (Windows)
 
-Al validar el Excel `Ejemplo_LaDian.xlsx` con la carpeta `docs/samples/pdfs/` indexada (6 CUFEs):
+El shell Electron (`apps/shell/`) empaqueta el frontend + los sidecars como binarios PyInstaller + Poppler, con `electron-builder` (NSIS per-user). El build corre en GitHub Actions (`.github/workflows/release-windows.yml`, `windows-latest`) por *workflow_dispatch* o al empujar un tag `vX.Y.Z`, y sube el instalador como artefacto del run. Ver [apps/shell/README.md](apps/shell/README.md) y las decisiones D-057…D-060.
 
-| # factura | Tipo | Resultado |
-|---|---|---|
-| DSE-210, DSE-211, SP-144, TCNC-1952292 | Doc soporte / Factura / NC | ✅ Pasan todas |
-| BEC-509558651 (Movistar) | Factura | ⚠️ Pasa V1 (CUFE encontrado via QR), falla V3 (tarifa IVA) |
-| 94DD-49995 (D1) | Factura POS | ⚠️ Pasa V1, falla V3 |
-| FELE-827, FELE-823 | Factura | ❌ Fallan V1 (sin soporte PDF) |
-| NOM-317, NOM-318 | Nómina | ❌ Fallan V1 |
-| NCLA-1017 | Nota crédito | ❌ Falla V1 |
+---
 
-## Carpeta de datos (D-021)
+## Carpeta de datos
 
 | SO | Ruta |
 |---|---|
@@ -105,37 +154,36 @@ Al validar el Excel `Ejemplo_LaDian.xlsx` con la carpeta `docs/samples/pdfs/` in
 
 Override con `XDG_DATA_HOME` (Linux/macOS) o `APPDATA` (Windows).
 
-## RPCs disponibles (`POST /api/rpc`)
+---
+
+## RPCs (`POST /api/rpc`)
 
 `{"method": "<name>", "params": {...}}` → `{"ok": true, "result": ...}` o `{"ok": false, "error": "..."}`.
 
 | Método | Qué hace |
 |---|---|
 | `ping` | Sanity check. |
-| `list_empresas` | Lista empresas escaneando la carpeta. |
-| `validate_nit` | Valida NIT (módulo 11) o calcula DV. |
-| `create_empresa` | Crea `.db` para una empresa con NIT + razón social. |
-| `open_empresa` | Lee `empresa_info` (incluye `default_folder`, `pdfs_folder`). |
-| `set_default_folder` | Persiste la carpeta de Excels. |
-| `set_pdfs_folder` | Persiste la carpeta de PDFs. |
-| `list_folder_files` | Lista Excels de `default_folder` con flag `imported`. |
-| `list_pdfs_folder_files` | Lista PDFs de `pdfs_folder` con CUFE extraído y status. |
-| `reindex_pdfs` | Re-indexa la carpeta de PDFs (manual; normalmente automático). |
-| `import_excel` | Importa un Excel a la empresa (in-place, no copia). |
-| `list_loads` | Historial de cargas de Excel. |
-| `get_load_rows` | Filas de una carga (paginado). |
-| `run_validations` | Auto-indexa PDFs + corre V1/V2/V3. Devuelve conteos. |
-| `export_no_conformes` | Auto-indexa PDFs + exporta `.xlsx` con razones. |
+| `list_empresas` / `create_empresa` / `open_empresa` | Catálogo y apertura de empresas. |
+| `validate_nit` | Valida NIT (módulo 11) o calcula el DV. |
+| `create_periodo` / `list_periodos` | Meses (ambientes) de la empresa. |
+| `import_excel` | Importa el Excel de un mes (in-place, no copia). |
+| `list_loads` / `get_load_rows` | Cargas de Excel y sus filas (paginado). |
+| `run_validations` | Auto-indexa los soportes del mes + corre V1/V2/V3. |
+| `export_no_conformes` | Exporta el `.xlsx` de faltantes con razones. |
+| `list_load_soportes` | Soportes del mes con estado + CUFE; `reindex`/`force` para re-verificar. |
+| `rename_soportes` | Renombra los PDF del mes (dry-run o aplicar) según el cruce con el Excel. |
+| `toggle_validation_override` | Aprobar/desaprobar V3 manualmente en una fila. |
+| `reindex_pdfs` / `list_pdfs_folder_files` | Índice sobre la carpeta a nivel empresa (uso legado/depuración). |
+| `parse_nit_dv` / `consulta_inconsistencias` / `export_inconsistencias` | Consulta de Inconsistencias DIAN (razón social por NIT+DV). |
 
-Endpoints adicionales del frontend:
-- `POST /api/upload-excel` — multipart upload + persistencia + `import_excel`.
-- `GET /api/list-dir?path=...&show_hidden=0|1` — para el `DirectoryPicker`.
+Endpoints del frontend: `POST /api/upload-excel`, `POST /api/upload-restore`, `GET /api/list-dir`, `GET /api/version`, y los de `POST /api/dian/*` (Consulta de Terceros).
 
-## Próximos pasos sugeridos
+---
 
-Ver [docs/plan.md](docs/plan.md) → `## Próxima sesión`. Candidatos:
+## Tests
 
-- **E2** — Backup/restore de empresa, edición de NIT/razón social, archive de empresas.
-- **E5** — Plan de cuentas (PUC) + catálogo de terceros (clientes/proveedores). Podemos derivar terceros automáticamente de las filas del Excel DIAN.
-- **E10** — Empaquetado Tauri para Windows.
-- **Mejoras de UX sobre E1** — mostrar `razon_falla` en línea por fila en la tabla, filtros guardados por empresa, columnas reordenables.
+```bash
+cd apps/core && .venv/bin/pytest -q          # 74 tests
+```
+
+Cubren el parser del Excel, el DV (módulo 11), V1/V2/V3, la extracción de CUFE (texto + QR + prioridad de etiquetas + invalidación de caché por versión) y el índice de PDFs, contra los samples de `docs/samples/`.

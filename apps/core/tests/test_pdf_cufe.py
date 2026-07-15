@@ -106,6 +106,32 @@ def test_index_folder_caches(tmp_path: Path):
         conn.close()
 
 
+def test_index_reextracts_on_stale_extractor_version(tmp_path: Path):
+    """An entry indexed by an older extractor (version 0) must be re-extracted,
+    even though mtime/size are unchanged (the D-067 cache-busting mechanism)."""
+    pdfs_dir = tmp_path / "pdfs"
+    pdfs_dir.mkdir()
+    src = SAMPLES / "26-02 ANNY CASTANEDA FRA SP144.pdf"
+    if not src.exists():
+        pytest.skip(f"missing sample: {src}")
+    (pdfs_dir / src.name).write_bytes(src.read_bytes())
+
+    db_path = tmp_path / "empresa.db"
+    storage.init_empresa_db(db_path, nit="900181831", dv="4", razon_social="REAL")
+    conn = storage.connect(db_path)
+    try:
+        with storage.transaction(conn):
+            index_folder(conn, pdfs_dir)
+        # Simulate a cache written by the OLD extractor.
+        conn.execute("UPDATE pdf_cufe_index SET extractor_version = 0")
+        with storage.transaction(conn):
+            again = index_folder(conn, pdfs_dir)
+        assert again.cached == 0, "stale-version entry should NOT count as cached"
+        assert again.indexed_now == 1, "stale-version entry should be re-extracted"
+    finally:
+        conn.close()
+
+
 def test_index_handles_non_pdf_files_silently(tmp_path: Path):
     pdfs_dir = tmp_path / "pdfs"
     pdfs_dir.mkdir()

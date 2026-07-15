@@ -588,6 +588,26 @@ La UI consulta **fila por fila desde el cliente** (progreso en vivo + reintentar
 
 ---
 
+## D-066 — Renombrar soportes en la misma carpeta según el cruce CUFE ↔ fila del Excel ✅
+**Fecha**: 2026-07-14
+**Decisión**: Nueva acción en la página de Carga: renombrar los PDFs de soportes al patrón **`DD-MM_NIT_RAZON-SOCIAL_FACTURA.pdf`** (`DD-MM` de la Fecha de Emisión, decidido por el usuario sobre Fecha de Recepción). El match PDF→fila es por **CUFE/CUDE normalizado** (mismo `_norm_cufe` que el indexado). Módulo `rename_soportes.py` (RPC `rename_soportes`), reutiliza el índice de `pdf_cufe`.
+Reglas confirmadas con el usuario: **renombrar IN PLACE** en la misma carpeta (no copiar a otra); los PDFs **sin match** (sin CUFE, o CUFE que no está en el Excel del mes) se **dejan intactos y se reportan**, nunca se inventan nombres. Nunca sobreescribe: colisiones → sufijo `_2`, `_3`… Idempotente (un PDF que ya tiene el nombre destino se salta). Deja un manifiesto **`_renombrados.csv`** (nombre_nuevo, nombre_original, cufe, fecha_hora) para auditar/revertir. La UI muestra primero un **preview (dry-run)** con conteos y la lista actual→nuevo antes de aplicar.
+
+## D-067 — Extracción de CUFE robusta a números pegados + QR como verificación de los casos dudosos ✅
+**Fecha**: 2026-07-14
+**Problema**: Facturas tipo **Telesentinel** imprimen el número de autorización DIAN (16 dígitos puros) en la línea inmediatamente anterior al CUFE, y éste viene partido en 3 líneas. El regex viejo `(?:[a-f0-9]\s*){96}` colapsaba todo el espacio en blanco y **pegaba** los dígitos de autorización al CUFE (los dígitos también son hex), devolviendo un token de 96 chars **equivocado** y sin etiqueta.
+**Decisión**:
+1. **Reconstruir el CUFE respetando límites de token**: se agrupan segmentos hex separados por espacios que sumen exactamente 96 y contengan al menos una letra a-f. El número de autorización es su propio token → ninguna ventana de 96 puede abarcar parte de él + parte del CUFE. Se conserva la prioridad **CUDS > CUDE > CUFE** (D-033) y la asociación etiqueta→valor.
+2. **QR como verificación extra SOLO en lecturas que fallan** (decisión del usuario: "en todos" tardaba ~136 s / 37 PDFs, excede el timeout de 30 s → se limita a los dudosos, ~29 s / 8 PDFs). Un hit de texto **etiquetado** es alta confianza → se retorna sin QR. Si el texto no da nada **o** da un token **sin etiqueta** (baja confianza) → corre el QR, que es **autoritativo** (fuente machine-readable de la DIAN). El resultado se cachea en `pdf_cufe_index`, así que el costo del QR es una sola vez por PDF.
+**Verificado**: Telesentrinel (jul y may) → CUFE correcto (`b55c…683441`, coincide con el Excel, vía qr-scan con etiqueta CUFE); 73/73 tests verdes; carpeta real de mayo sin regresiones.
+
+## D-068 — Panel "Soportes del mes": visor con/sin CUFE + re-verificar sin re-subir Excel ✅
+**Fecha**: 2026-07-14
+**Problema**: La tabla de validaciones muestra el resultado del **último `validation_run` guardado** — no se refresca sola. Tras corregir la extracción (D-067), el usuario no veía el cambio hasta re-validar, y no había forma de ver **cuáles** PDFs de la carpeta del mes no obtuvieron CUFE.
+**Decisión**: Nuevo panel colapsable **"Soportes del mes"** en la página de Carga (RPC `list_load_soportes`), sobre la carpeta **del periodo del load** (no la de la empresa, que en el modelo por-mes está vacía — D-062). Muestra conteos (`N archivos · M con CUFE · K sin CUFE`) y, por archivo, el estado (✓ con CUFE / ⚠ sin CUFE / • sin verificar) y **el CUFE encontrado** (decisión del usuario: con/sin y el valor si lo tiene). Botón **"Re-verificar soportes"** = re-indexa la carpeta del mes (`force`: limpia caché + re-extrae) y re-corre V1, **sin re-subir el Excel**. El panel se refresca solo tras validar/renombrar. Reutiliza `pdf_cufe.list_indexed_pdfs`.
+
+---
+
 ## Decisiones pendientes (a tomar más adelante)
 
 - **D-E1-13** ⏸ Behavior de R-V3 cuando IVA = 0 (default actual: skip). Confirmar si lo cambiamos a "marcar excluido" o "tarifa 0%".

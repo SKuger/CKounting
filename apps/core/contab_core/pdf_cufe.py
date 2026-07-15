@@ -1,11 +1,14 @@
 """Extract CUFE/CUDE/CUDS codes from PDF supports.
 
-Strategy (D-017, refined):
-  Pass 1: `pdftotext -raw` and look for 96-hex tokens (entropy makes false
-          positives negligible).
-  Pass 2: `pdftotext -layout` (fallback when the labeled layout helps).
-  Pass 3: render pages with pypdfium2 → cv2.QRCodeDetector. The DIAN QR URL
-          carries the CUFE in cleartext (Movistar/Claro/Tigo case).
+Strategy (D-017, refined in D-067):
+  Pass 1: `pdftotext -raw`; regroup hex by whitespace-separated tokens so a
+          neighbouring number can't glue onto the CUFE. A LABELED hit
+          (CUFE:/CUDE:/CUDS:) is high-confidence → return it.
+  Pass 2: `pdftotext -layout` (the labeled layout sometimes surfaces the anchor).
+  Pass 3: render pages with pypdfium2 → cv2.QRCodeDetector. The DIAN QR carries
+          the CUFE in cleartext (Movistar/Claro/Tigo case). This runs ONLY when
+          the text read fails (nothing, or an unlabeled low-confidence token) and
+          is authoritative — the QR is DIAN's machine-readable ground truth.
 """
 from __future__ import annotations
 
@@ -21,14 +24,23 @@ import numpy as np
 import pypdfium2 as pdfium
 
 CUFE_RE = re.compile(r"^[a-f0-9]{96}$")
-# Match exactly 96 hex digits with optional whitespace between them.
-# Handles both compact "abc..." and line-wrapped "abc...\n...xyz" (D1 case).
-ANY_HEX_RE = re.compile(r"(?:[a-f0-9]\s*){96}", re.IGNORECASE)
+# A run of hex chars possibly split by whitespace (line-wrapped CUFEs). We then
+# regroup by whitespace-separated segments so an adjacent number (e.g. the DIAN
+# authorization number, 16 pure digits printed right above the CUFE) can never
+# glue onto the CUFE across a line break — the Telesentinel bug (D-067).
+_HEX_RUN_RE = re.compile(r"[0-9a-f](?:[0-9a-f\s]*[0-9a-f])?", re.IGNORECASE)
+_HEX_SEG_RE = re.compile(r"[0-9a-f]+", re.IGNORECASE)
 LABEL_RE = re.compile(r"\b(CUFE|CUDE|CUDS)\b\s*:?\s*", re.IGNORECASE)
 
 EXTRACTION_STATUS_OK = "ok"
 EXTRACTION_STATUS_NO_TEXT = "no_text"
 EXTRACTION_STATUS_ERROR = "error"
+
+# Bump whenever the extraction algorithm changes so cached entries (keyed only by
+# mtime/size) get re-extracted instead of returning a value the old code produced.
+#   1 → segment-boundary regrouping (no more glued auth numbers) + QR cross-check
+#       of unlabeled/failed text reads (D-067).
+EXTRACTOR_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -51,51 +63,72 @@ PRIORITY_LABELS: tuple[str, ...] = ("CUDS", "CUDE", "CUFE")
 LOOKAHEAD_WINDOW = 250  # 96 hex chars + buffer for whitespace/line-wraps.
 
 
-def _normalize_token(s: str) -> str:
-    return re.sub(r"[^a-f0-9]", "", s.lower())
+def _hex_candidates(text: str) -> list[tuple[int, str]]:
+    """Every 96-hex CUFE candidate in `text`, as (start_offset, lowercase_token).
 
+    A candidate is the concatenation of CONTIGUOUS whitespace-separated hex
+    segments that total exactly 96 hex chars — this reconstructs a CUFE wrapped
+    across lines while respecting token boundaries. Requiring an a-f letter
+    rejects pure-digit numbers (a real SHA-384 CUFE effectively always has one).
 
-def _labeled_groups(text: str) -> dict[str, set[str]]:
-    """Map label → set of 96-hex tokens captured right after that label.
-    Labels are CUFE / CUDE / CUDS (case-insensitive)."""
-    groups: dict[str, set[str]] = {label: set() for label in PRIORITY_LABELS}
-    for m in LABEL_RE.finditer(text):
-        label = m.group(1).upper()
-        if label not in groups:
-            continue
-        snippet = text[m.end(): m.end() + LOOKAHEAD_WINDOW]
-        hex_match = ANY_HEX_RE.search(snippet)
-        if hex_match:
-            token = _normalize_token(hex_match.group(0))
-            if CUFE_RE.match(token):
-                groups[label].add(token)
-    return groups
+    Respecting token boundaries is what fixes the Telesentinel gluing bug (D-067):
+    the 16-digit authorization number is its own whitespace-separated segment, so
+    no 96-char group can span part of it plus part of the CUFE."""
+    out: list[tuple[int, str]] = []
+    for run in _HEX_RUN_RE.finditer(text):
+        segs = [(m.start(), m.group(0)) for m in _HEX_SEG_RE.finditer(run.group(0))]
+        for i in range(len(segs)):
+            total = 0
+            for j in range(i, len(segs)):
+                total += len(segs[j][1])
+                if total == 96:
+                    token = "".join(s for _, s in segs[i:j + 1]).lower()
+                    if any(c in "abcdef" for c in token):
+                        out.append((run.start() + segs[i][0], token))
+                    break
+                if total > 96:
+                    break
+    seen: set[str] = set()
+    result: list[tuple[int, str]] = []
+    for pos, tok in sorted(out):
+        if tok not in seen:
+            seen.add(tok)
+            result.append((pos, tok))
+    return result
 
 
 def _find_cufes_in_text(text: str) -> list[Cufe]:
-    """Return AT MOST ONE Cufe per PDF: the document's own identifier.
+    """Return AT MOST ONE Cufe: the document's own identifier.
 
     Priority: CUDS (doc soporte) > CUDE (NC / POS / nómina) > CUFE (factura).
-    If multiple values appear under the priority label they should all match — we
-    keep them de-duped (normally a single entry). The other labels (e.g. CUFE
-    inside an NC that points to the parent factura) are ignored on purpose.
+    A labeled value wins; among labels the highest priority wins (so an NC
+    returns its own CUDE, never the parent CUFE it references). With no label we
+    fall back to the first standalone candidate.
     """
     if not text:
         return []
-    grouped = _labeled_groups(text)
-    for label in PRIORITY_LABELS:
-        values = grouped[label]
-        if values:
-            # Usually exactly one. Dedup defensive.
-            return [Cufe(value=v, label=label) for v in sorted(values)]
+    candidates = _hex_candidates(text)
+    if not candidates:
+        return []
 
-    # Fallback: no label found, only standalone 96-hex tokens. Take the first one
-    # (rare; should not happen with DIAN-emitted PDFs).
-    for m in ANY_HEX_RE.finditer(text):
-        token = _normalize_token(m.group(0))
-        if CUFE_RE.match(token):
-            return [Cufe(value=token, label=None)]
-    return []
+    labeled: dict[str, str] = {}
+    for m in LABEL_RE.finditer(text):
+        label = m.group(1).upper()
+        if label not in PRIORITY_LABELS or label in labeled:
+            continue
+        end = m.end()
+        token = next(
+            (tok for pos, tok in candidates if pos >= end and pos - end <= LOOKAHEAD_WINDOW),
+            None,
+        )
+        if token:
+            labeled[label] = token
+
+    for label in PRIORITY_LABELS:
+        if label in labeled:
+            return [Cufe(value=labeled[label], label=label)]
+
+    return [Cufe(value=candidates[0][1], label=None)]
 
 
 def _pdftotext(pdf_path: Path, layout: bool, timeout: float = 30.0) -> str:
@@ -201,34 +234,52 @@ def extract_cufes(
     *,
     qr_dpi_attempts: tuple[int, ...] = DEFAULT_QR_DPI_ATTEMPTS,
 ) -> ExtractionResult:
-    """Run the 3-pass extraction. Order: pdftotext-raw → pdftotext-layout → QR scan."""
+    """Run the layered extraction: pdftotext-raw → pdftotext-layout → QR scan.
+
+    A LABELED text hit (CUFE:/CUDE:/CUDS: anchor) is high-confidence and returns
+    immediately — no QR. The QR scan runs only when the text read "fails", i.e.
+    yields nothing OR only an UNLABELED token (the low-confidence fallback, e.g.
+    the Telesentinel case where an adjacent number could distort the read). There
+    the QR — the DIAN machine-readable ground truth — is authoritative (D-067).
+    This keeps the common labeled case instant while cross-checking the risky few.
+    """
     pdf_path = Path(pdf_path)
     if not pdf_path.is_file():
         return ExtractionResult(cufes=[], source="none", status=EXTRACTION_STATUS_ERROR,
                                 error=f"PDF no encontrado: {pdf_path}")
 
-    # Pass 1: raw text.
+    # Pass 1: raw text. Labeled hit → done.
     text = _pdftotext(pdf_path, layout=False)
     cufes = _find_cufes_in_text(text)
-    if cufes:
+    if cufes and cufes[0].label is not None:
         return ExtractionResult(cufes=cufes, source="pdftotext-raw", status=EXTRACTION_STATUS_OK)
 
-    # Pass 2: layout text.
+    # Pass 2: layout text (a labeled layout sometimes surfaces the anchor).
     text2 = _pdftotext(pdf_path, layout=True)
-    if text2 and text2 != text:
-        cufes = _find_cufes_in_text(text2)
-        if cufes:
-            return ExtractionResult(cufes=cufes, source="pdftotext-layout", status=EXTRACTION_STATUS_OK)
+    cufes2 = _find_cufes_in_text(text2) if (text2 and text2 != text) else []
+    if cufes2 and cufes2[0].label is not None:
+        return ExtractionResult(cufes=cufes2, source="pdftotext-layout", status=EXTRACTION_STATUS_OK)
 
-    # Pass 3: QR scan via pypdfium2 + cv2.
+    # Best UNLABELED text hit (correct-looking token but no anchor → lower
+    # confidence). Keep it, but cross-check against the QR first.
+    best_text = cufes or cufes2
+    best_source = "pdftotext-raw" if cufes else "pdftotext-layout"
+
+    # Pass 3: QR scan — authoritative when present.
     try:
         payloads = _scan_qrs_in_pdf(pdf_path, qr_dpi_attempts)
     except Exception as exc:
+        if best_text:
+            return ExtractionResult(cufes=best_text, source=best_source, status=EXTRACTION_STATUS_OK)
         return ExtractionResult(cufes=[], source="qr-scan", status=EXTRACTION_STATUS_ERROR,
                                 error=f"Renderizado/decoding falló: {exc}")
-    cufes = _cufes_from_qr_payloads(payloads)
-    if cufes:
-        return ExtractionResult(cufes=cufes, source="qr-scan", status=EXTRACTION_STATUS_OK)
+    cufes_qr = _cufes_from_qr_payloads(payloads)
+    if cufes_qr:
+        return ExtractionResult(cufes=cufes_qr, source="qr-scan", status=EXTRACTION_STATUS_OK)
+
+    # No QR → fall back to the unlabeled text hit if we had one.
+    if best_text:
+        return ExtractionResult(cufes=best_text, source=best_source, status=EXTRACTION_STATUS_OK)
 
     return ExtractionResult(cufes=[], source="none", status=EXTRACTION_STATUS_NO_TEXT)
 
@@ -289,8 +340,9 @@ def index_folder(conn, folder: str | Path) -> IndexStats:
 
         cached_row = conn.execute(
             "SELECT id, extraction_status FROM pdf_cufe_index "
-            "WHERE folder_path = ? AND pdf_path = ? AND pdf_mtime = ? AND pdf_size_bytes = ?",
-            (str(folder), full, mtime, size),
+            "WHERE folder_path = ? AND pdf_path = ? AND pdf_mtime = ? AND pdf_size_bytes = ? "
+            "AND extractor_version = ?",
+            (str(folder), full, mtime, size, EXTRACTOR_VERSION),
         ).fetchone()
         if cached_row is not None:
             stats.cached += 1
@@ -306,9 +358,9 @@ def index_folder(conn, folder: str | Path) -> IndexStats:
         )
         cur = conn.execute(
             "INSERT INTO pdf_cufe_index"
-            " (folder_path, pdf_path, pdf_mtime, pdf_size_bytes, extraction_status, extraction_error)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (str(folder), full, mtime, size, result.status, result.error),
+            " (folder_path, pdf_path, pdf_mtime, pdf_size_bytes, extraction_status, extraction_error, extractor_version)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (str(folder), full, mtime, size, result.status, result.error, EXTRACTOR_VERSION),
         )
         idx_id = cur.lastrowid
         if result.cufes:

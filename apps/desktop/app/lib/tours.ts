@@ -47,8 +47,10 @@ export const TOURS: Record<string, TourDef> = {
     icon: 'FileSearch',
     route: '/load',
     steps: [
-      { target: '[data-tour="load-validar"]', title: 'Validar', body: 'Cruza el Excel del mes contra sus soportes y marca las filas que no cuadran.' },
+      { target: '[data-tour="load-validar"]', title: 'Validar', body: 'Cruza el Excel del mes contra sus soportes y marca las filas que no cuadran (V1 soporte, V2 nota crédito, V3 tarifa de IVA).' },
       { target: '[data-tour="load-solo-nc"]', title: 'Solo no conformes', body: 'Filtra para ver únicamente las filas con problemas.' },
+      { target: '[data-tour="load-soportes"]', title: 'Soportes del mes', body: 'Aquí ves cuántos PDFs de la carpeta del mes tienen CUFE y cuáles no. Ábrelo para ver la lista archivo por archivo con el CUFE encontrado. El botón «Re-verificar soportes» vuelve a leer los CUFE de la carpeta y refresca las validaciones SIN re-subir el Excel — úsalo si agregaste, corregiste o renombraste PDFs.' },
+      { target: '[data-tour="load-renombrar"]', title: 'Renombrar soportes', body: 'Renombra los PDF del mes al patrón DD-MM_NIT_RAZÓN-SOCIAL_FACTURA, cruzando cada archivo con su fila del Excel por el CUFE. Primero muestra una vista previa; se renombran en la misma carpeta y se deja un manifiesto _renombrados.csv para revertir. Los PDF sin CUFE o que no cruzan se dejan intactos.' },
       { target: '[data-tour="load-exportar"]', title: 'Exportar', body: 'Genera el Excel de faltantes de soporte para trabajarlo aparte.' },
     ],
   },
