@@ -43,7 +43,7 @@ export const TOURS: Record<string, TourDef> = {
   '/load': {
     id: 'carga',
     label: 'Revisar una carga',
-    description: 'Validar, filtrar no conformes y exportar.',
+    description: 'Validar, revisar los soportes del mes (con/sin CUFE), re-verificarlos, renombrarlos y exportar los faltantes.',
     icon: 'FileSearch',
     route: '/load',
     steps: [
