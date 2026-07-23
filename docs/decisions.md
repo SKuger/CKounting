@@ -606,6 +606,11 @@ Reglas confirmadas con el usuario: **renombrar IN PLACE** en la misma carpeta (n
 **Problema**: La tabla de validaciones muestra el resultado del **último `validation_run` guardado** — no se refresca sola. Tras corregir la extracción (D-067), el usuario no veía el cambio hasta re-validar, y no había forma de ver **cuáles** PDFs de la carpeta del mes no obtuvieron CUFE.
 **Decisión**: Nuevo panel colapsable **"Soportes del mes"** en la página de Carga (RPC `list_load_soportes`), sobre la carpeta **del periodo del load** (no la de la empresa, que en el modelo por-mes está vacía — D-062). Muestra conteos (`N archivos · M con CUFE · K sin CUFE`) y, por archivo, el estado (✓ con CUFE / ⚠ sin CUFE / • sin verificar) y **el CUFE encontrado** (decisión del usuario: con/sin y el valor si lo tiene). Botón **"Re-verificar soportes"** = re-indexa la carpeta del mes (`force`: limpia caché + re-extrae) y re-corre V1, **sin re-subir el Excel**. El panel se refresca solo tras validar/renombrar. Reutiliza `pdf_cufe.list_indexed_pdfs`.
 
+## D-069 — Consulta de Inconsistencias: soportar personas naturales, no solo empresas ✅
+**Fecha**: 2026-07-15 (0.1.7)
+**Problema**: El Excel de consulta trae empresas Y personas naturales. `DefSelPublicacionesExterna.faces` responde con **campos distintos** según el documento: empresa → "Razón Social"; persona natural → **Primer Nombre + Otros Nombres + Primer Apellido + Segundo Apellido**. El parser solo leía "Razón Social", así que las personas salían sin resultado.
+**Decisión**: `consultar()` ahora, si no hay "Razón Social", lee los 4 campos de persona y **compone el nombre** en orden natural (`nombres apellidos`); devuelve además `tipo` ('empresa' | 'persona'). El **documento de la persona va en la misma columna NIT** (así lo hace el usuario en el portal), por lo que el parser del Excel de entrada NO cambia. El export pasa a columnas **NIT, DV, "Razón Social / Nombre", Tipo**; la UI muestra la columna Tipo. Verificado en vivo (860002180→empresa; 3358520→"ALDEMAR PATIÑO CHICA"; 80415208→"CARLOS ALBERTO KUGER ARBELAEZ").
+
 ---
 
 ## Decisiones pendientes (a tomar más adelante)

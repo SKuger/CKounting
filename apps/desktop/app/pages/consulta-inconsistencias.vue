@@ -2,12 +2,13 @@
 import { ArrowLeft, Download, FolderOpen, RotateCcw, Search, UploadCloud, X } from 'lucide-vue-next'
 
 type RowStatus = 'pending' | 'ok' | 'notfound' | 'error'
-type Row = { nit: string; dv: string; razon_social: string; status: RowStatus; error: string | null }
+type Tipo = 'empresa' | 'persona' | null
+type Row = { nit: string; dv: string; razon_social: string; tipo: Tipo; status: RowStatus; error: string | null }
 type ParsedRow = { row_index: number; nit: string; dv: string }
 type UploadResp =
   | { ok: true; path: string; rows: ParsedRow[]; total: number; detected: { nit_col: number; dv_col: number | null } }
   | { ok: false; error: string }
-type ConsultaResp = { nit: string; dv: string; razon_social: string; found: boolean; error: string | null }
+type ConsultaResp = { nit: string; dv: string; razon_social: string; tipo: Tipo; found: boolean; error: string | null }
 type ExportResult = { path: string; rows_written: number }
 
 const DELAY_MS = 450 // pausa cortés entre consultas (no martillar el balanceador de la DIAN)
@@ -82,7 +83,7 @@ async function upload() {
       toast.warn('El Excel no tiene filas con NIT.')
       return
     }
-    rows.value = data.rows.map((r) => ({ nit: r.nit, dv: r.dv, razon_social: '', status: 'pending', error: null }))
+    rows.value = data.rows.map((r) => ({ nit: r.nit, dv: r.dv, razon_social: '', tipo: null, status: 'pending', error: null }))
     started.value = false
     if (data.detected.dv_col === null) {
       toast.info('No vi columna de DV — la calculé automáticamente para cada NIT.')
@@ -106,9 +107,10 @@ async function consultarRango(targets: Row[]) {
       try {
         const r = await rpc<ConsultaResp>('consulta_inconsistencias', { nit: row.nit, dv: row.dv })
         row.razon_social = r.razon_social
+        row.tipo = r.tipo
         row.error = r.error
         if (r.found) row.status = 'ok'
-        else if (r.error && !r.error.startsWith('Sin razón social')) row.status = 'error'
+        else if (r.error && !r.error.startsWith('Sin resultado')) row.status = 'error'
         else row.status = 'notfound'
       } catch (e) {
         row.status = 'error'
@@ -142,7 +144,7 @@ async function exportar() {
   exporting.value = true
   try {
     exportResult.value = await rpc<ExportResult>('export_inconsistencias', {
-      rows: rows.value.map((r) => ({ nit: r.nit, dv: r.dv, razon_social: r.razon_social })),
+      rows: rows.value.map((r) => ({ nit: r.nit, dv: r.dv, razon_social: r.razon_social, tipo: r.tipo })),
       output_path: exportPath.value,
     })
     toast.success(`Exportado (${exportResult.value.rows_written} filas)`, exportResult.value.path)
@@ -193,8 +195,10 @@ function statusLabel(s: RowStatus): string {
       <h1 class="font-heading text-2xl font-medium tracking-tight">Consulta DIAN · Inconsistencias</h1>
       <p class="text-sm text-muted-foreground">
         Sube un Excel con las columnas <span class="font-mono">NIT</span> y <span class="font-mono">DV</span>
-        (dígito de verificación) y Contab trae la <strong>Razón Social</strong> de cada tercero desde el portal MUISCA.
-        El resultado se exporta a Excel. <span class="text-muted-foreground">Si falta el DV, se calcula solo.</span>
+        (dígito de verificación) y Contab trae el nombre de cada tercero desde el portal MUISCA:
+        <strong>Razón Social</strong> si es empresa, o el <strong>nombre completo</strong> si es persona natural
+        (va el documento en la columna NIT). El resultado se exporta a Excel.
+        <span class="text-muted-foreground">Si falta el DV, se calcula solo.</span>
       </p>
     </div>
 
@@ -287,7 +291,8 @@ function statusLabel(s: RowStatus): string {
                   <th class="px-3 py-2 font-medium">#</th>
                   <th class="px-3 py-2 font-medium">NIT</th>
                   <th class="px-3 py-2 font-medium">DV</th>
-                  <th class="px-3 py-2 font-medium">Razón Social</th>
+                  <th class="px-3 py-2 font-medium">Razón Social / Nombre</th>
+                  <th class="px-3 py-2 font-medium">Tipo</th>
                   <th class="px-3 py-2 font-medium">Estado</th>
                 </tr>
               </thead>
@@ -299,6 +304,11 @@ function statusLabel(s: RowStatus): string {
                   <td class="px-3 py-1.5">
                     <span v-if="r.razon_social">{{ r.razon_social }}</span>
                     <span v-else-if="r.error && r.status === 'error'" class="text-status-error">{{ r.error }}</span>
+                    <span v-else class="text-muted-foreground">—</span>
+                  </td>
+                  <td class="px-3 py-1.5">
+                    <span v-if="r.tipo === 'persona'" class="text-xs text-muted-foreground">Persona</span>
+                    <span v-else-if="r.tipo === 'empresa'" class="text-xs text-muted-foreground">Empresa</span>
                     <span v-else class="text-muted-foreground">—</span>
                   </td>
                   <td class="px-3 py-1.5">

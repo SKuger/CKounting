@@ -44,16 +44,44 @@ def _hidden(html: str, name: str) -> str:
     return m.group(1) if m else ""
 
 
-def consultar(nit: str, dv: str, *, timeout: int = 25) -> dict[str, Any]:
-    """Query one NIT+DV → {nit, dv, razon_social, found, error}.
+def _field_after(html: str, label: str) -> str:
+    """Value cell that follows a label cell: …>Label</td> <td…>value</td>."""
+    m = re.search(re.escape(label) + r"\s*</td>\s*<td[^>]*>(.*?)</td>", html, re.S | re.I)
+    return _clean(m.group(1)) if m else ""
 
-    Never raises: network/parse problems are returned in `error` so a batch can
-    keep going.
+
+def _parse_nombre(resp: str) -> tuple[str, str | None]:
+    """Devuelve (nombre, tipo). El MISMO formulario responde según el documento:
+    - Empresa (persona jurídica) → celda 'Razón Social'.
+    - Persona natural → Primer Nombre + Otros Nombres + Primer Apellido + Segundo
+      Apellido (se compone en orden natural 'nombres apellidos').
+    """
+    m = re.search(r"Social\s*</td>\s*<td[^>]*>(.*?)</td>", resp, re.S | re.I)
+    razon = _clean(m.group(1)) if m else ""
+    if razon:
+        return razon, "empresa"
+    parts = (
+        _field_after(resp, "Primer Nombre"),
+        _field_after(resp, "Otros Nombres"),
+        _field_after(resp, "Primer Apellido"),
+        _field_after(resp, "Segundo Apellido"),
+    )
+    nombre = " ".join(p for p in parts if p)
+    return (nombre, "persona") if nombre else ("", None)
+
+
+def consultar(nit: str, dv: str, *, timeout: int = 25) -> dict[str, Any]:
+    """Query one NIT+DV → {nit, dv, razon_social, tipo, found, error}.
+
+    `razon_social` trae la Razón Social si es empresa, o el nombre completo si es
+    persona natural; `tipo` es 'empresa' | 'persona' | None. Never raises:
+    network/parse problems are returned in `error` so a batch can keep going.
     """
     nit_s = str(nit).strip()
     dv_s = str(dv).strip()
     result: dict[str, Any] = {
-        "nit": nit_s, "dv": dv_s, "razon_social": "", "found": False, "error": None,
+        "nit": nit_s, "dv": dv_s, "razon_social": "", "tipo": None,
+        "found": False, "error": None,
     }
     if not nit_s:
         result["error"] = "NIT vacío"
@@ -95,13 +123,13 @@ def consultar(nit: str, dv: str, *, timeout: int = 25) -> dict[str, Any]:
         })
         resp = opener.open(req, timeout=timeout).read().decode("iso-8859-1", "replace")
 
-        # 3) Razón Social = celda que sigue a la etiqueta que termina en "Social"
-        m = re.search(r"Social\s*</td>\s*<td[^>]*>(.*?)</td>", resp, re.S | re.I)
-        razon = _clean(m.group(1)) if m else ""
+        # 3) Empresa → Razón Social; persona natural → nombre compuesto.
+        razon, tipo = _parse_nombre(resp)
         result["razon_social"] = razon
+        result["tipo"] = tipo
         result["found"] = bool(razon)
         if not razon:
-            result["error"] = "Sin razón social (NIT no encontrado o DV incorrecto)"
+            result["error"] = "Sin resultado (documento no encontrado o DV incorrecto)"
     except Exception as exc:  # noqa: BLE001 — cualquier fallo de red/parse va a `error`
         result["error"] = f"{exc.__class__.__name__}: {exc}"
     return result
@@ -188,8 +216,13 @@ def parse_nit_dv(source_path: str | Path) -> dict[str, Any]:
     }
 
 
+_TIPO_LABEL = {"empresa": "Empresa", "persona": "Persona"}
+
+
 def export_inconsistencias(rows: list[dict[str, Any]], output_path: str | Path) -> dict[str, Any]:
-    """Escribe un .xlsx con columnas NIT, DV, Razón Social. Devuelve {path, rows_written}."""
+    """Escribe un .xlsx con columnas NIT, DV, Razón Social / Nombre, Tipo.
+    Devuelve {path, rows_written}. El nombre cubre empresas (razón social) y
+    personas naturales (nombre completo)."""
     import xlsxwriter
 
     out = Path(output_path)
@@ -200,17 +233,19 @@ def export_inconsistencias(rows: list[dict[str, Any]], output_path: str | Path) 
     header_fmt = wb.add_format({"bold": True, "bg_color": "#EFEFEF", "border": 1})
     cell_fmt = wb.add_format({"border": 1})
 
-    cols = ["NIT", "DV", "Razón Social"]
+    cols = ["NIT", "DV", "Razón Social / Nombre", "Tipo"]
     for c, name in enumerate(cols):
         ws.write(0, c, name, header_fmt)
     ws.set_column(0, 0, 16)
     ws.set_column(1, 1, 6)
     ws.set_column(2, 2, 48)
+    ws.set_column(3, 3, 10)
 
     for r, row in enumerate(rows, start=1):
         ws.write(r, 0, str(row.get("nit", "")), cell_fmt)
         ws.write(r, 1, str(row.get("dv", "")), cell_fmt)
         ws.write(r, 2, str(row.get("razon_social", "") or ""), cell_fmt)
+        ws.write(r, 3, _TIPO_LABEL.get(row.get("tipo"), ""), cell_fmt)
 
     ws.freeze_panes(1, 0)
     wb.close()

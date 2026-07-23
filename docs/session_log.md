@@ -233,3 +233,13 @@ Scrape real (NIT 860002180 → "SEGUROS COMERCIALES BOLIVAR S.A."); upload+parse
 
 ### Pendiente
 - Commit de esta sesión (rename + fix tabla + fix CUFE + migración + docs) y decidir release **0.1.6**.
+
+---
+
+## Sesión 7 — 2026-07-15: Inconsistencias soporta personas naturales (0.1.7)
+
+**Resultado**: la Consulta de Inconsistencias ahora resuelve **empresas Y personas naturales** (D-069). Release **0.1.7** (urgente).
+
+- `consultar()`: si no hay "Razón Social", compone el nombre de persona (Primer/Otros Nombres + Primer/Segundo Apellido) y devuelve `tipo` (empresa|persona). El documento de la persona va en la misma columna NIT → el parser de entrada no cambia.
+- Export: columnas NIT, DV, "Razón Social / Nombre", Tipo. UI: columna Tipo + textos actualizados.
+- 5 tests nuevos; 79/79 verdes. Verificado en vivo (empresa + 2 personas). Nuevo flujo de release: develop→main→tag en main→CI publica en CKounting-releases.
