@@ -71,6 +71,7 @@ jobs:
       # secreto GH_TOKEN (PAT con acceso a ese repo). Sin token → '--publish never' (solo
       # artifact del run), así el build nunca falla mientras se configura el hosting.
       - name: Build installer
+        id: dist
         working-directory: apps/shell
         shell: pwsh
         env:
@@ -80,12 +81,20 @@ jobs:
           $mode = if ($env:GH_TOKEN) { 'always' } else { 'never' }
           Write-Host "electron-builder --publish $mode"
           npx electron-builder --win nsis --publish $mode
+          $published = if ($mode -eq 'always') { 'true' } else { 'false' }
+          "published=$published" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - uses: actions/upload-artifact@v4
+      # Fallback: sube el instalador como artefacto del run SOLO si no se publicó al
+      # repo de releases (sin GH_TOKEN). Con hosting activo es redundante y consume la
+      # cuota de artefactos (que se llena). continue-on-error: nunca tumba el release.
+      - name: Upload installer artifact (fallback)
+        if: ${{ steps.dist.outputs.published != 'true' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
         with:
           name: contab-windows-installer
           path: |
             apps/shell/dist/*.exe
             apps/shell/dist/*.blockmap
             apps/shell/dist/latest.yml
-          if-no-files-found: error
+          if-no-files-found: warn
