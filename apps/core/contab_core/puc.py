@@ -83,6 +83,23 @@ def nivel_label(nivel: int) -> str:
     return _NIVEL_LABEL.get(nivel, "Auxiliar")
 
 
+def _extract_nit(text: str) -> str:
+    """NIT de la empresa desde una celda del preámbulo. Reconoce el formato con DV
+    ('900181831-4', 'NIT: 900.181.831-4') y con etiqueta ('Nit 900181831').
+    Devuelve el NIT **sin DV** (solo dígitos), o '' si la celda no parece un NIT
+    (así una fecha '20260809' o un id no se confunden con el NIT)."""
+    t = str(text or "")
+    # NIT con dígito de verificación (guión) — el caso confiable: el DV queda fuera.
+    m = re.search(r"(\d[\d.\s]{5,14})\s*-\s*\d\b", t)
+    if m:
+        return re.sub(r"\D", "", m.group(1))
+    # Etiqueta 'NIT ...': tomar los dígitos que la siguen.
+    m = re.search(r"nit[\s:.\-]*(\d[\d.\s]{5,14})", t, re.I)
+    if m:
+        return re.sub(r"\D", "", m.group(1))
+    return ""
+
+
 def load_puc(source_path: str | Path) -> PucLoaded:
     """Parsea el dump Excel → PucLoaded. Lanza PucParseError con mensaje claro."""
     from openpyxl import load_workbook
@@ -91,16 +108,22 @@ def load_puc(source_path: str | Path) -> PucLoaded:
     if not path.is_file():
         raise PucParseError(f"No se encontró el archivo: {path}")
 
-    wb = load_workbook(filename=str(path), read_only=True, data_only=True)
+    try:
+        wb = load_workbook(filename=str(path), read_only=True, data_only=True)
+    except Exception as exc:  # openpyxl no lee .xls antiguo ni archivos corruptos
+        raise PucParseError(
+            "No pude leer el Excel. Asegúrate de que sea un archivo .xlsx válido "
+            "(el formato .xls antiguo no es compatible)."
+        ) from exc
     try:
         ws = wb.worksheets[0]
         raw = [list(r) for r in ws.iter_rows(values_only=True)]
     finally:
         wb.close()
 
-    # 1) fila de encabezado = primera cuya primera celda es 'código'.
+    # 1) fila de encabezado = primera que tenga una celda 'código' (en cualquier columna).
     header_idx = next(
-        (i for i, row in enumerate(raw) if row and _norm_header(row[0]) in ("código", "codigo")),
+        (i for i, row in enumerate(raw) if any(_norm_header(c) in ("código", "codigo") for c in row)),
         None,
     )
     if header_idx is None:
@@ -118,12 +141,13 @@ def load_puc(source_path: str | Path) -> PucLoaded:
             t = _norm(cell)
             if not t:
                 continue
-            compact = t.replace(" ", "").replace(".", "")
-            m = re.fullmatch(r"(\d{6,15})-?(\d)?", compact)
-            if m:
-                empresa_nit = empresa_nit or m.group(1)
-            elif (not empresa_nombre and any(ch.isalpha() for ch in t)
-                  and not t.lower().startswith("cuentas")):
+            nit = _extract_nit(t)
+            if nit:
+                if not empresa_nit:
+                    empresa_nit = nit
+                continue
+            if (not empresa_nombre and any(ch.isalpha() for ch in t)
+                    and not t.lower().startswith(("cuentas", "nit"))):
                 empresa_nombre = t
 
     # 3) mapa columna→índice por nombre flexible.

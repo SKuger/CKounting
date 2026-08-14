@@ -115,6 +115,43 @@ def test_crud_manual_y_archivar(tmp_path):
     conn.close()
 
 
+@pytest.mark.parametrize("cell,nit", [
+    ("900181831-4", "900181831"),
+    ("NIT: 900.181.831-4", "900181831"),
+    ("Nit 900181831", "900181831"),
+    ("20260809", ""),                 # fecha: no se confunde con NIT
+    ("Cuentas contables", ""),
+])
+def test_extract_nit(cell, nit):
+    assert puc._extract_nit(cell) == nit
+
+
+def test_bloqueo_con_nit_etiquetado(tmp_path):
+    """El bloqueo por NIT (D-003/D-070) también funciona si el Excel trae el NIT
+    con etiqueta/guión, no solo como celda de dígitos puros."""
+    db = _empresa(tmp_path, nit="811000000")
+    src = _make_dump(tmp_path / "puc.xlsx", nit="NIT: 900123456-7")
+    with pytest.raises(ValueError, match="no coincide"):
+        S._h_puc_import({"db_path": db, "source_path": str(src)})
+
+
+def test_header_en_columna_no_cero(tmp_path):
+    """Un export con una columna vacía a la izquierda igual se parsea (el 'Código'
+    puede estar en cualquier columna)."""
+    from openpyxl import Workbook
+    wb = Workbook(); ws = wb.active
+    ws.append([None, "Cuentas contables"])
+    ws.append([None, "EMPRESA X"])
+    ws.append([None, "900123456-7"])
+    ws.append([None] + HEADER)                       # encabezado corrido una columna
+    ws.append([None, "1", "Activo", None, None, None, None, None, None])
+    ws.append([None, "1105", "Caja", None, None, None, None, None, None])
+    path = tmp_path / "corrido.xlsx"; wb.save(path)
+    loaded = puc.load_puc(path)
+    assert loaded.empresa_nit == "900123456"
+    assert [a["codigo"] for a in loaded.accounts] == ["1", "1105"]
+
+
 def test_export_roundtrip(tmp_path):
     db = _empresa(tmp_path)
     S._h_puc_import({"db_path": db, "source_path": str(_make_dump(tmp_path / "puc.xlsx"))})
