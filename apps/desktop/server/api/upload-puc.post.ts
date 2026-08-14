@@ -35,23 +35,23 @@ export default defineEventHandler(async (event) => {
   const parts = await readMultipartFormData(event)
   if (!parts) {
     setResponseStatus(event, 400)
-    return { ok: false, error: 'no form data' }
+    return { ok: false, error: 'No llegaron datos del formulario.' }
   }
 
   const dbPathPart = parts.find((p) => p.name === 'db_path')
   const filePart = parts.find((p) => p.name === 'file')
   if (!dbPathPart?.data) {
     setResponseStatus(event, 400)
-    return { ok: false, error: 'missing db_path' }
+    return { ok: false, error: 'Falta la empresa destino.' }
   }
   if (!filePart?.data) {
     setResponseStatus(event, 400)
-    return { ok: false, error: 'missing file' }
+    return { ok: false, error: 'Falta el archivo Excel.' }
   }
   const dbPath = dbPathPart.data.toString('utf-8').trim()
   if (!dbPath) {
     setResponseStatus(event, 400)
-    return { ok: false, error: 'empty db_path' }
+    return { ok: false, error: 'La empresa destino está vacía.' }
   }
 
   // Guardar el dump en <default_folder>/puc/ (o en el fallback de uploads).
@@ -64,10 +64,12 @@ export default defineEventHandler(async (event) => {
       : joinPath(fallbackUploadsDir(), basename(dbPath, '.db'), 'puc')
   } catch (err) {
     setResponseStatus(event, 500)
-    return { ok: false, error: `open_empresa failed: ${String(err)}` }
+    return { ok: false, error: `No se pudo abrir la empresa: ${String(err)}` }
   }
 
-  const fileName = `${timestamp()}_${safeFilename(filePart.filename)}`
+  // Sufijo aleatorio: evita que dos subidas en el mismo segundo se sobreescriban.
+  const rand = Math.random().toString(36).slice(2, 8)
+  const fileName = `${timestamp()}_${rand}_${safeFilename(filePart.filename)}`
   const savedPath = joinPath(targetDir, fileName)
   try {
     await mkdir(targetDir, { recursive: true })
