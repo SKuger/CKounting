@@ -24,6 +24,7 @@ from . import backup as backup_module
 from . import program_db as program_db_module
 from . import dian_inconsistencias as dian_inc_module
 from . import rename_soportes as rename_module
+from . import puc as puc_module
 
 
 # ---------- handlers ----------
@@ -843,6 +844,99 @@ def _h_rename_soportes(params: dict) -> dict:
         conn.close()
 
 
+def _digits(s: Any) -> str:
+    return "".join(c for c in str(s or "") if c.isdigit())
+
+
+def _h_puc_import(params: dict) -> dict:
+    """Sube un dump de PUC (upsert por código = fusionar). Valida que el NIT del
+    encabezado del Excel coincida con la empresa: si no, BLOQUEA (D-070).
+    `dry_run=True` devuelve la vista previa sin escribir."""
+    db_path = Path(params["db_path"])
+    source_path = Path(params["source_path"])
+    dry_run = bool(params.get("dry_run", False))
+
+    info = storage_module.read_empresa_info(db_path)
+    if info is None:
+        raise ValueError("La empresa no está inicializada.")
+
+    loaded = puc_module.load_puc(source_path)
+    empresa_nit = _digits(info.get("nit"))
+    if loaded.empresa_nit and empresa_nit and loaded.empresa_nit != empresa_nit:
+        raise ValueError(
+            f"El NIT del Excel ({loaded.empresa_nit}) no coincide con el de esta empresa "
+            f"({empresa_nit} · {info.get('razon_social')}). No se subió nada. "
+            "Verifica que estés subiendo el PUC de la empresa correcta."
+        )
+
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return puc_module.persist_puc(conn, loaded, dry_run=dry_run)
+    finally:
+        conn.close()
+
+
+def _h_puc_list(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    include_archived = bool(params.get("include_archived", True))
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return {
+            "accounts": puc_module.list_accounts(conn, include_archived=include_archived),
+            "counts": puc_module.counts(conn),
+            "last_import": puc_module.last_import(conn),
+        }
+    finally:
+        conn.close()
+
+
+def _h_puc_save_account(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    account_id = params.get("account_id")
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return puc_module.save_account(conn, params.get("account") or {}, account_id=account_id)
+    finally:
+        conn.close()
+
+
+def _h_puc_archive_account(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        puc_module.set_archived(conn, int(params["account_id"]), bool(params.get("archived", True)))
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+def _h_puc_delete_account(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        puc_module.delete_account(conn, int(params["account_id"]))
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+def _h_puc_export(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    output_path = Path(params["output_path"])
+    include_archived = bool(params.get("include_archived", False))
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return puc_module.export_puc(conn, output_path, include_archived=include_archived)
+    finally:
+        conn.close()
+
+
 HANDLERS: dict[str, Callable[[dict], Any]] = {
     "ping": _h_ping,
     "list_empresas": _h_list_empresas,
@@ -890,6 +984,13 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "export_inconsistencias": _h_export_inconsistencias,
     # Renombrado de soportes PDF (DD-MM_NIT_RAZON-SOCIAL_FACTURA)
     "rename_soportes": _h_rename_soportes,
+    # Plan Único de Cuentas (PUC) por empresa (D-070)
+    "puc_import": _h_puc_import,
+    "puc_list": _h_puc_list,
+    "puc_save_account": _h_puc_save_account,
+    "puc_archive_account": _h_puc_archive_account,
+    "puc_delete_account": _h_puc_delete_account,
+    "puc_export": _h_puc_export,
 }
 
 
