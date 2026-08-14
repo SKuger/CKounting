@@ -613,6 +613,13 @@ Reglas confirmadas con el usuario: **renombrar IN PLACE** en la misma carpeta (n
 
 ---
 
+## D-070 — Plan Único de Cuentas (PUC) por empresa ✅
+**Fecha**: 2026-08-14 (E5)
+**Decisión**: Cada empresa maneja su **PUC** (catálogo de cuentas contables) a nivel empresa (no por mes). Se sube el **dump Excel** que exporta el software contable (preámbulo con empresa+NIT, encabezado `Código · Nombre · Categoría · Clase · Relación con · Maneja vencimientos · Diferencia fiscal · Activo · Nivel agrupación`, pie `Procesado en:`). Módulo `puc.py` (`load_puc`/`persist_puc`/CRUD/`export_puc`) + tablas `puc_account` y `puc_import`; RPCs `puc_import`/`puc_list`/`puc_save_account`/`puc_archive_account`/`puc_delete_account`/`puc_export`; endpoint `upload-puc`; página **`/puc`** (tabla con indentado por nivel, filtros clase/nivel/estado, buscador) enlazada desde la card "Plan de Cuentas" en `empresa.vue`.
+Reglas confirmadas con el usuario: **subir dump = fusionar por `codigo`** (upsert: actualiza las existentes, agrega las nuevas, **conserva** las cuentas manuales; nada se borra; `fuente` distingue dump/manual). **Bloquear** la subida si el **NIT del encabezado no coincide** con la empresa. El **nivel** se deriva de la longitud del código (1=Clase, 2=Grupo, 4=Cuenta, 6=Subcuenta, 8=Auxiliar → `nivel = 1 + len//2`). Archivar es soft (nunca borra por importar); hay historial de dumps (`puc_import`). Verificado con el dump real (885 cuentas, NIT 900181831). Tests: 12 (parseo, niveles, upsert/merge, dry-run, bloqueo NIT, CRUD, archivar, export).
+
+---
+
 ## Decisiones pendientes (a tomar más adelante)
 
 - **D-E1-13** ⏸ Behavior de R-V3 cuando IVA = 0 (default actual: skip). Confirmar si lo cambiamos a "marcar excluido" o "tarifa 0%".

@@ -243,3 +243,13 @@ Scrape real (NIT 860002180 → "SEGUROS COMERCIALES BOLIVAR S.A."); upload+parse
 - `consultar()`: si no hay "Razón Social", compone el nombre de persona (Primer/Otros Nombres + Primer/Segundo Apellido) y devuelve `tipo` (empresa|persona). El documento de la persona va en la misma columna NIT → el parser de entrada no cambia.
 - Export: columnas NIT, DV, "Razón Social / Nombre", Tipo. UI: columna Tipo + textos actualizados.
 - 5 tests nuevos; 79/79 verdes. Verificado en vivo (empresa + 2 personas). Nuevo flujo de release: develop→main→tag en main→CI publica en CKounting-releases.
+
+---
+
+## Sesión 8 — 2026-08-14: Plan de Cuentas (PUC) por empresa (0.2.0)
+
+**Resultado**: nueva característica **PUC** a nivel empresa (D-070). Se sube el dump Excel de cuentas contables, queda en BD, y se puede editar/archivar/agregar/exportar. Flujo de entrega: commits por capa → code review → PR develop→main → tag v0.2.0 → CI publica en CKounting-releases.
+
+- **Backend**: `puc.py` (`load_puc` parsea preámbulo empresa/NIT + tabla + pie; `persist_puc` upsert por código = fusionar; CRUD manual; `export_puc`). Tablas `puc_account` (con `fuente` dump/manual, `archived`, `nivel` derivado de la longitud del código) y `puc_import` (historial). 6 RPCs. Endpoint `upload-puc` (vista previa dry-run). **Bloqueo por NIT** del encabezado.
+- **Front**: página `/puc` (tabla con indentado por nivel, filtros clase/nivel/estado, buscador, subir dump con preview, CRUD, export), card en `empresa.vue`, nav match.
+- **Verificado**: dump real de 885 cuentas (REAL Seguros), NIT 900181831, merge sin duplicar, bloqueo por NIT distinto. 12 tests nuevos; 91/91 verdes. Probado en vivo por el usuario.
