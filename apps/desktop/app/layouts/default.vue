@@ -31,7 +31,7 @@ type NavItem = (NavLeaf & { icon: unknown }) | NavGroup
 // hijos para que ⌘K y el breadcrumb sigan funcionando con una lista de hojas.
 const nav: NavItem[] = [
   { label: 'Inicio', to: '/', icon: Home, match: p => p === '/' },
-  { label: 'Empresas', to: '/empresas', icon: Building2, match: p => p === '/empresas' || p === '/empresa' || p === '/load' },
+  { label: 'Empresas', to: '/empresas', icon: Building2, match: p => p === '/empresas' || p === '/empresa' || p === '/load' || p === '/puc' },
   {
     label: 'Consultas DIAN', icon: FileSearch, children: [
       { label: 'Terceros', to: '/consulta-dian' },
