@@ -89,7 +89,10 @@ export default defineEventHandler(async (event) => {
     })
     return { ok: true, result, saved_to: savedPath }
   } catch (err) {
-    setResponseStatus(event, 500)
-    return { ok: false, error: String(err) }
+    // Devolvemos el mensaje REAL del sidecar (formato del Excel, NIT, etc.) con
+    // status 200 y ok:false, para que $fetch no lo tape con un "500 Internal Server
+    // Error" genérico y el usuario vea qué pasó.
+    const msg = (err instanceof Error ? err.message : String(err)).replace(/^Error:\s*/, '')
+    return { ok: false, error: msg }
   }
 })

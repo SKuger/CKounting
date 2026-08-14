@@ -117,7 +117,10 @@ async function applyImport() {
 }
 
 function humanError(e: unknown): string {
-  const s = String((e as { message?: string })?.message ?? e)
+  // $fetch, en respuestas con status de error, deja el body en e.data → ahí viene
+  // el mensaje real del sidecar (formato, NIT…). Lo preferimos al genérico "500…".
+  const anyE = e as { data?: { error?: string }; message?: string }
+  const s = String(anyE?.data?.error ?? anyE?.message ?? e)
   return s.replace(/^Error:\s*/, '')
 }
 

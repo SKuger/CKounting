@@ -860,7 +860,15 @@ def _h_puc_import(params: dict) -> dict:
     if info is None:
         raise ValueError("La empresa no está inicializada.")
 
-    loaded = puc_module.load_puc(source_path)
+    try:
+        loaded = puc_module.load_puc(source_path)
+    except puc_module.PucParseError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — cualquier fallo inesperado → mensaje claro
+        raise ValueError(
+            "No pude leer el Excel de cuentas. Revisa que sea el archivo correcto "
+            f"en formato .xlsx. Detalle: {exc}"
+        ) from exc
     empresa_nit = _digits(info.get("nit"))
     if loaded.empresa_nit and empresa_nit and loaded.empresa_nit != empresa_nit:
         raise ValueError(
