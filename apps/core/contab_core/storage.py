@@ -134,6 +134,43 @@ CREATE TABLE IF NOT EXISTS pdf_cufe_value (
   UNIQUE(pdf_index_id, cufe_cude)
 );
 CREATE INDEX IF NOT EXISTS idx_pdf_cufe_value_hex ON pdf_cufe_value(cufe_cude);
+
+-- Plan Único de Cuentas (PUC) — a nivel EMPRESA (E5, D-070). Se sube un dump Excel
+-- que hace upsert por 'codigo' (fusionar): las cuentas manuales que no vienen en el
+-- dump se conservan. 'fuente' distingue dump vs manual; 'archived' es soft-hide.
+CREATE TABLE IF NOT EXISTS puc_account (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  codigo              TEXT NOT NULL,
+  nombre              TEXT NOT NULL DEFAULT '',
+  categoria           TEXT,
+  clase               TEXT,
+  relacion_con        TEXT,
+  maneja_vencimientos TEXT,
+  diferencia_fiscal   TEXT,
+  activo              INTEGER NOT NULL DEFAULT 1,     -- Sí/No del Excel → 1/0
+  nivel_agrupacion    TEXT,                            -- 'Transaccional' | 'Agrupación' | ...
+  nivel               INTEGER NOT NULL DEFAULT 1,      -- 1..N derivado de la longitud del código
+  fuente              TEXT NOT NULL DEFAULT 'manual',  -- 'dump' | 'manual'
+  archived            INTEGER NOT NULL DEFAULT 0,
+  created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(codigo)
+);
+CREATE INDEX IF NOT EXISTS idx_puc_account_nivel ON puc_account(nivel);
+CREATE INDEX IF NOT EXISTS idx_puc_account_clase ON puc_account(clase);
+CREATE INDEX IF NOT EXISTS idx_puc_account_archived ON puc_account(archived);
+
+-- Historial de dumps de PUC importados (auditoría del cruce empresa/NIT).
+CREATE TABLE IF NOT EXISTS puc_import (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_name TEXT,
+  excel_nit   TEXT,
+  excel_razon TEXT,
+  total_rows  INTEGER NOT NULL DEFAULT 0,
+  inserted    INTEGER NOT NULL DEFAULT 0,
+  updated     INTEGER NOT NULL DEFAULT 0,
+  imported_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
