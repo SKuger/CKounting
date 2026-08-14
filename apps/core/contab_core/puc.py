@@ -121,15 +121,23 @@ def load_puc(source_path: str | Path) -> PucLoaded:
     finally:
         wb.close()
 
-    # 1) fila de encabezado = primera que tenga una celda 'código' (en cualquier columna).
-    header_idx = next(
-        (i for i, row in enumerate(raw) if any(_norm_header(c) in ("código", "codigo") for c in row)),
-        None,
-    )
+    # 1) fila de encabezado = la primera que tenga una celda de "código" Y una de
+    #    "nombre" (en cualquier columna). Tolerante a variantes: Código/Codigo/Cuenta
+    #    + Nombre/Descripción, según cómo lo exporte cada software contable.
+    cod_aliases = set(_COLUMNS[0][1])
+    nom_aliases = set(_COLUMNS[1][1])
+    header_idx = None
+    for i, row in enumerate(raw):
+        hn = [_norm_header(c) for c in row]
+        if any(h in cod_aliases for h in hn) and any(h in nom_aliases for h in hn):
+            header_idx = i
+            break
     if header_idx is None:
         raise PucParseError(
-            "No encontré la fila de encabezado del PUC (una celda 'Código'). "
-            "¿Es el Excel de cuentas contables correcto?"
+            "No reconocí la tabla de cuentas en el Excel. Debe tener una fila de "
+            "encabezado con columnas 'Código' y 'Nombre' (así lo exporta el software "
+            "contable). Revisa que sea el archivo de cuentas contables correcto y que "
+            "esté en formato .xlsx."
         )
     header = [_norm_header(c) for c in raw[header_idx]]
 
