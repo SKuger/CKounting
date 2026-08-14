@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowLeft, Pencil, FolderOpen, FileSpreadsheet, Trash2, Archive, Download, ChevronRight, EllipsisVertical, CalendarPlus, RotateCcw, UploadCloud } from 'lucide-vue-next'
+import { ArrowLeft, Pencil, FolderOpen, FileSpreadsheet, Trash2, Archive, Download, ChevronRight, EllipsisVertical, CalendarPlus, RotateCcw, UploadCloud, BookText } from 'lucide-vue-next'
 import { Popover, PopoverContent, PopoverTrigger } from '~/components/ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '~/components/ui/select'
 
@@ -385,6 +385,19 @@ watch(dbPath, refresh)
           </div>
         </div>
       </CardContent>
+    </Card>
+
+    <!-- Plan de Cuentas (PUC) — a nivel empresa -->
+    <Card v-if="info">
+      <CardHeader>
+        <CardTitle>Plan de Cuentas (PUC)</CardTitle>
+        <CardDescription>El catálogo de cuentas contables de esta empresa. Sube el dump de Excel, edítalo, archiva y agrega cuentas.</CardDescription>
+        <CardAction>
+          <Button size="sm" @click="navigateTo({ path: '/puc', query: { db: dbPath } })">
+            <BookText class="size-4" /> Abrir plan de cuentas <ChevronRight class="size-3.5" />
+          </Button>
+        </CardAction>
+      </CardHeader>
     </Card>
 
     <!-- Pickers de carpeta (soportes por mes + backup) -->
