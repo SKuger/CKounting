@@ -1,9 +1,13 @@
-fastapi
-uvicorn
-playwright
-pandas
-openpyxl
-websockets
-python-multipart
-playwright-stealth
+# Versiones FIJAS a propósito: este archivo alimenta el build del instalador que
+# se entrega al usuario. Sin fijar, dos builds del mismo commit producían binarios
+# distintos y podían romperse sin que cambiara una línea de código.
+# Para subir una versión: cambiarla aquí, correr el CI y verificar el instalador.
+fastapi==0.115.6
+uvicorn==0.34.0
+playwright==1.49.1
+pandas==2.2.3
+openpyxl==3.1.5
+websockets==14.1
+python-multipart==0.0.20
+playwright-stealth==1.0.6
 httpx==0.27.0

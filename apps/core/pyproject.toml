@@ -3,12 +3,16 @@ name = "contab-core"
 version = "0.1.0"
 description = "Contab — Python sidecar: Excel DIAN parser, SQLite per-empresa storage, validations, exports."
 requires-python = ">=3.10"
+# Cotas SUPERIORES además de las inferiores: este paquete se congela con PyInstaller
+# dentro del instalador. Sin techo, un build de mañana trae una major nueva y cambia
+# el comportamiento del producto sin que cambie el código — ya pasó con OpenCV 5,
+# que rompió la detección de QR (única vía de extracción en PDFs con fuente ofuscada).
 dependencies = [
-    "openpyxl>=3.1",
-    "xlsxwriter>=3.2",
-    "pypdfium2>=4.30",
-    "opencv-python-headless>=4.5",
-    "numpy>=1.24",
+    "openpyxl>=3.1,<4",
+    "xlsxwriter>=3.2,<4",
+    "pypdfium2>=4.30,<5",
+    "opencv-python-headless>=4.8,<5",
+    "numpy>=1.24,<3",
 ]
 
 [project.optional-dependencies]

@@ -82,15 +82,13 @@ def test_index_folder_caches(tmp_path: Path):
     storage.init_empresa_db(db_path, nit="900181831", dv="4", razon_social="REAL")
     conn = storage.connect(db_path)
     try:
-        with storage.transaction(conn):
-            first = index_folder(conn, pdfs_dir)
+        first = index_folder(conn, pdfs_dir)
         assert first.total_pdfs == 2
         assert first.indexed_now == 2
         assert first.cached == 0
 
         # Second pass should be 100% cached.
-        with storage.transaction(conn):
-            second = index_folder(conn, pdfs_dir)
+        second = index_folder(conn, pdfs_dir)
         assert second.cached == 2
         assert second.indexed_now == 0
 
@@ -120,12 +118,10 @@ def test_index_reextracts_on_stale_extractor_version(tmp_path: Path):
     storage.init_empresa_db(db_path, nit="900181831", dv="4", razon_social="REAL")
     conn = storage.connect(db_path)
     try:
-        with storage.transaction(conn):
-            index_folder(conn, pdfs_dir)
+        index_folder(conn, pdfs_dir)
         # Simulate a cache written by the OLD extractor.
         conn.execute("UPDATE pdf_cufe_index SET extractor_version = 0")
-        with storage.transaction(conn):
-            again = index_folder(conn, pdfs_dir)
+        again = index_folder(conn, pdfs_dir)
         assert again.cached == 0, "stale-version entry should NOT count as cached"
         assert again.indexed_now == 1, "stale-version entry should be re-extracted"
     finally:
@@ -142,9 +138,80 @@ def test_index_handles_non_pdf_files_silently(tmp_path: Path):
     storage.init_empresa_db(db_path, nit="900181831", dv="4", razon_social="REAL")
     conn = storage.connect(db_path)
     try:
-        with storage.transaction(conn):
-            stats = index_folder(conn, pdfs_dir)
+        stats = index_folder(conn, pdfs_dir)
         assert stats.total_pdfs == 0
         assert get_indexed_cufes(conn, pdfs_dir) == set()
+    finally:
+        conn.close()
+
+
+def _conn(tmp_path):
+    db = tmp_path / "empresa.db"
+    conn = storage.connect(db)
+    storage.ensure_schema(conn)
+    return conn
+
+
+def test_index_purga_pdfs_que_ya_no_estan(tmp_path):
+    """Un soporte borrado de la carpeta deja de contar como respaldo en V1.
+
+    Antes, index_folder solo añadía/actualizaba: el CUFE de un PDF eliminado
+    seguía en el índice para siempre y la fila del Excel aprobaba V1 apuntando a
+    un archivo que ya no existe."""
+    import shutil
+
+    folder = tmp_path / "soportes"
+    folder.mkdir()
+    origen = SAMPLES / "26-02 D1 FRA 94DD49995.pdf"
+    if not origen.exists():
+        pytest.skip(f"missing sample: {origen}")
+    copia = folder / origen.name
+    shutil.copy(origen, copia)
+
+    conn = _conn(tmp_path)
+    try:
+        stats = index_folder(conn, folder)
+        assert stats.total_pdfs == 1 and stats.pruned == 0
+        cufes = get_indexed_cufes(conn, folder)
+        assert len(cufes) == 1
+
+        copia.unlink()
+        stats2 = index_folder(conn, folder)
+        assert stats2.total_pdfs == 0
+        assert stats2.pruned == 1, "la entrada del PDF borrado debe purgarse"
+        assert get_indexed_cufes(conn, folder) == set()
+        assert list_indexed_pdfs(conn, folder) == []
+    finally:
+        conn.close()
+
+
+def test_index_commitea_por_archivo(tmp_path):
+    """Lo ya indexado sobrevive a un fallo a mitad de carpeta.
+
+    Con una sola transacción envolviendo toda la carpeta, morir en el archivo N
+    tiraba por rollback los N-1 anteriores (minutos de extracción perdidos)."""
+    import shutil
+
+    folder = tmp_path / "soportes"
+    folder.mkdir()
+    muestras = [p for p in sorted(SAMPLES.glob("*.pdf"))][:2]
+    if len(muestras) < 2:
+        pytest.skip("se necesitan 2 PDFs de muestra")
+    for m in muestras:
+        shutil.copy(m, folder / m.name)
+
+    conn = _conn(tmp_path)
+    try:
+        index_folder(conn, folder)
+        # Una conexión independiente solo ve lo que quedó COMMITeado.
+        otra = storage.connect(tmp_path / "empresa.db")
+        try:
+            n = otra.execute(
+                "SELECT COUNT(*) FROM pdf_cufe_index WHERE folder_path = ?",
+                (str(folder.resolve()),),
+            ).fetchone()[0]
+            assert n == 2
+        finally:
+            otra.close()
     finally:
         conn.close()

@@ -49,8 +49,15 @@ def apply_v2_inversion(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _v3_check_rate(valor_base: float, iva: float, rate: float, tolerance: float) -> bool:
-    """True if the base implied by IVA/rate matches valor_base within tolerance."""
-    return abs(valor_base - (iva / rate)) <= tolerance
+    """True if the IVA implied by the base matches the reported IVA within tolerance.
+
+    Se compara en ESPACIO DE IVA (base * tarifa vs IVA), no en espacio de base
+    (base vs IVA / tarifa). Dividir por la tarifa amplifica el redondeo del IVA por
+    1/tarifa, así que una tolerancia de ±5 pesos sobre la base equivalía a ±0,95
+    pesos de IVA al 19% y a solo ±0,25 al 5%: casi toda factura del 5% con el IVA
+    redondeado al peso fallaba V3 sin motivo. Multiplicar no amplifica nada y la
+    tolerancia significa exactamente lo que dice."""
+    return abs(iva - (valor_base * rate)) <= tolerance
 
 
 def evaluate_v3(row: dict[str, Any], tolerance: float = V3_TOLERANCE_PESOS) -> str | None:

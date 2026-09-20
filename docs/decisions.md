@@ -620,6 +620,32 @@ Reglas confirmadas con el usuario: **subir dump = fusionar por `codigo`** (upser
 
 ---
 
+## D-071 — Contrato único de error en la API interna (2026-09-20)
+
+`/api/rpc` y todos los endpoints de subida devuelven **siempre HTTP 200** con `{ok:true, result}` o `{ok:false, error}`. Un error de dominio del sidecar no es un fallo de transporte. Con status 500, `$fetch` lanza antes de que el llamador lea el cuerpo, así que los mensajes cuidados en español (bloqueo por NIT, formato del Excel) nunca llegaban al usuario: veía "FetchError: 500 Internal Server Error". Los 4xx/5xx quedan para fallos reales de transporte. `list-dir.get` conserva sus códigos HTTP por ser un GET con semántica propia.
+
+---
+
+## D-072 — V3 se evalúa en espacio de IVA (2026-09-20)
+
+La comprobación de tarifa compara `|IVA − base × tarifa| ≤ tolerancia`, no `|base − IVA/tarifa| ≤ tolerancia`. Dividir por la tarifa amplifica el redondeo del IVA por 1/tarifa: la tolerancia de ±5 pesos sobre la base equivalía a ±0,95 pesos de IVA al 19% y a solo ±0,25 al 5%, así que casi toda factura del 5% con el IVA redondeado al peso fallaba V3 sin motivo. La tolerancia sigue siendo `V3_TOLERANCE_PESOS = 5.0` y ahora significa literalmente "hasta 5 pesos de diferencia en el IVA".
+
+---
+
+## D-073 — Un importe ilegible es un error, nunca un 0 (2026-09-20)
+
+`_to_number` distingue tres casos: celda **vacía** → `None` → se persiste 0 (ausencia legítima); valor **legible** → número; valor **presente pero ininterpretable** → `ExcelParseError` con fila y columna. Antes los dos últimos colapsaban al mismo 0: un importe mal leído aprobaba V3 en silencio (IVA = 0 se omite) y descuadraba el reporte sin ninguna señal.
+
+Corolario: ante formatos **ambiguos** se para en vez de adivinar. `"10.000"` puede ser diez mil (es-CO) o diez (en-US) y equivocarse son tres órdenes de magnitud. Se aceptan solo formas sin ambigüedad: `1.234,56`, `1234,56`, `1.234.567`, `1234.56`, `1234`, `(1234)`.
+
+---
+
+## D-074 — Los datos de un backup no deciden dónde se escribe (2026-09-20)
+
+El `meta.json` de un `.zip` de backup es entrada externa (los backups se intercambian por correo). `paths.empresa_slug` reduce el `nit` a dígitos y `backup._assert_dentro_de` verifica que el destino quede dentro de la carpeta de empresas. Antes el `nit` se interpolaba crudo en el nombre del archivo, así que un backup con `nit: "../../../evil"` escribía fuera.
+
+---
+
 ## Decisiones pendientes (a tomar más adelante)
 
 - **D-E1-13** ⏸ Behavior de R-V3 cuando IVA = 0 (default actual: skip). Confirmar si lo cambiamos a "marcar excluido" o "tarifa 0%".

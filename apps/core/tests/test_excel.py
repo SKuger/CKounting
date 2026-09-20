@@ -1,3 +1,5 @@
+import pytest
+
 from contab_core import excel
 
 
@@ -114,3 +116,36 @@ def test_whitespace_trimmed_in_razon_social(sample_excel):
         assert name_r == name_r.strip()
         # No double spaces.
         assert "  " not in name_e and "  " not in name_r
+
+
+def test_celda_numerica_vacia_es_cero():
+    """Ausencia legítima → 0 (el comportamiento de siempre)."""
+    row = excel._normalize_row({"IVA": None, "Total": 1000}, fila=2)
+    assert row["IVA"] == 0 and row["Total"] == 1000
+
+
+def test_importe_ilegible_falla_en_vez_de_volverse_cero():
+    """Un importe que no se puede leer NO puede guardarse como 0.
+
+    Antes, `_to_number` devolvía None ante cualquier cosa rara y el parser lo
+    colapsaba al mismo 0 que una celda vacía: la fila aprobaba V3 (IVA=0 se omite)
+    y el total quedaba mal sin ninguna señal."""
+    with pytest.raises(excel.ExcelParseError) as exc:
+        excel._normalize_row({"IVA": "no aplica", "Total": 1000}, fila=7)
+    assert "Fila 7" in str(exc.value) and "IVA" in str(exc.value)
+
+
+def test_importe_en_texto_formato_colombiano():
+    """'1.234,56' es 1234.56, no un error ni un 0."""
+    row = excel._normalize_row({"IVA": "1.234,56", "Total": "$ 1.234.567"}, fila=2)
+    assert row["IVA"] == pytest.approx(1234.56)
+    assert row["Total"] == pytest.approx(1234567.0)
+
+
+def test_importe_ambiguo_no_se_adivina():
+    """'10.000' puede ser diez mil o diez: equivocarse son 3 ordenes de magnitud.
+
+    Se prefiere parar y pedir que arreglen el Excel antes que guardar un importe
+    que puede estar mil veces mal."""
+    with pytest.raises(excel.ExcelParseError, match="ambiguo"):
+        excel._normalize_row({"Total": "10.000"}, fila=4)

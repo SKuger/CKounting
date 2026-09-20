@@ -1,7 +1,12 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile, unlink } from 'node:fs/promises'
 import { basename, resolve as joinPath } from 'node:path'
-import { homedir } from 'node:os'
 import { callSidecar } from '../utils/sidecar'
+import {
+  safeFilename,
+  uniquePrefix,
+  fallbackUploadsDir,
+  checkUploadSize,
+} from '../utils/uploads'
 
 type EmpresaInfo = {
   db_path: string
@@ -10,49 +15,23 @@ type EmpresaInfo = {
   default_folder?: string | null
 }
 
-function safeFilename(name: string | undefined): string {
-  if (!name) return 'puc.xlsx'
-  return name.replace(/[\\/:*?"<>|]/g, '_')
-}
-
-function timestamp(): string {
-  const d = new Date()
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return (
-    [d.getFullYear(), pad(d.getMonth() + 1), pad(d.getDate())].join('') +
-    '-' +
-    [pad(d.getHours()), pad(d.getMinutes()), pad(d.getSeconds())].join('')
-  )
-}
-
-function fallbackUploadsDir(): string {
-  return joinPath(homedir(), '.local', 'share', 'Contab', 'uploads')
-}
-
 // Sube un dump de PUC, lo guarda, y devuelve la VISTA PREVIA (dry_run) para
 // confirmar antes de aplicar. El bloqueo por NIT (D-070) ocurre en `puc_import`.
+// Contrato único de la API (ver rpc.post.ts): SIEMPRE 200 con {ok:true|false}.
 export default defineEventHandler(async (event) => {
   const parts = await readMultipartFormData(event)
-  if (!parts) {
-    setResponseStatus(event, 400)
-    return { ok: false, error: 'No llegaron datos del formulario.' }
-  }
+  if (!parts) return { ok: false, error: 'No llegaron datos del formulario.' }
 
   const dbPathPart = parts.find((p) => p.name === 'db_path')
   const filePart = parts.find((p) => p.name === 'file')
-  if (!dbPathPart?.data) {
-    setResponseStatus(event, 400)
-    return { ok: false, error: 'Falta la empresa destino.' }
-  }
-  if (!filePart?.data) {
-    setResponseStatus(event, 400)
-    return { ok: false, error: 'Falta el archivo Excel.' }
-  }
+  if (!dbPathPart?.data) return { ok: false, error: 'Falta la empresa destino.' }
+  if (!filePart?.data) return { ok: false, error: 'Falta el archivo Excel.' }
+
   const dbPath = dbPathPart.data.toString('utf-8').trim()
-  if (!dbPath) {
-    setResponseStatus(event, 400)
-    return { ok: false, error: 'La empresa destino está vacía.' }
-  }
+  if (!dbPath) return { ok: false, error: 'La empresa destino está vacía.' }
+
+  const tooBig = checkUploadSize(filePart.data.length)
+  if (tooBig) return { ok: false, error: tooBig }
 
   // Guardar el dump en <default_folder>/puc/ (o en el fallback de uploads).
   let targetDir: string
@@ -63,19 +42,16 @@ export default defineEventHandler(async (event) => {
       ? joinPath(folder, 'puc')
       : joinPath(fallbackUploadsDir(), basename(dbPath, '.db'), 'puc')
   } catch (err) {
-    setResponseStatus(event, 500)
-    return { ok: false, error: `No se pudo abrir la empresa: ${String(err)}` }
+    const msg = (err instanceof Error ? err.message : String(err)).replace(/^Error:\s*/, '')
+    return { ok: false, error: `No se pudo abrir la empresa: ${msg}` }
   }
 
-  // Sufijo aleatorio: evita que dos subidas en el mismo segundo se sobreescriban.
-  const rand = Math.random().toString(36).slice(2, 8)
-  const fileName = `${timestamp()}_${rand}_${safeFilename(filePart.filename)}`
+  const fileName = `${uniquePrefix()}_${safeFilename(filePart.filename, 'puc.xlsx')}`
   const savedPath = joinPath(targetDir, fileName)
   try {
     await mkdir(targetDir, { recursive: true })
     await writeFile(savedPath, filePart.data)
   } catch (err) {
-    setResponseStatus(event, 500)
     return { ok: false, error: `No se pudo guardar el archivo en ${savedPath}: ${String(err)}` }
   }
 
@@ -89,9 +65,7 @@ export default defineEventHandler(async (event) => {
     })
     return { ok: true, result, saved_to: savedPath }
   } catch (err) {
-    // Devolvemos el mensaje REAL del sidecar (formato del Excel, NIT, etc.) con
-    // status 200 y ok:false, para que $fetch no lo tape con un "500 Internal Server
-    // Error" genérico y el usuario vea qué pasó.
+    await unlink(savedPath).catch(() => {})
     const msg = (err instanceof Error ? err.message : String(err)).replace(/^Error:\s*/, '')
     return { ok: false, error: msg }
   }

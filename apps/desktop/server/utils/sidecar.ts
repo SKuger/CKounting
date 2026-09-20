@@ -35,13 +35,21 @@ function getState(): SidecarState {
 
 function resolvePythonBin(): string {
   if (process.env.CONTAB_PYTHON) return process.env.CONTAB_PYTHON
+  // El venv vive en ../core/.venv, pero su layout depende del SO: Scripts\python.exe
+  // en Windows, bin/python en POSIX. El producto es Windows, así que probar solo
+  // 'bin/python' dejaba el modo dev cayendo a 'python3', que en Windows no existe.
+  const isWin = process.platform === 'win32'
+  const venvRel = isWin ? ['Scripts', 'python.exe'] : ['bin', 'python']
   // apps/desktop is the Nuxt cwd; the venv lives at ../core/.venv.
-  const candidates = [
-    resolve(process.cwd(), '..', 'core', '.venv', 'bin', 'python'),
-    resolve(process.cwd(), '..', '..', 'apps', 'core', '.venv', 'bin', 'python'),
+  const roots = [
+    resolve(process.cwd(), '..', 'core', '.venv'),
+    resolve(process.cwd(), '..', '..', 'apps', 'core', '.venv'),
   ]
-  for (const c of candidates) if (existsSync(c)) return c
-  return 'python3'
+  for (const root of roots) {
+    const candidate = resolve(root, ...venvRel)
+    if (existsSync(candidate)) return candidate
+  }
+  return isWin ? 'python' : 'python3'
 }
 
 function ensureProcess() {
