@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import log
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Cuánto espera una escritura a que se libere el lock antes de rendirse (ms).
 BUSY_TIMEOUT_MS = 5_000
@@ -51,13 +51,24 @@ CREATE TABLE IF NOT EXISTS excel_row (
   cufe_cude    TEXT,
   grupo        TEXT,
   tipo_doc     TEXT,
-  data_json    TEXT NOT NULL,
-  periodo      TEXT           -- 'YYYY-MM' de la fila (0.1.4)
+  data_json    TEXT NOT NULL,   -- fila COMPLETA, fuente de verdad (D-039)
+  periodo      TEXT,          -- 'YYYY-MM' de la fila (0.1.4)
+  -- D-091: proyección de los campos consultables, para poder sumar, agrupar y
+  -- filtrar en SQL sin cargar el lote entero a memoria. Los importes van en
+  -- CENTAVOS como INTEGER: suman exacto (un REAL reintroduciría el binario que
+  -- evitamos en D-075; un TEXT no suma).
+  total_centavos INTEGER,
+  iva_centavos   INTEGER,
+  nit_emisor     TEXT,
+  fecha_emision  TEXT
   -- D-085: no hay papelera POR FILA. La que existe es la del LOTE
   -- (excel_load.deleted_at). La columna `deleted_at` de aquí nunca se escribió.
 );
 CREATE INDEX IF NOT EXISTS idx_excel_row_load ON excel_row(load_id);
 CREATE INDEX IF NOT EXISTS idx_excel_row_cufe ON excel_row(cufe_cude);
+-- Los índices de las columnas nuevas NO van aquí: en una BD antigua la tabla ya
+-- existe sin ellas (CREATE TABLE IF NOT EXISTS no las añade) y el índice falla.
+-- Se crean en la migración que añade las columnas, igual que idx_excel_row_periodo.
 
 -- 0.1.4: carpeta de soportes (PDFs) por periodo (mes). La validación V1 de un lote
 -- cruza sus CUFE contra la carpeta del periodo del lote (fallback: empresa_info.pdfs_folder).
@@ -325,11 +336,71 @@ def _rebuild_validation_failure_sin_rule_id(conn: sqlite3.Connection) -> None:
     )
 
 
+COLUMNAS_CONSULTABLES = """
+ALTER TABLE excel_row ADD COLUMN total_centavos  INTEGER;
+ALTER TABLE excel_row ADD COLUMN iva_centavos    INTEGER;
+ALTER TABLE excel_row ADD COLUMN nit_emisor      TEXT;
+ALTER TABLE excel_row ADD COLUMN fecha_emision   TEXT;
+CREATE INDEX IF NOT EXISTS idx_excel_row_nit_emisor ON excel_row(nit_emisor);
+CREATE INDEX IF NOT EXISTS idx_excel_row_fecha ON excel_row(fecha_emision);
+"""
+
+
+def _m003_columnas_consultables(conn: sqlite3.Connection) -> None:
+    """Migración 3 — saca de `data_json` los campos que hay que consultar (D-091).
+
+    Toda la fila del Excel vivía como un blob JSON, así que no se podía sumar,
+    agrupar ni filtrar en SQL: cualquier total pasaba por cargar el lote entero a
+    memoria en Python. Eso bloquea cualquier reporte agregado, comparar meses o
+    prácticamente lo que un contador pida de verdad.
+
+    `data_json` sigue siendo la fuente de verdad de la fila completa (D-039: no se
+    renombran los headers de la DIAN). Estas columnas son una proyección de los
+    campos consultables, que se rellena al persistir.
+
+    Los importes van en **centavos como INTEGER**: suman exacto en SQL. Un REAL
+    reintroduciría el binario del que salimos en D-075 y un TEXT no suma.
+    """
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(excel_row)").fetchall()}
+    if "total_centavos" not in cols:
+        conn.executescript(COLUMNAS_CONSULTABLES)
+
+    # Backfill desde data_json de lo ya cargado.
+    import json as _json
+
+    from . import money as _money
+
+    updates: list[tuple] = []
+    for r in conn.execute(
+        "SELECT id, data_json FROM excel_row WHERE total_centavos IS NULL"
+    ).fetchall():
+        try:
+            d = _json.loads(r["data_json"])
+        except Exception:
+            log.warn("data_json ilegible en excel_row id=%s; sin columnas consultables", r["id"])
+            continue
+        try:
+            total = _money.a_centavos(_money.to_money(d.get("Total") or 0))
+            iva = _money.a_centavos(_money.to_money(d.get("IVA") or 0))
+        except ValueError:
+            total = iva = None
+        updates.append((total, iva, d.get("NIT Emisor"), d.get("Fecha Emisión"), r["id"]))
+
+    if updates:
+        conn.executemany(
+            "UPDATE excel_row SET total_centavos = ?, iva_centavos = ?, nit_emisor = ?,"
+            " fecha_emision = ? WHERE id = ?",
+            updates,
+        )
+        log.info("columnas consultables rellenadas en %s filas", len(updates))
+
+
 # Migraciones NUMERADAS. Cada una lleva su número y corre una sola vez, en orden.
 # Añadir una: escribir la función, ponerla aquí y subir SCHEMA_VERSION.
 MIGRACIONES: list[tuple[int, object]] = [
     (1, _m001_columnas_anteriores),
     (2, _m002_esquema_muerto),
+    (3, _m003_columnas_consultables),
 ]
 
 

@@ -296,6 +296,71 @@ def _periodo_dominante(periodos: list[str]) -> str | None:
     return min(conteo, key=lambda p: (-conteo[p], p))
 
 
+def resumen_por_periodo(conn, *, incluir_borrados: bool = False) -> list[dict[str, Any]]:
+    """Totales por mes, agregados EN SQL (D-091).
+
+    Esto es lo que las columnas consultables desbloquean: antes había que cargar
+    todas las filas de todos los lotes a memoria en Python para sumar un mes.
+    Los importes están en centavos (INTEGER), así que `SUM` es exacto.
+    """
+    filtro = "" if incluir_borrados else "AND l.deleted_at IS NULL"
+    filas = conn.execute(
+        f"""
+        SELECT r.periodo             AS periodo,
+               COUNT(*)              AS documentos,
+               SUM(r.total_centavos) AS total_centavos,
+               SUM(r.iva_centavos)   AS iva_centavos,
+               COUNT(DISTINCT r.nit_emisor) AS emisores
+        FROM excel_row r
+        JOIN excel_load l ON l.id = r.load_id
+        WHERE r.periodo IS NOT NULL {filtro}
+        GROUP BY r.periodo
+        ORDER BY r.periodo DESC
+        """
+    ).fetchall()
+    return [
+        {
+            "periodo": f["periodo"],
+            "documentos": f["documentos"],
+            "total": money.de_centavos(f["total_centavos"]) or money.ZERO,
+            "iva": money.de_centavos(f["iva_centavos"]) or money.ZERO,
+            "emisores": f["emisores"],
+        }
+        for f in filas
+    ]
+
+
+def resumen_por_emisor(conn, periodo: str | None = None, limite: int = 50) -> list[dict[str, Any]]:
+    """Los mayores emisores del periodo, agregados en SQL (D-091)."""
+    where = "WHERE r.nit_emisor IS NOT NULL AND l.deleted_at IS NULL"
+    params: list[Any] = []
+    if periodo:
+        where += " AND r.periodo = ?"
+        params.append(periodo)
+    filas = conn.execute(
+        f"""
+        SELECT r.nit_emisor          AS nit,
+               COUNT(*)              AS documentos,
+               SUM(r.total_centavos) AS total_centavos
+        FROM excel_row r
+        JOIN excel_load l ON l.id = r.load_id
+        {where}
+        GROUP BY r.nit_emisor
+        ORDER BY SUM(r.total_centavos) DESC
+        LIMIT ?
+        """,
+        (*params, int(limite)),
+    ).fetchall()
+    return [
+        {
+            "nit": f["nit"],
+            "documentos": f["documentos"],
+            "total": money.de_centavos(f["total_centavos"]) or money.ZERO,
+        }
+        for f in filas
+    ]
+
+
 def periodo_from_row(row: dict[str, Any]) -> str | None:
     """'YYYY-MM' derivado de 'Fecha Emisión' (ISO). None si no se puede.
 
@@ -328,8 +393,9 @@ def persist_load(conn, source_path: str, loaded: LoadedExcel, periodo: str | Non
         )
         load_id = cur.lastrowid
         conn.executemany(
-            "INSERT INTO excel_row(load_id, row_index, cufe_cude, grupo, tipo_doc, data_json, periodo) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO excel_row(load_id, row_index, cufe_cude, grupo, tipo_doc, data_json,"
+            " periodo, total_centavos, iva_centavos, nit_emisor, fecha_emision) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (
                     load_id,
@@ -339,6 +405,12 @@ def persist_load(conn, source_path: str, loaded: LoadedExcel, periodo: str | Non
                     row.get("Tipo de documento"),
                     _dump_row_json(row),
                     row_periodos[i],
+                    # D-091: proyección consultable. `data_json` sigue siendo la
+                    # fuente de verdad de la fila completa.
+                    money.a_centavos(row.get("Total")),
+                    money.a_centavos(row.get("IVA")),
+                    row.get("NIT Emisor"),
+                    row.get("Fecha Emisión"),
                 )
                 for i, row in enumerate(loaded.rows)
             ],

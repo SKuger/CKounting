@@ -368,3 +368,20 @@ dependencia.
 
 Pendientes del bloque: **#23** (Excel como blobs JSON), **#30** (load.vue) y
 **#24**, que necesita decisión del usuario porque contradice D-046.
+
+### Sesión 9 (cont.) — #23 y #30
+
+**#23 (D-091)** — `excel_row` gana `total_centavos`, `iva_centavos`, `nit_emisor` y
+`fecha_emision`, proyectadas desde `data_json` (migración 3 con backfill).
+`data_json` sigue siendo la fuente de verdad. Importes en centavos como INTEGER
+para que `SUM` sea exacto. Nuevos RPC `resumen_periodos` y `resumen_emisores`, que
+demuestran la capacidad en vez de solo prometerla: verificado que la suma en SQL
+coincide exactamente con la de Python.
+
+La migración destapó una trampa real: poner el `CREATE INDEX` de una columna nueva
+en `SCHEMA_SQL` rompe en BD antiguas, porque `CREATE TABLE IF NOT EXISTS` no añade
+la columna. El test de idempotencia lo cazó.
+
+**#30 (D-092)** — `load.vue` de 934 a 722 líneas. Cuatro composables nuevos:
+`useColumnasTabla`, `useExportarFaltantes`, `useRenombrarSoportes` y
+`useSoportesDelMes`. Las dependencias entre piezas van como parámetros explícitos.
