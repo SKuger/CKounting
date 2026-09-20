@@ -88,22 +88,29 @@ describe('contabDataDir', () => {
     Object.defineProperty(process, 'platform', { value: p })
   }
 
+  // `node:path` fija su separador a la plataforma REAL al importarse, y no trata
+  // `C:\...` como absoluta cuando corre en POSIX. Así que stubbear
+  // `process.platform` cambia la RAMA que se toma, pero no la forma de la ruta:
+  // estos tests comprueban QUÉ raíz se eligió, que es lo que decide dónde se
+  // escribe, y no la cadena literal. (Asertar la cadena hacía que el test pasara
+  // en Windows y fallara en el CI de Linux.)
+  const normalizar = (p: string) => p.split('\\').join('/')
+
   it('en Windows usa %APPDATA%\\Contab, igual que paths.py', () => {
     // El bug (#9): Node usaba ~/.local/share/Contab (XDG, Linux) en un producto
     // Windows mientras Python leía en %APPDATA%\Contab. Escribían en sitios
     // distintos y ninguno veía lo del otro.
     forzarPlataforma('win32')
     vi.stubEnv('APPDATA', 'C:\\Users\\Test\\AppData\\Roaming')
-    expect(contabDataDir()).toBe('C:\\Users\\Test\\AppData\\Roaming\\Contab')
+    const dir = normalizar(contabDataDir())
+    expect(dir).toContain('C:/Users/Test/AppData/Roaming')
+    expect(dir.endsWith('/Contab')).toBe(true)
   })
 
   it('en Linux respeta XDG_DATA_HOME', () => {
-    // `node:path` fija su separador a la plataforma REAL al importarse, así que
-    // stubbear process.platform cambia la RAMA pero no el separador. Se comprueba
-    // la raíz elegida, que es lo que decide dónde se escribe.
     forzarPlataforma('linux')
     vi.stubEnv('XDG_DATA_HOME', '/home/test/.local/share')
-    const dir = contabDataDir().split('\\').join('/')
+    const dir = normalizar(contabDataDir())
     expect(dir).toContain('/home/test/.local/share')
     expect(dir.endsWith('/Contab')).toBe(true)
   })
