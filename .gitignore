@@ -47,6 +47,11 @@ empresas/
 !docs/samples/**/*.xls
 !docs/samples/**/*.pdf
 
+# --- Salida de Playwright (smoke e2e) ---
+test-results/
+playwright-report/
+.playwright/
+
 # --- IDE ---
 .vscode/
 .idea/

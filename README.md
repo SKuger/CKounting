@@ -112,8 +112,8 @@ venv cambia por SO: `Scripts\` en Windows, `bin/` en POSIX.
 cd apps\core
 py -m venv .venv
 .venv\Scripts\pip install -e ".[dev]"
-.venv\Scripts\pytest -q            # 149 tests deben pasar
-.venv\Scriptsuff check .         # debe salir limpio
+.venv\Scripts\pytest -q            # 158 tests deben pasar
+.venv\Scripts\ruff check .         # debe salir limpio
 
 # Frontend
 cd ..\desktop
@@ -199,12 +199,25 @@ Endpoints del frontend: `POST /api/upload-excel`, `POST /api/upload-restore`, `G
 ## Tests
 
 ```powershell
-cd apps\core   ; .venv\Scripts\pytest -q ; .venv\Scripts\ruff check .   # 149 tests
+cd apps\core   ; .venv\Scripts\pytest -q ; .venv\Scripts\ruff check .   # 158 tests
 cd apps\desktop; npm test ; npm run typecheck                           # 33 tests
 ```
 
 El core cubre el parser del Excel, los importes en Decimal (D-075), el DV (módulo 11), V1/V2/V3, la extracción de CUFE (texto + QR + prioridad de etiquetas + invalidación de caché por versión), el índice de PDFs, las migraciones de esquema y el ciclo de vida de una empresa, contra los samples de `docs/samples/`.
 
-El frontend cubre las utilidades de servidor y los composables. **Falta** un smoke end-to-end que arranque la app de verdad.
+El frontend cubre las utilidades de servidor y los composables.
+
+```powershell
+cd apps\shell ; npm run e2e        # smoke end-to-end contra el Electron real
+```
+
+El smoke arranca la aplicación entera (Electron → Nitro → sidecar Python → preload
+→ credencial), crea una empresa, sube el Excel de muestra, valida y comprueba la
+papelera. Necesita el build de Nuxt (`apps/desktop && npm run build`) y el venv de
+`apps/core`; si falta alguno, se salta con un mensaje que dice qué correr.
+
+Escribe en un temporal, **nunca** en tus datos reales: apunta `APPDATA` y
+`XDG_DATA_HOME` a una carpeta desechable antes de lanzar Electron, y hay un test
+dedicado a verificarlo.
 
 Todo esto corre solo en cada push y PR (`.github/workflows/test.yml`).

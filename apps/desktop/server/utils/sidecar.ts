@@ -4,7 +4,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createInterface, type Interface } from 'node:readline'
 import { existsSync } from 'node:fs'
-import { resolve, dirname } from 'node:path'
+import { resolve, dirname, join } from 'node:path'
 
 type PendingResolver = {
   resolve: (value: unknown) => void
@@ -33,20 +33,43 @@ function getState(): SidecarState {
   return g[GLOBAL_KEY] as SidecarState
 }
 
-function resolvePythonBin(): string {
+/**
+ * Localiza `apps/core` subiendo desde el directorio actual (D-094).
+ *
+ * No se puede calcular con un número fijo de `..`: el cwd depende de QUIÉN
+ * arrancó Nitro. Con `npm run dev` es `apps/desktop`; cuando lo lanza el shell
+ * de Electron es `apps/desktop/.output`, y entonces `../core` y `../../apps/core`
+ * apuntaban los dos a carpetas inexistentes. El sidecar se lanzaba con un cwd
+ * inválido, moría al instante y todas las peticiones fallaban con
+ * "Cannot call write after a stream was destroyed".
+ *
+ * `CONTAB_CORE_DIR` permite fijarlo a mano si hiciera falta.
+ */
+function resolveCoreDir(): string | null {
+  if (process.env.CONTAB_CORE_DIR) return process.env.CONTAB_CORE_DIR
+
+  const marcador = join('contab_core', 'sidecar.py')
+  let dir = process.cwd()
+  for (let i = 0; i < 6; i++) {
+    for (const candidato of [resolve(dir, 'core'), resolve(dir, 'apps', 'core')]) {
+      if (existsSync(join(candidato, marcador))) return candidato
+    }
+    const padre = dirname(dir)
+    if (padre === dir) break
+    dir = padre
+  }
+  return null
+}
+
+function resolvePythonBin(coreDir: string | null): string {
   if (process.env.CONTAB_PYTHON) return process.env.CONTAB_PYTHON
-  // El venv vive en ../core/.venv, pero su layout depende del SO: Scripts\python.exe
-  // en Windows, bin/python en POSIX. El producto es Windows, así que probar solo
+  // El layout del venv depende del SO: Scripts\python.exe en Windows,
+  // bin/python en POSIX. El producto es Windows, así que probar solo
   // 'bin/python' dejaba el modo dev cayendo a 'python3', que en Windows no existe.
   const isWin = process.platform === 'win32'
   const venvRel = isWin ? ['Scripts', 'python.exe'] : ['bin', 'python']
-  // apps/desktop is the Nuxt cwd; the venv lives at ../core/.venv.
-  const roots = [
-    resolve(process.cwd(), '..', 'core', '.venv'),
-    resolve(process.cwd(), '..', '..', 'apps', 'core', '.venv'),
-  ]
-  for (const root of roots) {
-    const candidate = resolve(root, ...venvRel)
+  if (coreDir) {
+    const candidate = resolve(coreDir, '.venv', ...venvRel)
     if (existsSync(candidate)) return candidate
   }
   return isWin ? 'python' : 'python3'
@@ -67,10 +90,16 @@ function ensureProcess() {
     args = []
     cwd = dirname(sidecarBin)
   } else {
-    cmd = resolvePythonBin()
+    const coreDir = resolveCoreDir()
+    if (!coreDir) {
+      throw new Error(
+        'No se encontró apps/core desde ' + process.cwd() + '. ' +
+        'Si el servidor corre fuera del repositorio, define CONTAB_CORE_DIR.',
+      )
+    }
+    cmd = resolvePythonBin(coreDir)
     args = ['-u', '-m', 'contab_core.sidecar']
-    const coreDir = resolve(process.cwd(), '..', 'core')
-    cwd = existsSync(coreDir) ? coreDir : resolve(process.cwd(), '..', '..', 'apps', 'core')
+    cwd = coreDir
   }
 
   const proc = spawn(cmd, args, {

@@ -839,6 +839,28 @@ La detección comparte criterio con V3 (D-072): se compara en espacio de IVA, no
 
 ---
 
+## D-094 — Las carpetas de los sidecars se BUSCAN, no se calculan con `..` (2026-09-20)
+
+`resolveCoreDir` y `dianCwd` suben desde el directorio actual buscando un marcador (`contab_core/sidecar.py`, `main.py`). Antes se calculaban con un número fijo de `..` asumiendo que el cwd era `apps/desktop`.
+
+Esa suposición es falsa cuando **el shell de Electron arranca Nitro**: ahí el cwd es `apps/desktop/.output`, y las dos rutas candidatas (`../core` y `../../apps/core`) apuntaban a carpetas inexistentes. El sidecar se lanzaba con un cwd inválido, moría al instante, y toda petición fallaba con *"Cannot call write after a stream was destroyed"* — un mensaje que no dice nada del problema real.
+
+En producción no se notaba porque `CONTAB_SIDECAR_BIN` apunta al ejecutable de PyInstaller, que trae su propio cwd. Pero era un fallo real en el arranque no empaquetado, y lo encontró el smoke end-to-end el primer día que existió.
+
+Si no se encuentra, ahora se lanza un error que **dice qué falta y cómo arreglarlo** (`CONTAB_CORE_DIR` / `DIAN_DIR`), en vez de spawnear a ciegas.
+
+---
+
+## D-095 — Smoke end-to-end contra el Electron real (2026-09-20)
+
+`apps/shell/e2e/` con Playwright. No es una suite de UI: es la comprobación de que la cadena entera arranca y funciona — Electron → Nitro → sidecar Python → preload → credencial — que es justo lo que ni vitest ni pytest pueden ver.
+
+Cubre: el arranque completo, que el preload entrega la credencial **pese a `sandbox: true`** (D-088 + D-089 podrían haberse roto entre sí y la app instalada habría quedado inservible), que la API rechaza con 401 sin ella, que Poppler está, el flujo real (crear empresa → subir el Excel de muestra → validar como trabajo en segundo plano → resumen agregado en SQL), y que borrar manda a la papelera y se puede recuperar.
+
+**Aislamiento**: `APPDATA` y `XDG_DATA_HOME` apuntan a un temporal antes de lanzar Electron, que lo propaga a Nitro y este al sidecar. Hay un test dedicado a comprobar que las empresas creadas viven ahí. No es paranoia: durante esta misma revisión, correr pytest en Windows escribió en el `%APPDATA%\Contab` real del usuario, incluidos los tests que BORRAN empresas.
+
+---
+
 ## Decisiones pendientes (a tomar más adelante)
 
 - **D-E1-13** ⏸ Behavior de R-V3 cuando IVA = 0 (default actual: skip). Confirmar si lo cambiamos a "marcar excluido" o "tarifa 0%".

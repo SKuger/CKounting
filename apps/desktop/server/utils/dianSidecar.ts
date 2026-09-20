@@ -6,7 +6,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { resolve, dirname } from 'node:path'
+import { resolve, dirname, join } from 'node:path'
 
 export const DIAN_PORT = Number(process.env.DIAN_PORT) || 8756
 
@@ -29,27 +29,36 @@ export function dianBaseUrl(): string {
   return `http://127.0.0.1:${DIAN_PORT}`
 }
 
-function resolvePythonBin(): string {
+/**
+ * Localiza `apps/dian-rut` subiendo desde el directorio actual (D-094).
+ * Mismo criterio que utils/sidecar.ts: el cwd depende de quién arrancó Nitro
+ * (`apps/desktop` con npm run dev, `apps/desktop/.output` desde el shell), así
+ * que contar `..` fijos no vale.
+ */
+function dianCwd(): string | null {
+  if (process.env.DIAN_DIR) return process.env.DIAN_DIR
+  let dir = process.cwd()
+  for (let i = 0; i < 6; i++) {
+    for (const candidato of [resolve(dir, 'dian-rut'), resolve(dir, 'apps', 'dian-rut')]) {
+      if (existsSync(join(candidato, 'main.py'))) return candidato
+    }
+    const padre = dirname(dir)
+    if (padre === dir) break
+    dir = padre
+  }
+  return null
+}
+
+function resolvePythonBin(dianDir: string | null): string {
   if (process.env.DIAN_PYTHON) return process.env.DIAN_PYTHON
   // Mismo criterio que utils/sidecar.ts: el layout del venv depende del SO.
   const isWin = process.platform === 'win32'
   const venvRel = isWin ? ['Scripts', 'python.exe'] : ['bin', 'python']
-  // apps/desktop is the Nuxt cwd; the venv lives at ../dian-rut/.venv.
-  const roots = [
-    resolve(process.cwd(), '..', 'dian-rut', '.venv'),
-    resolve(process.cwd(), '..', '..', 'apps', 'dian-rut', '.venv'),
-  ]
-  for (const root of roots) {
-    const candidate = resolve(root, ...venvRel)
+  if (dianDir) {
+    const candidate = resolve(dianDir, '.venv', ...venvRel)
     if (existsSync(candidate)) return candidate
   }
   return isWin ? 'python' : 'python3'
-}
-
-function dianCwd(): string {
-  const a = resolve(process.cwd(), '..', 'dian-rut')
-  if (existsSync(a)) return a
-  return resolve(process.cwd(), '..', '..', 'apps', 'dian-rut')
 }
 
 async function isHealthy(timeoutMs = 1200): Promise<boolean> {
@@ -81,9 +90,16 @@ export async function ensureDianService(): Promise<void> {
       args = ['--host', '127.0.0.1', '--port', String(DIAN_PORT)]
       cwd = dirname(sidecarBin)
     } else {
-      cmd = resolvePythonBin()
+      const dianDir = dianCwd()
+      if (!dianDir) {
+        throw new Error(
+          'No se encontró apps/dian-rut desde ' + process.cwd() + '. ' +
+          'Si el servidor corre fuera del repositorio, define DIAN_DIR.',
+        )
+      }
+      cmd = resolvePythonBin(dianDir)
       args = ['-u', '-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', String(DIAN_PORT), '--log-level', 'warning']
-      cwd = dianCwd()
+      cwd = dianDir
     }
     const proc = spawn(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PYTHONUNBUFFERED: '1' } })
     state.proc = proc
