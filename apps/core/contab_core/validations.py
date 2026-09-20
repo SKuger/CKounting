@@ -8,13 +8,17 @@ Pending: D-E1-13 (behavior when IVA=0 in V3). Default = skip.
 from __future__ import annotations
 
 from copy import copy
+from decimal import Decimal
 from typing import Any
 
+from . import money
 from .excel import DIAN_COLUMNS, compute_iva_columns, is_nota_credito  # noqa: F401
 
-V3_TOLERANCE_PESOS = 5.0
-IVA_RATE_GENERAL = 0.19
-IVA_RATE_REDUCED = 0.05
+# Importes en Decimal (D-075): la tolerancia y las tarifas también, para que la
+# comparación no pase nunca por float.
+V3_TOLERANCE_PESOS = Decimal("5")
+IVA_RATE_GENERAL = Decimal("0.19")
+IVA_RATE_REDUCED = Decimal("0.05")
 
 V1_STUB_MESSAGE = "Validación CUFE-en-carpeta pendiente — disponible en E4"
 V1_NO_SUPPORT_MESSAGE = "Sin soporte PDF (CUFE no encontrado en la carpeta de soportes)"
@@ -37,8 +41,8 @@ def apply_v2_inversion(row: dict[str, Any]) -> dict[str, Any]:
     if not is_nota_credito(row.get("Tipo de documento")):
         return row
     inverted = copy(row)
-    iva = float(row.get("IVA") or 0) * -1
-    total = float(row.get("Total") or 0) * -1
+    iva = money.to_money(row.get("IVA") or 0) * -1
+    total = money.to_money(row.get("Total") or 0) * -1
     inverted["IVA"] = iva
     inverted["Total"] = total
     valor_base, base_iva, diferencia = compute_iva_columns(iva, total)
@@ -48,7 +52,7 @@ def apply_v2_inversion(row: dict[str, Any]) -> dict[str, Any]:
     return inverted
 
 
-def _v3_check_rate(valor_base: float, iva: float, rate: float, tolerance: float) -> bool:
+def _v3_check_rate(valor_base: Decimal, iva: Decimal, rate: Decimal, tolerance: Decimal) -> bool:
     """True if the IVA implied by the base matches the reported IVA within tolerance.
 
     Se compara en ESPACIO DE IVA (base * tarifa vs IVA), no en espacio de base
@@ -60,15 +64,15 @@ def _v3_check_rate(valor_base: float, iva: float, rate: float, tolerance: float)
     return abs(iva - (valor_base * rate)) <= tolerance
 
 
-def evaluate_v3(row: dict[str, Any], tolerance: float = V3_TOLERANCE_PESOS) -> str | None:
+def evaluate_v3(row: dict[str, Any], tolerance: Decimal = V3_TOLERANCE_PESOS) -> str | None:
     """R-V3: tarifa de IVA.
     Returns None on pass, or a failure string. row must already have V2 applied."""
-    iva = float(row.get("IVA") or 0)
-    total = float(row.get("Total") or 0)
-    if iva == 0:
+    iva = money.to_money(row.get("IVA") or 0)
+    total = money.to_money(row.get("Total") or 0)
+    if iva == money.ZERO:
         # D-E1-13 default: skip excluded/exempt rows.
         return None
-    valor_base = total - iva
+    valor_base = money.quantize(total - iva)
     if _v3_check_rate(valor_base, iva, IVA_RATE_GENERAL, tolerance):
         return None
     if _v3_check_rate(valor_base, iva, IVA_RATE_REDUCED, tolerance):

@@ -314,7 +314,7 @@ class IndexStats:
         }
 
 
-def index_folder(conn, folder: str | Path) -> IndexStats:
+def index_folder(conn, folder: str | Path, progress=None) -> IndexStats:
     """Incrementally index every PDF in folder.
     Re-extracts only when (mtime, size) changed or the PDF is new.
 
@@ -326,6 +326,9 @@ def index_folder(conn, folder: str | Path) -> IndexStats:
     Al terminar purga las entradas de PDFs que ya no están en la carpeta: si no,
     `get_indexed_cufes` seguiría devolviendo el CUFE de un soporte borrado y V1
     daría por respaldada una fila que ya no tiene soporte.
+
+    `progress(done, total, message)` — opcional — se llama antes de cada PDF para
+    que un trabajo en segundo plano (jobs.py) publique avance y pueda cancelarse.
 
     Uses tables pdf_cufe_index + pdf_cufe_value created in storage.SCHEMA_SQL."""
     from .storage import transaction
@@ -342,7 +345,9 @@ def index_folder(conn, folder: str | Path) -> IndexStats:
     stats.total_pdfs = len(pdfs)
     present: set[str] = set()
 
-    for pdf_path in pdfs:
+    for i, pdf_path in enumerate(pdfs):
+        if progress is not None:
+            progress(i, len(pdfs), f"Leyendo {pdf_path.name}")
         full = str(pdf_path.resolve())
         present.add(full)
         try:
@@ -392,6 +397,8 @@ def index_folder(conn, folder: str | Path) -> IndexStats:
             stats.no_cufe.append(pdf_path.name)
         stats.indexed_now += 1
 
+    if progress is not None:
+        progress(len(pdfs), len(pdfs), "Cerrando el índice")
     stats.pruned = _prune_missing(conn, folder, present)
     return stats
 

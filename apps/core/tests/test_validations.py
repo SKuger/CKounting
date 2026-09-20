@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from contab_core import excel, validations
 
 
@@ -52,8 +54,8 @@ def test_v3_tolera_redondeo_al_peso_en_tarifa_5pct():
 
 def test_v3_tolerancia_simetrica_entre_tarifas():
     """Un mismo desvío de IVA se juzga igual al 19% y al 5% (antes, 5,26x vs 20x)."""
-    desvio = 4.0  # dentro de la tolerancia de ±5 pesos
-    base = 1_000_000.0
+    desvio = Decimal("4")  # dentro de la tolerancia de ±5 pesos
+    base = Decimal("1000000")
     for rate in (validations.IVA_RATE_GENERAL, validations.IVA_RATE_REDUCED):
         iva = base * rate + desvio
         row = {"Tipo de documento": "Factura electrónica", "IVA": iva, "Total": base + iva}

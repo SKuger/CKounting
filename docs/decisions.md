@@ -646,6 +646,29 @@ El `meta.json` de un `.zip` de backup es entrada externa (los backups se interca
 
 ---
 
+## D-075 — Los importes son Decimal, no float (2026-09-20)
+
+Todo importe vive como `Decimal` cuantizado a **2 decimales** con `ROUND_HALF_UP` (la convención contable, no el `ROUND_HALF_EVEN` de Python). La conversión a `float` ocurre **solo en los bordes**: `money.to_json` para el JSON hacia la UI y `_coerce_cell` para las celdas de xlsxwriter. La aritmética no pasa nunca por float.
+
+Motivo medido, para que no se repita el mito: a la escala de este aplicativo el float **no** produce deriva acumulada visible — sumar 3.000 facturas en float64 da el mismo resultado que en Decimal. Los dos problemas reales eran otros:
+
+1. **Redondeo**: `round(2.675, 2)` da 2.67 porque 2.675 no existe en binario. En pesos es un centavo mal, en la dirección que decida la representación.
+2. **Falta de cuantización**: `Base IVA = IVA / 0.19` es periódico y se guardaba y **exportaba** como `40463.15789473684`, con `Diferencia = -1.1578947368398076`. El contador recibía esas columnas con 14 decimales de ruido. Ahora son `40463.16` y `-1.16`.
+
+En `data_json` los importes se guardan como **string exacto** (`"12952.83"`), no como número JSON: un float en el archivo reintroduciría la representación binaria. Las cargas anteriores (que sí tienen floats) se leen igual: `money.to_money` pasa el float por `repr()`, así que `12952.83` vuelve como `Decimal('12952.83')` y no como el binario largo.
+
+---
+
+## D-076 — Las operaciones largas son trabajos en segundo plano (2026-09-20)
+
+`run_validations`, `reindex_pdfs` y `list_load_soportes` (con `reindex`) se piden como `<método>_async`: devuelven un `job_id` al instante y el progreso se consulta con `job_status` (`job_cancel` los cancela). El trabajo corre en un hilo con su propia conexión SQLite.
+
+Antes: el bucle IPC es estrictamente serial y Nitro cortaba toda petición a los 30 s. Indexar los soportes de un mes son minutos, así que la petición reventaba mientras Python seguía trabajando, su respuesta llegaba a un id que ya nadie esperaba, y todo lo que el usuario tocara entretanto se encolaba detrás y también reventaba. Medido tras el cambio: arrancar el trabajo responde en ~0 ms y el bucle sigue atendiendo peticiones mientras corre.
+
+Los timeouts de `callSidecar` pasan a ser **por método** (`utils/sidecar.ts`), y el temporizador se limpia al resolver. Lo que no tiene techo no se pide de forma síncrona: se pide como trabajo.
+
+---
+
 ## Decisiones pendientes (a tomar más adelante)
 
 - **D-E1-13** ⏸ Behavior de R-V3 cuando IVA = 0 (default actual: skip). Confirmar si lo cambiamos a "marcar excluido" o "tarifa 0%".

@@ -277,3 +277,26 @@ Scrape real (NIT 860002180 → "SEGUROS COMERCIALES BOLIVAR S.A."); upload+parse
 
 ### Fallo de entorno abierto (NO regresión)
 - `test_extracts_expected_cufe[24-02 MOVISTAR …]` falla en esta máquina Windows: el PDF tiene la fuente ofuscada, así que el CUFE solo sale del QR, y `cv2.QRCodeDetector` de `opencv-python-headless` (probado en 4.14 y 5.0, de 150 a 800 dpi) **no decodifica nada**. Pasa en el entorno Linux del dev. Implica que el camino QR — único fallback para Movistar/Claro/Tigo — puede estar roto en el instalador que se entrega, verde en local. **Pendiente: verificar la extracción QR contra el sidecar empaquetado.**
+
+### Sesión 9 (cont.) — los dos refactors que faltaban de la lista
+
+El usuario señaló que el bloque anterior entregó 8 de los 10 hallazgos pedidos más
+cuatro sustitutos elegidos por mí; faltaban el #1 y el #6, que son los grandes.
+
+**#1 — Importes en Decimal (D-075).** Nuevo `money.py`. `excel.py`, `validations.py`
+y `export.py` operan en Decimal; `float` solo queda en los dos bordes (JSON a la UI,
+celda de xlsxwriter). Resultado visible: `Base IVA` pasa de `40463.15789473684` a
+`40463.16` y `Diferencia` de `-1.1578947368398076` a `-1.16` en el Excel que recibe
+el contador. Compatibilidad verificada con cargas viejas (floats en `data_json`).
+
+Nota honesta: la justificación de la revisión ("al cuadrar un mes los errores dejan
+de ser invisibles") **no se sostuvo al medirla** — a esta escala float64 no deriva.
+Lo que sí falla es el redondeo a centavos y la falta de cuantización. El refactor se
+hizo por eso.
+
+**#6 — Trabajos en segundo plano (D-076).** Nuevo `jobs.py` + `useJob.ts` + barra de
+progreso con cancelar en Carga. Verificado contra el sidecar real: arrancar responde
+en 0,000 s y se atendieron 12 peticiones mientras el trabajo corría. Timeouts de
+`callSidecar` por método y temporizador liberado al resolver.
+
+123 tests verdes (eran 84 al empezar la sesión); sigue el fallo de entorno del QR.
