@@ -416,3 +416,29 @@ de dependencias transitivas del sidecar DIAN, que necesita generarse con Python
 
 Pendiente de la revisión, no empezado: un **smoke end-to-end** que arranque la
 aplicación de verdad (parte del #20). Lo que hay cubre lógica pura.
+
+### Sesión 9 (final) — smoke end-to-end (cierra el #20)
+
+`apps/shell/e2e/` con Playwright contra el Electron REAL. 7 tests, ~5 s.
+`npm run e2e` en apps/shell; en CI, job propio en windows-latest.
+
+**Encontró un bug real el primer día**: `utils/sidecar.ts` calculaba la carpeta de
+`apps/core` con un número fijo de `..` desde `process.cwd()`, asumiendo
+`apps/desktop`. Cuando el shell de Electron arranca Nitro el cwd es
+`apps/desktop/.output` y ninguna de las dos rutas candidatas existe: el sidecar
+moría al instante y todo fallaba con "Cannot call write after a stream was
+destroyed". Arreglado en ambos sidecars buscando un marcador hacia arriba (D-094).
+
+También salió que la UI de borrado seguía diciendo **"Eliminar permanentemente"** y
+"Esta acción es irreversible" después de que D-078 la hiciera reversible 30 días.
+Corregido: ahora dice que va a la papelera y cuánto se conserva.
+
+Verificado tras ejecutarlo: el `contab.db` real del usuario conserva el MISMO hash
+md5 que antes, los mtimes de sus empresas no cambiaron, y los temporales se
+borraron solos.
+
+Un detalle de método que conviene recordar: al escribir rutas de Windows en
+`README.md` desde scripts de Python en heredoc, las barras invertidas se comieron
+(`\Scripts\ruff` acabó como `Scripts` + CR + `uff`) y `read_text` convirtió después
+ese CR en un salto de línea. Para rutas con `\`, usar el editor directamente o
+`chr(92)`, no literales dentro de un heredoc.

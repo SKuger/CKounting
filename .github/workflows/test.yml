@@ -82,3 +82,64 @@ jobs:
       - name: Build
         working-directory: apps/desktop
         run: npm run build
+
+  e2e:
+    name: Smoke end-to-end (Electron real)
+    # Windows porque es donde corre el producto, y porque el arranque del sidecar
+    # es justo lo que más se ha roto ahí (rutas del venv, #8 y D-094).
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Instalar Poppler (pdftotext)
+        shell: pwsh
+        run: |
+          $ver = '24.08.0-0'
+          $sha = '58a6f9ae269756231d2f9aa6cba39d75fec6deacaf3c4a50683383b5f3d5a527'
+          curl.exe -L -o poppler.zip "https://github.com/oschwartz10612/poppler-windows/releases/download/v$ver/Release-$ver.zip"
+          $got = (Get-FileHash poppler.zip -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $sha) { throw "Poppler $ver no coincide con el hash fijado." }
+          Expand-Archive poppler.zip -DestinationPath poppler-tmp -Force
+          $bin = (Get-ChildItem poppler-tmp -Recurse -Filter pdftotext.exe | Select-Object -First 1).Directory.FullName
+          echo $bin | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      # El smoke arranca el sidecar con el venv de apps/core, igual que en local.
+      - name: venv del core
+        shell: pwsh
+        working-directory: apps/core
+        run: |
+          python -m venv .venv
+          .venv\Scripts\python.exe -m pip install --upgrade pip
+          .venv\Scripts\python.exe -m pip install -e "."
+
+      - name: Build de Nuxt (lo que sirve el shell)
+        working-directory: apps/desktop
+        run: |
+          npm ci
+          npm run build
+
+      - name: Dependencias del shell
+        working-directory: apps/shell
+        run: npm ci
+
+      - name: Smoke
+        working-directory: apps/shell
+        run: npm run e2e
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: e2e-resultados
+          path: apps/shell/test-results/
+          if-no-files-found: ignore

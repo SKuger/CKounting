@@ -250,8 +250,13 @@ async function confirmDelete() {
   if (!info.value || deleteConfirmNit.value.trim() !== info.value.nit) return
   deleting.value = true
   try {
-    await rpc('delete_empresa', { db_path: dbPath.value, confirm_nit: deleteConfirmNit.value.trim() })
-    toast.success('Empresa eliminada permanentemente')
+    const res = await rpc<{ dias_retencion: number }>('delete_empresa', {
+      db_path: dbPath.value, confirm_nit: deleteConfirmNit.value.trim(),
+    })
+    toast.success(
+      'Empresa eliminada',
+      `Se conserva en la papelera ${res.dias_retencion} días por si hace falta recuperarla.`,
+    )
     await navigateTo('/')
   } catch (exc) {
     toast.error('No se pudo eliminar', humanError(exc))
@@ -488,11 +493,13 @@ watch(dbPath, refresh)
       <DialogContent class="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Eliminar empresa</DialogTitle>
-          <DialogDescription>Confirma la eliminación permanente de esta empresa.</DialogDescription>
+          <DialogDescription>La empresa sale del listado y se guarda en la papelera.</DialogDescription>
         </DialogHeader>
         <div class="flex flex-col gap-3">
-          <div class="rounded-md border border-status-error/30 bg-status-error-bg px-3 py-2 text-sm text-status-error">
-            Esta acción es <strong>irreversible</strong>. Si quieres conservar la información, archiva la empresa o haz backup primero.
+          <!-- D-078: ya NO es irreversible. Decir que lo es era mentir al usuario. -->
+          <div class="rounded-md border border-status-warning/30 bg-status-warning-bg px-3 py-2 text-sm text-status-warning">
+            La empresa se guarda en la <strong>papelera durante 30 días</strong> y después se borra
+            definitivamente. Si quieres conservarla más tiempo, archívala o haz un backup.
           </div>
           <div class="flex flex-col gap-1.5">
             <Label for="del-nit">Escribe el NIT <strong class="text-foreground">{{ info?.nit }}</strong> para confirmar:</Label>
@@ -501,7 +508,7 @@ watch(dbPath, refresh)
         </div>
         <DialogFooter>
           <Button variant="secondary" @click="deleteModalOpen = false">Cancelar</Button>
-          <Button variant="destructive" :disabled="deleting || deleteConfirmNit.trim() !== info?.nit" @click="confirmDelete">{{ deleting ? 'Eliminando…' : 'Eliminar permanentemente' }}</Button>
+          <Button variant="destructive" :disabled="deleting || deleteConfirmNit.trim() !== info?.nit" @click="confirmDelete">{{ deleting ? 'Eliminando…' : 'Enviar a la papelera' }}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
