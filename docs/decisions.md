@@ -374,7 +374,7 @@ Nombre del archivo: `<slug>_<YYYYMMDD-HHMMSS>.contab.zip`.
 - Filename: `faltantes_soporte_load<id>_<timestamp>.xlsx`.
 - Tests: `test_missing_supports_report_has_5_columns`, `test_missing_supports_export_inverts_nc_totals`, `test_missing_supports_errors_when_no_pdfs_folder`.
 
-## D-046 — Reversión de D-045 + override manual por fila para V3 ✅
+## D-046 — ⚠️ SUPERSEDE por D-093 — Reversión de D-045 + override manual por fila para V3 ✅
 **Fecha**: 2026-05-29
 **Decisión**:
 
@@ -811,6 +811,31 @@ La página juntaba seis responsabilidades en 934 líneas y es el archivo que má
 - `useSoportesDelMes` — panel de soportes y re-verificación (D-068).
 
 La página queda con lo que es suyo: la tabla, las validaciones y los overrides. Las dependencias entre piezas van como parámetros explícitos (`alAplicar`, `alReverificar`), no como variables compartidas por estar en el mismo archivo.
+
+---
+
+## D-093 — `Base IVA` usa la tarifa detectada (2026-09-20) · **supersede D-046**
+
+> Cambio de una decisión que estaba marcada como inmutable. **Confirmado explícitamente por el usuario** el 2026-09-20, tras plantearle las tres opciones (detectar la tarifa / renombrar la columna / dejarlo).
+
+`Base IVA = IVA / tarifa detectada` (19% o 5%, la que explique ese IVA dentro de la tolerancia de ±5 pesos). Antes era `IVA / 0.19` **siempre**.
+
+Por qué: las columnas `Base IVA` y `Diferencia` se EXPORTAN al contador. En una factura al 5%, dividir por 0,19 daba una base cinco veces menor de lo debido y una `Diferencia` enorme que no era un descuadre sino ruido:
+
+| | D-046 (antes) | D-093 (ahora) |
+|---|---|---|
+| `Base IVA` | 263.157,89 | 1.000.000,00 |
+| `Diferencia` | 736.842,11 | 0,00 |
+
+*(factura al 5%: base 1.000.000, IVA 50.000)*
+
+La `Diferencia` vuelve a significar «aquí hay algo que no cuadra» en las dos tarifas.
+
+Cuando **ninguna** tarifa cuadra —la fila que V3 marcará como no conforme— se usa el 19% como referencia, para que la `Diferencia` muestre cuánto se aparta del caso general, que es lo útil al revisarla a mano. Una tarifa inventada sigue saltando a la vista.
+
+La detección comparte criterio con V3 (D-072): se compara en espacio de IVA, no dividiendo.
+
+**Efecto en datos existentes**: `_derive_columns` recalcula en cada lectura (D-045 retrofit), así que las cargas ya guardadas muestran los valores nuevos sin necesidad de re-subir nada. Las filas al 19% no cambian.
 
 ---
 

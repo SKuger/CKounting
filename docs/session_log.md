@@ -385,3 +385,34 @@ la columna. El test de idempotencia lo cazó.
 **#30 (D-092)** — `load.vue` de 934 a 722 líneas. Cuatro composables nuevos:
 `useColumnasTabla`, `useExportarFaltantes`, `useRenombrarSoportes` y
 `useSoportesDelMes`. Las dependencias entre piezas van como parámetros explícitos.
+
+### Sesión 9 (final) — #24, con cambio de decisión inmutable
+
+**#24 (D-093, supersede D-046)** — `Base IVA` pasa a usar la tarifa **detectada**
+(19% o 5%) en vez de dividir siempre por 0,19. Planteado al usuario en opción
+múltiple por contradecir una decisión inmutable; eligió detectar la tarifa.
+
+En una factura al 5% (base 1.000.000, IVA 50.000) la columna exportada pasa de
+`Base IVA = 263.157,89 / Diferencia = 736.842,11` a `1.000.000,00 / 0,00`. Si
+ninguna tarifa cuadra se usa el 19% como referencia, para que la Diferencia siga
+destacando la fila en vez de volverse inútil.
+
+Las cargas ya guardadas muestran los valores nuevos sin re-subir nada, porque
+`_derive_columns` recalcula en cada lectura (D-045 retrofit).
+
+Un test existente afirmaba la regla vieja y **pasaba por casualidad**: la muestra
+no tiene facturas al 5%. Reescrito para comprobar la regla, no el caso.
+
+---
+
+## Estado de la revisión al cerrar la sesión 9
+
+Cerrados los **36 hallazgos**. 158 tests de Python + 33 de frontend, ruff limpio,
+typecheck y build verdes.
+
+Abierto a propósito, documentado en `apps/dian-rut/requirements.txt`: el lockfile
+de dependencias transitivas del sidecar DIAN, que necesita generarse con Python
+3.10 (el del build) y no se pudo verificar en esta máquina.
+
+Pendiente de la revisión, no empezado: un **smoke end-to-end** que arranque la
+aplicación de verdad (parte del #20). Lo que hay cubre lógica pura.

@@ -43,19 +43,47 @@ IVA_RATE_GENERAL = Decimal("0.19")
 IVA_TOLERANCE_PESOS = Decimal("5")
 
 
+IVA_RATE_REDUCED = Decimal("0.05")
+
+# Tarifas que se prueban, en orden, para decidir la de la fila (D-093).
+IVA_RATES = (IVA_RATE_GENERAL, IVA_RATE_REDUCED)
+
+
+def detectar_tarifa(iva: Decimal, valor_base: Decimal,
+                    tolerancia: Decimal = IVA_TOLERANCE_PESOS) -> Decimal | None:
+    """La tarifa que explica este IVA, o None si ninguna cuadra.
+
+    Se compara en espacio de IVA (base × tarifa vs IVA), igual que V3 (D-072):
+    dividir amplificaría el redondeo."""
+    for rate in IVA_RATES:
+        if abs(iva - (valor_base * rate)) <= tolerancia:
+            return rate
+    return None
+
+
 def compute_iva_columns(
     iva: Decimal,
     total: Decimal,
     *,
-    rate: Decimal = IVA_RATE_GENERAL,
+    rate: Decimal | None = None,
 ) -> tuple[Decimal, Decimal, Decimal]:
-    """Return the trio (Valor Base, Base IVA, Diferencia) — D-046 (revisa D-045).
+    """Return the trio (Valor Base, Base IVA, Diferencia) — D-093 (supersede D-046).
 
-      Valor Base = Total − IVA              (siempre)
-      Base IVA   = IVA / 0.19               (siempre, salvo IVA = 0 → 0)
-      Diferencia = Valor Base − Base IVA    (literal; 0 cuando la tarifa es 19% exacta)
+      Valor Base = Total − IVA                     (siempre)
+      Base IVA   = IVA / tarifa DETECTADA          (19% o 5%; 0 cuando IVA = 0)
+      Diferencia = Valor Base − Base IVA           (literal)
 
-    Los tres salen cuantizados a centavos: `IVA / 0.19` es periódico y antes se
+    D-046 fijaba `Base IVA = IVA / 0.19` **siempre**. En una factura al 5% eso daba
+    una `Base IVA` cinco veces menor de lo debido y una `Diferencia` enorme que no
+    era un descuadre sino ruido — y ambas columnas se EXPORTAN al contador. Con la
+    tarifa detectada, la `Diferencia` vuelve a significar «aquí hay algo que no
+    cuadra» en las dos tarifas.
+
+    Si ninguna tarifa cuadra (la fila que V3 marcará como no conforme) se usa el
+    19% como referencia: así la `Diferencia` muestra cuánto se aparta del caso
+    general, que es la información útil para revisarla a mano.
+
+    Los tres salen cuantizados a centavos: `IVA / tarifa` es periódico y antes se
     guardaba y exportaba crudo (40463.15789473684) en la columna que ve el contador.
     """
     iva = money.to_money(iva)
@@ -63,7 +91,8 @@ def compute_iva_columns(
     valor_base = money.quantize(total - iva)
     if iva == money.ZERO:
         return valor_base, money.ZERO, money.ZERO
-    base_iva = money.quantize(iva / rate)
+    tarifa = rate or detectar_tarifa(iva, valor_base) or IVA_RATE_GENERAL
+    base_iva = money.quantize(iva / tarifa)
     return valor_base, base_iva, money.quantize(valor_base - base_iva)
 
 # Order applied to the export (D-014, D-027).
