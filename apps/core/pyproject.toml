@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "ruff>=0.9,<1"]
 build = ["pyinstaller>=6"]  # empaqueta el sidecar (contab-sidecar.spec) para el instalador de escritorio
 
 [project.scripts]
@@ -32,3 +32,33 @@ include = ["contab_core*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+exclude = [".venv", "dist", "build"]
+
+[tool.ruff.lint]
+# Conjunto deliberadamente acotado: reglas que atrapan errores reales, no estilo
+# discutible. La idea es que CI falle solo cuando hay algo que arreglar de verdad.
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes: nombres sin usar, imports muertos, f-strings rotos
+    "I",        # orden de imports
+    "B",        # bugbear: trampas reales (mutable default, except suelto…)
+    "UP",       # pyupgrade
+    "C4",       # comprehensions
+    "SIM",      # simplificaciones seguras
+    "RUF",      # reglas propias de ruff
+]
+ignore = [
+    "E501",     # la longitud la marca formatter/line-length, no un error
+    "B008",     # llamadas en defaults: patrón legítimo en los handlers
+    "SIM105",   # contextlib.suppress no siempre es más claro que try/except
+    # El código y los mensajes están en español (D-009): comillas angulares,
+    # tildes y « » no son "caracteres ambiguos", son el idioma del proyecto.
+    "RUF001", "RUF002", "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]  # los imports dentro de tests van a veces junto al caso

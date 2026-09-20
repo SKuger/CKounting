@@ -25,6 +25,16 @@ def empresas_dir() -> Path:
     return p
 
 
+def papelera_dir() -> Path:
+    """Donde van las empresas borradas antes de desaparecer de verdad (D-078).
+
+    Borrar una empresa es borrar la contabilidad completa de un cliente, con
+    obligación legal de conservación. No puede depender de un clic bien dado."""
+    p = data_dir() / "papelera"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 def program_db_path() -> Path:
     """The program-level DB (contab.db): user, settings, empresa registry.
     Complements D-003 (per-empresa DBs stay isolated); this only holds

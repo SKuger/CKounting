@@ -669,6 +669,50 @@ Los timeouts de `callSidecar` pasan a ser **por método** (`utils/sidecar.ts`), 
 
 ---
 
+## D-077 — El catálogo central se reconcilia en las dos direcciones (2026-09-20)
+
+`program_db.unregister_empresa` saca la fila al borrar, `sync_registry` PURGA las filas cuyo `.db` ya no existe, y `restore_empresa` da de alta la empresa restaurada. Antes `sync_registry` solo añadía y nadie borraba: el catálogo anunciaba empresas inexistentes para siempre, y una restaurada no aparecía hasta el siguiente arranque.
+
+---
+
+## D-078 — Borrar una empresa la manda a la papelera, no al vacío (2026-09-20)
+
+`delete_empresa_file` hace `wal_checkpoint` y **mueve** el `.db` a `<data_dir>/papelera/<sello>_<nombre>.db`; se conserva **30 días** (`PAPELERA_RETENCION_DIAS`) y se purga solo. RPCs `papelera_list` y `papelera_restore` para recuperarlo. Los `-wal`/`-shm` sí se descartan: son estado transitorio y el checkpoint ya volcó su contenido.
+
+Motivo: borrar una empresa es borrar la contabilidad completa de un cliente, con obligación legal de conservación en Colombia. Un `unlink()` irreversible confirmado solo con el NIT es demasiado frágil para eso. La confirmación por NIT se mantiene.
+
+---
+
+## D-079 — Crear una empresa que ya existe es un error, no un éxito (2026-09-20)
+
+`create_empresa` falla si el `.db` ya existe, y también si **el NIT ya está registrado con otra razón social** (que generaría un archivo distinto y dos contabilidades paralelas del mismo contribuyente). Antes `init_empresa_db` era idempotente y el handler devolvía éxito con la razón social ENVIADA aunque la BD conservara la anterior: el usuario creía haber creado una empresa nueva y estaba editando otra.
+
+---
+
+## D-080 — Una dependencia ausente no puede disfrazarse de dato faltante (2026-09-20)
+
+`_pdftotext` lanza `PopplerNoDisponible` cuando falta el binario, en vez de devolver `""` ante cualquier fallo, y `extract_cufes` lo reporta como `status=error` con el motivo real. Nuevo RPC `check_dependencies` para avisar ANTES de procesar.
+
+Antes, 'falta Poppler' y 'este PDF no tiene texto' acababan en el mismo sitio: el usuario veía el mes entero como «sin soporte» y no tenía forma de saber que el problema era una instalación incompleta.
+
+---
+
+## D-081 — El periodo se valida y el mes dominante es determinista (2026-09-20)
+
+`periodo_from_row` comprueba la forma `AAAA-MM` (mes 01–12) antes de devolverla: `_parse_date` deja pasar el texto original cuando no reconoce el formato, así que cortar a ciegas `fe[:7]` producía periodos basura como `'Marzo 2'` — y ese periodo decide contra qué carpeta de soportes se valida el lote.
+
+`_periodo_dominante` usa `Counter` con desempate explícito (gana el mes más antiguo). `max(set(p), key=p.count)` dependía del orden de iteración de un set de strings, que cambia **entre procesos** por el hash aleatorio de Python: verificado que con `PYTHONHASHSEED` 0/1/42/7 daba `2024-03` y con 12345/99999/13 daba `2024-02` para el mismo empate.
+
+---
+
+## D-082 — Linters y tests de frontend en CI (2026-09-20)
+
+- **`ruff`** en `apps/core` con un conjunto acotado (E/W/F/I/B/UP/C4/SIM/RUF) que atrapa errores reales, no estilo discutible. Se ignoran `RUF001/002/003`: el proyecto está escrito en español (D-009) y las tildes y comillas angulares no son «caracteres ambiguos».
+- **`vue-tsc`** contra los dos tsconfig que genera Nuxt (app y servidor). Hacía falta añadir `@types/node`, que no estaba: todo el código de servidor usaba `process`, `Buffer` y `node:*` sin tipos. El primer typecheck encontró 5 errores reales de `possibly undefined`.
+- **`vitest`** para la lógica pura del frontend (composables y utilidades de servidor). Sigue pendiente un smoke end-to-end de la aplicación.
+
+---
+
 ## Decisiones pendientes (a tomar más adelante)
 
 - **D-E1-13** ⏸ Behavior de R-V3 cuando IVA = 0 (default actual: skip). Confirmar si lo cambiamos a "marcar excluido" o "tarifa 0%".

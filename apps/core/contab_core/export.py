@@ -59,7 +59,7 @@ def export_no_conformes(
         sheet.write(0, col_idx, header, header_format)
 
     written = 0
-    for row, reasons in zip(rows, reasons_per_row):
+    for row, reasons in zip(rows, reasons_per_row, strict=False):
         if not reasons:
             continue
         transformed = apply_v2_inversion(row)

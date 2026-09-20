@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
@@ -252,7 +253,7 @@ def load_excel(path: str | Path) -> LoadedExcel:
         try:
             header_row = next(iterator)
         except StopIteration:
-            raise ExcelParseError("Hoja vacía")
+            raise ExcelParseError("Hoja vacía") from None
 
         headers = [str(h).strip() if h is not None else "" for h in header_row]
         missing = [c for c in DIAN_COLUMNS if c not in headers]
@@ -280,12 +281,33 @@ def load_excel(path: str | Path) -> LoadedExcel:
         wb.close()
 
 
+PERIODO_RE = re.compile(r"\d{4}-(?:0[1-9]|1[0-2])")
+
+
+def _periodo_dominante(periodos: list[str]) -> str | None:
+    """El mes más frecuente del lote; en empate gana el más antiguo.
+
+    `max(set(p), key=p.count)` dependía del orden de iteración de un set de
+    strings, que varía entre procesos por el hash aleatorio de Python: el mismo
+    Excel podía quedar en meses distintos en dos cargas. Además era O(n²)."""
+    if not periodos:
+        return None
+    conteo = Counter(periodos)
+    return min(conteo, key=lambda p: (-conteo[p], p))
+
+
 def periodo_from_row(row: dict[str, Any]) -> str | None:
-    """'YYYY-MM' derivado de 'Fecha Emisión' (ISO). None si no se puede."""
+    """'YYYY-MM' derivado de 'Fecha Emisión' (ISO). None si no se puede.
+
+    Se VALIDA la forma antes de devolverlo. `_parse_date` deja pasar el texto
+    original cuando no reconoce el formato, así que cortar a ciegas los 7 primeros
+    caracteres producía periodos basura como 'Marzo 2' — y ese periodo decide
+    contra qué carpeta de soportes se valida el lote."""
     fe = row.get("Fecha Emisión")
-    if isinstance(fe, str) and len(fe) >= 7:
-        return fe[:7]
-    return None
+    if not isinstance(fe, str) or len(fe) < 7:
+        return None
+    candidato = fe[:7]
+    return candidato if PERIODO_RE.fullmatch(candidato) else None
 
 
 def persist_load(conn, source_path: str, loaded: LoadedExcel, periodo: str | None = None) -> int:
@@ -297,7 +319,7 @@ def persist_load(conn, source_path: str, loaded: LoadedExcel, periodo: str | Non
     src = Path(source_path)
     row_periodos = [periodo or periodo_from_row(row) for row in loaded.rows]
     non_null = [p for p in row_periodos if p]
-    load_periodo = periodo or (max(set(non_null), key=non_null.count) if non_null else None)
+    load_periodo = periodo or _periodo_dominante(non_null)
     with transaction(conn):
         cur = conn.execute(
             "INSERT INTO excel_load(source_path, source_name, total_rows, sheet_name, periodo) "

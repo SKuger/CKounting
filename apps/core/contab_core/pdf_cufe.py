@@ -15,9 +15,9 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 import cv2
 import numpy as np
@@ -131,15 +131,52 @@ def _find_cufes_in_text(text: str) -> list[Cufe]:
     return [Cufe(value=candidates[0][1], label=None)]
 
 
-def _pdftotext(pdf_path: Path, layout: bool, timeout: float = 30.0) -> str:
+class PopplerNoDisponible(RuntimeError):
+    """`pdftotext` no está instalado o no se puede ejecutar."""
+
+
+def pdftotext_exe() -> str:
     # Packaged (Windows): CONTAB_PDFTOTEXT points at the bundled Poppler binary (not on PATH).
     # Dev / Linux: fall back to `pdftotext` from PATH.
-    exe = os.environ.get("CONTAB_PDFTOTEXT") or "pdftotext"
-    args = [exe, "-layout" if layout else "-raw", "-enc", "UTF-8", str(pdf_path), "-"]
+    return os.environ.get("CONTAB_PDFTOTEXT") or "pdftotext"
+
+
+def comprobar_pdftotext() -> dict:
+    """¿Está disponible el binario de Poppler? Para avisar ANTES de procesar.
+
+    Sin esto, una dependencia ausente era indistinguible de un PDF sin texto: el
+    usuario veía el mes entero como 'sin soporte' y no tenía forma de saber que
+    el problema era una instalación incompleta (D-080)."""
+    exe = pdftotext_exe()
+    try:
+        r = subprocess.run([exe, "-v"], capture_output=True, timeout=10, check=False)
+    except FileNotFoundError:
+        return {"disponible": False, "ruta": exe,
+                "error": f"No se encontró «{exe}». Contab necesita Poppler (pdftotext) "
+                         "para leer el CUFE de los PDF."}
+    except OSError as exc:
+        return {"disponible": False, "ruta": exe, "error": f"No se pudo ejecutar «{exe}»: {exc}"}
+    salida = (r.stderr or r.stdout or b"").decode("utf-8", errors="replace").strip()
+    return {"disponible": True, "ruta": exe, "version": salida.splitlines()[0] if salida else None,
+            "error": None}
+
+
+def _pdftotext(pdf_path: Path, layout: bool, timeout: float = 30.0) -> str:
+    """Texto del PDF. Lanza PopplerNoDisponible si falta el binario.
+
+    Antes devolvía "" ante CUALQUIER fallo, así que 'falta Poppler' y 'este PDF no
+    tiene texto' acababan en el mismo sitio (D-080)."""
+    args = [pdftotext_exe(), "-layout" if layout else "-raw", "-enc", "UTF-8", str(pdf_path), "-"]
     try:
         result = subprocess.run(args, capture_output=True, timeout=timeout, check=False)
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return ""
+    except FileNotFoundError as exc:
+        raise PopplerNoDisponible(
+            f"No se encontró «{args[0]}». Contab necesita Poppler (pdftotext) para leer "
+            "el CUFE de los PDF. Si instalaste Contab con el instalador, reinstálalo; "
+            "en desarrollo, instala Poppler y asegúrate de que esté en el PATH."
+        ) from exc
+    except subprocess.TimeoutExpired:
+        return ""  # este PDF concreto tardó demasiado; los demás pueden ir bien
     if result.returncode != 0:
         return ""
     return result.stdout.decode("utf-8", errors="replace")
@@ -156,7 +193,7 @@ def _render_page(page, dpi: int) -> np.ndarray | None:
         return None
 
 
-def _decode_qrs_in_image(detector: "cv2.QRCodeDetector", img: np.ndarray) -> list[str]:
+def _decode_qrs_in_image(detector: cv2.QRCodeDetector, img: np.ndarray) -> list[str]:
     """Return all distinct QR payloads decoded in one image."""
     payloads: set[str] = set()
     try:
@@ -249,7 +286,13 @@ def extract_cufes(
                                 error=f"PDF no encontrado: {pdf_path}")
 
     # Pass 1: raw text. Labeled hit → done.
-    text = _pdftotext(pdf_path, layout=False)
+    try:
+        text = _pdftotext(pdf_path, layout=False)
+    except PopplerNoDisponible as exc:
+        # Falta la dependencia, no es culpa del PDF: se reporta como ERROR con el
+        # motivo real en vez de dejar la fila como "sin soporte" (D-080).
+        return ExtractionResult(cufes=[], source="none",
+                                status=EXTRACTION_STATUS_ERROR, error=str(exc))
     cufes = _find_cufes_in_text(text)
     if cufes and cufes[0].label is not None:
         return ExtractionResult(cufes=cufes, source="pdftotext-raw", status=EXTRACTION_STATUS_OK)

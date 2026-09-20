@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 
 import pytest
@@ -31,7 +30,7 @@ def test_persist_and_fetch_load(empresa_db, sample_excel):
         conn.close()
     assert len(fetched) == len(loaded.rows)
     # data_json round-trips with derived columns intact
-    for original, retrieved in zip(loaded.rows, fetched):
+    for original, retrieved in zip(loaded.rows, fetched, strict=False):
         assert retrieved["# de factura"] == original["# de factura"]
         assert abs(retrieved["Valor Base"] - original["Valor Base"]) < 0.01
 

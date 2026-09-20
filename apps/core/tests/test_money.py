@@ -62,7 +62,7 @@ def test_roundtrip_persistir_releer_es_exacto(tmp_path, sample_excel):
         assert isinstance(json.loads(raw["data_json"])["Total"], str)
 
         back = excel.fetch_load_rows(conn, load_id)
-        for original, leido in zip(loaded.rows, back):
+        for original, leido in zip(loaded.rows, back, strict=False):
             for col in excel.MONEY_COLUMNS:
                 assert leido[col] == original[col], f"{col} cambió al ir y volver"
     finally:
@@ -75,7 +75,7 @@ def test_carga_vieja_con_floats_sigue_leyendose(tmp_path):
     storage.init_empresa_db(db, "900181831", "4", "REAL")
     conn = storage.connect(db)
     try:
-        fila = {c: None for c in excel.DIAN_COLUMNS}
+        fila = dict.fromkeys(excel.DIAN_COLUMNS)
         fila.update({
             "Tipo de documento": "Factura electrónica",
             "CUFE/CUDE": "a" * 96, "Prefijo": "FELE", "Folio": "827",

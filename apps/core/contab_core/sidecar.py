@@ -10,29 +10,41 @@ from __future__ import annotations
 import json
 import sys
 import traceback
+from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
+from . import backup as backup_module
+from . import dian_inconsistencias as dian_inc_module
 from . import excel as excel_module
+from . import export as export_module
+from . import jobs as jobs_module
 from . import nit as nit_module
 from . import paths as paths_module
+from . import pdf_cufe as pdf_cufe_module
+from . import program_db as program_db_module
+from . import puc as puc_module
+from . import rename_soportes as rename_module
 from . import storage as storage_module
 from . import validations as validations_module
-from . import export as export_module
-from . import pdf_cufe as pdf_cufe_module
-from . import backup as backup_module
-from . import program_db as program_db_module
-from . import dian_inconsistencias as dian_inc_module
-from . import rename_soportes as rename_module
-from . import puc as puc_module
-from . import jobs as jobs_module
-
 
 # ---------- handlers ----------
 
 def _h_ping(_params: dict) -> dict:
     return {"pong": True}
+
+
+def _h_check_dependencies(_params: dict) -> dict:
+    """Estado de los binarios externos que Contab necesita (D-080).
+
+    Permite avisar ANTES de procesar un mes entero, en vez de que el usuario vea
+    todas las filas como 'sin soporte' sin saber que falta una instalación."""
+    poppler = pdf_cufe_module.comprobar_pdftotext()
+    return {
+        "ok": poppler["disponible"],
+        "pdftotext": poppler,
+    }
 
 
 def _h_list_empresas(params: dict) -> list[dict]:
@@ -87,6 +99,32 @@ def _h_create_empresa(params: dict) -> dict:
     dv = dv or computed_dv
 
     db_path = paths_module.empresa_db_path(body, razon_social)
+
+    # D-079: crear sobre una empresa que ya existe NO puede devolver éxito.
+    # `init_empresa_db` es idempotente, así que antes se adoptaba el .db existente
+    # y se respondía con la razón social ENVIADA aunque la BD conservara la otra:
+    # el usuario creía haber creado una empresa nueva y estaba editando otra.
+    if db_path.exists():
+        existente = storage_module.read_empresa_info(db_path) or {}
+        raise ValueError(
+            f"Ya existe una empresa con ese NIT y esa razón social: "
+            f"{existente.get('nit', body)} · {existente.get('razon_social', razon_social)}. "
+            "Ábrela desde la lista de empresas en vez de crearla de nuevo."
+        )
+
+    # El mismo NIT con otra razón social generaría un archivo distinto y dos
+    # contabilidades paralelas para el mismo contribuyente: hay que avisar.
+    for otra in paths_module.scan_empresa_dbs():
+        try:
+            info_otra = storage_module.read_empresa_info(otra)
+        except Exception:
+            continue
+        if info_otra and nit_module.normalize(info_otra.get("nit") or "") == body:
+            raise ValueError(
+                f"El NIT {body} ya está registrado como «{info_otra.get('razon_social')}». "
+                "Si cambió de nombre, edita la razón social de esa empresa; no crees otra."
+            )
+
     storage_module.init_empresa_db(db_path, body, dv, razon_social)
     try:
         program_db_module.register_empresa(db_path, body, dv, razon_social)
@@ -172,6 +210,18 @@ def _h_delete_empresa(params: dict) -> dict:
     if not isinstance(confirm_nit, str):
         raise ValueError("confirm_nit requerido (string)")
     return backup_module.delete_empresa_file(db_path, confirm_nit)
+
+
+def _h_papelera_list(_params: dict) -> list[dict]:
+    """Qué empresas borradas siguen recuperables y cuántos días les quedan (D-078)."""
+    return backup_module.listar_papelera()
+
+
+def _h_papelera_restore(params: dict) -> dict:
+    archivo = params.get("archivo")
+    if not isinstance(archivo, str) or not archivo.strip():
+        raise ValueError("archivo requerido (string)")
+    return backup_module.restaurar_de_papelera(archivo)
 
 
 def _h_list_pdfs_folder_files(params: dict) -> dict:
@@ -393,7 +443,7 @@ def _h_list_folder_files(params: dict) -> dict:
     """List .xlsx files inside the empresa's default_folder. Each entry is
     flagged with `imported=true` if there is an excel_load whose source_path
     matches the file path verbatim."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     db_path = Path(params["db_path"])
     info = storage_module.read_empresa_info(db_path)
@@ -867,7 +917,7 @@ def _h_puc_import(params: dict) -> dict:
         loaded = puc_module.load_puc(source_path)
     except puc_module.PucParseError:
         raise
-    except Exception as exc:  # noqa: BLE001 — cualquier fallo inesperado → mensaje claro
+    except Exception as exc:
         raise ValueError(
             "No pude leer el Excel de cuentas. Revisa que sea el archivo correcto "
             f"en formato .xlsx. Detalle: {exc}"
@@ -982,6 +1032,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "job_cancel": _h_job_cancel,
     "job_list": _h_job_list,
     "ping": _h_ping,
+    "check_dependencies": _h_check_dependencies,
     "list_empresas": _h_list_empresas,
     "validate_nit": _h_validate_nit,
     "create_empresa": _h_create_empresa,
@@ -994,6 +1045,8 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "backup_empresa": _h_backup_empresa,
     "restore_empresa": _h_restore_empresa,
     "delete_empresa": _h_delete_empresa,
+    "papelera_list": _h_papelera_list,
+    "papelera_restore": _h_papelera_restore,
     "list_pdfs_folder_files": _h_list_pdfs_folder_files,
     "reindex_pdfs": _h_reindex_pdfs,
     "list_load_soportes": _h_list_load_soportes,

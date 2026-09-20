@@ -194,7 +194,7 @@ def test_index_commitea_por_archivo(tmp_path):
 
     folder = tmp_path / "soportes"
     folder.mkdir()
-    muestras = [p for p in sorted(SAMPLES.glob("*.pdf"))][:2]
+    muestras = sorted(SAMPLES.glob("*.pdf"))[:2]
     if len(muestras) < 2:
         pytest.skip("se necesitan 2 PDFs de muestra")
     for m in muestras:
@@ -215,3 +215,54 @@ def test_index_commitea_por_archivo(tmp_path):
             otra.close()
     finally:
         conn.close()
+
+
+# ── #16 — falta de Poppler vs PDF sin texto ─────────────────────────────────
+
+def test_falta_poppler_se_distingue_de_pdf_sin_texto(tmp_path, monkeypatch):
+    """Antes `_pdftotext` devolvía "" ante CUALQUIER fallo, así que una dependencia
+    ausente y un PDF sin texto acababan igual: el usuario veía el mes entero como
+    'sin soporte' sin saber que faltaba una instalación."""
+    from contab_core import pdf_cufe
+
+    src = SAMPLES / "26-02 ANNY CASTANEDA FRA SP144.pdf"
+    if not src.exists():
+        pytest.skip(f"missing sample: {src}")
+    pdf = tmp_path / src.name
+    pdf.write_bytes(src.read_bytes())
+
+    monkeypatch.setenv("CONTAB_PDFTOTEXT", str(tmp_path / "no-existe-pdftotext"))
+
+    with pytest.raises(pdf_cufe.PopplerNoDisponible, match="Poppler"):
+        pdf_cufe._pdftotext(pdf, layout=False)
+
+    res = pdf_cufe.extract_cufes(pdf)
+    assert res.status == pdf_cufe.EXTRACTION_STATUS_ERROR, "debe ser ERROR, no 'sin texto'"
+    assert "Poppler" in (res.error or ""), res.error
+
+
+def test_comprobar_pdftotext_reporta_ausencia(tmp_path, monkeypatch):
+    from contab_core import pdf_cufe
+
+    monkeypatch.setenv("CONTAB_PDFTOTEXT", str(tmp_path / "no-existe"))
+    estado = pdf_cufe.comprobar_pdftotext()
+    assert estado["disponible"] is False
+    assert "Poppler" in estado["error"]
+
+
+def test_comprobar_pdftotext_cuando_si_esta():
+    from contab_core import pdf_cufe
+
+    estado = pdf_cufe.comprobar_pdftotext()
+    if not estado["disponible"]:
+        pytest.skip("pdftotext no está instalado en este entorno")
+    assert estado["error"] is None
+    assert estado["ruta"]
+
+
+def test_check_dependencies_expone_el_estado():
+    from contab_core import sidecar
+
+    res = sidecar._h_check_dependencies({})
+    assert "pdftotext" in res
+    assert res["ok"] == res["pdftotext"]["disponible"]

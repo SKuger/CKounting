@@ -44,12 +44,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
+      - name: ruff
+        working-directory: apps/core
+        run: python -m ruff check .
+
       - name: pytest
         working-directory: apps/core
         run: python -m pytest tests/ -q
 
   frontend:
-    name: Build + typecheck (apps/desktop)
+    name: Tests + typecheck + build (apps/desktop)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -64,8 +68,17 @@ jobs:
         working-directory: apps/desktop
         run: npm ci
 
-      # `nuxt build` falla ante errores de tipo/sintaxis: es el typecheck mínimo
-      # hasta que se añada vue-tsc como paso propio.
+      - name: Tests unitarios (vitest)
+        working-directory: apps/desktop
+        run: npm test
+
+      # vue-tsc con los tsconfig que genera Nuxt: uno para la app (Vue/DOM) y otro
+      # para el servidor (Node). Con el tsconfig genérico el código de servidor
+      # aparecía lleno de falsos "Cannot find name 'process'".
+      - name: Typecheck
+        working-directory: apps/desktop
+        run: npm run typecheck
+
       - name: Build
         working-directory: apps/desktop
         run: npm run build

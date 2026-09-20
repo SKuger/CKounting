@@ -18,12 +18,14 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import time
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from . import paths as paths_module
+from . import program_db as program_db_module
 from . import storage
 
 BACKUP_VERSION = 1
@@ -249,7 +251,7 @@ def restore_empresa(
         excels_restored = 0
         pdfs_restored = 0
         for name in z.namelist():
-            if name == ZIP_DB_NAME or name == ZIP_META_NAME:
+            if name in (ZIP_DB_NAME, ZIP_META_NAME):
                 continue
             if name.startswith(ZIP_EXCELS_PREFIX):
                 excels_dir.mkdir(parents=True, exist_ok=True)
@@ -275,6 +277,15 @@ def restore_empresa(
     storage.set_default_folder(target_db, str(excels_dir) if excels_restored else None)
     storage.set_pdfs_folder(target_db, str(pdfs_dir) if pdfs_restored else None)
 
+    # Alta en el catálogo central (D-077): sin esto la empresa restaurada no
+    # aparecía hasta el siguiente arranque, cuando sync_registry la descubría.
+    try:
+        program_db_module.register_empresa(
+            target_db, nit=nit, dv=meta.get("dv"), razon_social=razon
+        )
+    except Exception:
+        pass
+
     return RestoreResult(
         db_path=str(target_db),
         excels_folder=str(excels_dir) if excels_restored else None,
@@ -286,9 +297,90 @@ def restore_empresa(
     )
 
 
+PAPELERA_RETENCION_DIAS = 30
+
+
+def _sello() -> str:
+    return datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
+def purgar_papelera(dias: int = PAPELERA_RETENCION_DIAS) -> int:
+    """Borra definitivamente lo que lleve más de `dias` en la papelera."""
+    limite = time.time() - dias * 86400
+    borrados = 0
+    for f in paths_module.papelera_dir().glob("*.db"):
+        try:
+            if f.stat().st_mtime < limite:
+                f.unlink()
+                borrados += 1
+        except OSError:
+            continue
+    return borrados
+
+
+def listar_papelera() -> list[dict]:
+    """Qué hay en la papelera y desde cuándo, para poder recuperarlo."""
+    out: list[dict] = []
+    for f in sorted(paths_module.papelera_dir().glob("*.db"), reverse=True):
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        info = None
+        try:
+            info = storage.read_empresa_info(f)
+        except Exception:
+            pass
+        borrado = datetime.fromtimestamp(st.st_mtime)
+        out.append({
+            "archivo": f.name,
+            "ruta": str(f),
+            "nit": (info or {}).get("nit"),
+            "razon_social": (info or {}).get("razon_social"),
+            "borrado_el": borrado.isoformat(timespec="seconds"),
+            "dias_restantes": max(
+                0, PAPELERA_RETENCION_DIAS - int((time.time() - st.st_mtime) // 86400)
+            ),
+            "bytes": st.st_size,
+        })
+    return out
+
+
+def restaurar_de_papelera(archivo: str) -> dict:
+    """Devuelve una empresa de la papelera a la carpeta de empresas."""
+    origen = paths_module.papelera_dir() / Path(archivo).name
+    if not origen.is_file():
+        raise ValueError(f"No está en la papelera: {archivo}")
+    info = storage.read_empresa_info(origen)
+    if info is None:
+        raise ValueError("El archivo de la papelera no es una empresa válida.")
+    slug = paths_module.empresa_slug(info["nit"], info["razon_social"])
+    destino, conflicto = _unique_db_path(paths_module.empresas_dir(), slug)
+    shutil.move(str(origen), str(destino))
+    try:
+        program_db_module.register_empresa(
+            destino, nit=info["nit"], dv=info.get("dv"), razon_social=info["razon_social"]
+        )
+    except Exception:
+        pass  # el catálogo se reconcilia solo en el próximo arranque
+    return {
+        "db_path": str(destino),
+        "nit": info["nit"],
+        "razon_social": info["razon_social"],
+        "conflict_action": conflicto,
+    }
+
+
 def delete_empresa_file(db_path: str | Path, confirm_nit: str) -> dict:
-    """Hard delete: unlink the .db (+ wal/shm sibling files) after confirming
-    the supplied NIT matches the DB's NIT. Caller must close all connections first."""
+    """Borra una empresa moviéndola a la PAPELERA (D-078), no con `unlink`.
+
+    Antes era un borrado duro e irreversible con solo el NIT como confirmación.
+    Ahora el .db se mueve a `<data_dir>/papelera/` y se conserva 30 días, así que
+    un clic equivocado se deshace con `restaurar_de_papelera`. Los archivos
+    -wal/-shm sí se descartan: son estado transitorio, y el checkpoint previo
+    vuelca su contenido al .db.
+
+    Caller must close all connections first."""
     db_path = Path(db_path)
     info = storage.read_empresa_info(db_path)
     if info is None:
@@ -297,9 +389,38 @@ def delete_empresa_file(db_path: str | Path, confirm_nit: str) -> dict:
         raise ValueError(
             f"NIT de confirmación no coincide (recibido {confirm_nit!r}, esperado {info['nit']!r})"
         )
-    deleted = []
-    for sibling in (db_path, db_path.with_suffix(".db-wal"), db_path.with_suffix(".db-shm")):
+
+    # Volcar el WAL al .db para que lo que se mueve esté completo.
+    try:
+        storage.wal_checkpoint(db_path)
+    except Exception:
+        pass
+
+    destino = paths_module.papelera_dir() / f"{_sello()}_{db_path.name}"
+    i = 1
+    while destino.exists():
+        destino = paths_module.papelera_dir() / f"{_sello()}_{i}_{db_path.name}"
+        i += 1
+    shutil.move(str(db_path), str(destino))
+
+    descartados = []
+    for sibling in (db_path.with_suffix(".db-wal"), db_path.with_suffix(".db-shm")):
         if sibling.exists():
             sibling.unlink()
-            deleted.append(sibling.name)
-    return {"deleted": deleted, "nit": info["nit"], "razon_social": info["razon_social"]}
+            descartados.append(sibling.name)
+
+    # El catálogo central deja de anunciar una empresa que ya no está (D-077).
+    try:
+        program_db_module.unregister_empresa(db_path)
+    except Exception:
+        pass
+
+    purgados = purgar_papelera()
+    return {
+        "deleted": [db_path.name, *descartados],
+        "nit": info["nit"],
+        "razon_social": info["razon_social"],
+        "papelera": str(destino),
+        "dias_retencion": PAPELERA_RETENCION_DIAS,
+        "purgados_de_papelera": purgados,
+    }

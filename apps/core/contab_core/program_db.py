@@ -7,7 +7,6 @@ each empresa .db by path — it never mixes empresa data here.
 """
 from __future__ import annotations
 
-import json
 import sqlite3
 from pathlib import Path
 
@@ -203,9 +202,40 @@ def list_registry(include_archived: bool = False) -> list[dict]:
         conn.close()
 
 
+def unregister_empresa(db_path: str | Path) -> bool:
+    """Saca una empresa del catálogo central. Devuelve True si había fila.
+
+    Sin esto, `delete_empresa_file` borraba el .db pero dejaba su fila para
+    siempre: el catálogo seguía anunciando empresas que ya no existen (D-077)."""
+    conn = _conn()
+    try:
+        with storage.transaction(conn):
+            cur = conn.execute("DELETE FROM empresa_registry WHERE db_path = ?", (str(db_path),))
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
 def sync_registry() -> dict:
-    """Register any empresa .db found on disk that isn't in the registry yet.
-    Run at startup so pre-0.1.4 empresas appear in the central catalog. Idempotent."""
+    """Reconcilia el catálogo central con lo que hay en disco: registra los .db
+    nuevos y PURGA las filas cuyo archivo ya no existe (D-077).
+
+    Antes solo añadía, así que el catálogo solo podía divergir hacia arriba."""
+    en_disco = {str(p) for p in paths.scan_empresa_dbs()}
+    purged = 0
+    conn = _conn()
+    try:
+        registradas = [r["db_path"] for r in conn.execute("SELECT db_path FROM empresa_registry")]
+        huerfanas = [p for p in registradas if p not in en_disco and not Path(p).exists()]
+        if huerfanas:
+            with storage.transaction(conn):
+                conn.executemany(
+                    "DELETE FROM empresa_registry WHERE db_path = ?", [(p,) for p in huerfanas]
+                )
+            purged = len(huerfanas)
+    finally:
+        conn.close()
+
     registered = 0
     for db in paths.scan_empresa_dbs():
         info = None
@@ -220,4 +250,4 @@ def sync_registry() -> dict:
             razon_social=(info or {}).get("razon_social"),
         )
         registered += 1
-    return {"registered": registered}
+    return {"registered": registered, "purged": purged}

@@ -334,9 +334,7 @@ def save_account(conn, data: dict[str, Any], *, account_id: int | None = None) -
                 "UPDATE puc_account SET codigo=?, nombre=?, categoria=?, clase=?, relacion_con=?, "
                 "maneja_vencimientos=?, diferencia_fiscal=?, activo=?, nivel_agrupacion=?, nivel=?, "
                 "updated_at=datetime('now') WHERE id=?",
-                tuple(vals[k] for k in ("codigo", "nombre", "categoria", "clase", "relacion_con",
-                                        "maneja_vencimientos", "diferencia_fiscal", "activo",
-                                        "nivel_agrupacion", "nivel")) + (account_id,),
+                (*tuple(vals[k] for k in ("codigo", "nombre", "categoria", "clase", "relacion_con", "maneja_vencimientos", "diferencia_fiscal", "activo", "nivel_agrupacion", "nivel")), account_id),
             ).rowcount
             if not n:
                 raise PucParseError("La cuenta que intentas editar ya no existe.")

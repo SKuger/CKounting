@@ -167,7 +167,7 @@ def rename_soportes(
                 src.rename(dst)
                 it["status"] = "renamed"
                 applied.append(it)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             it["status"], it["reason"] = "error", f"{exc.__class__.__name__}: {exc}"
 
     if applied:
@@ -182,7 +182,7 @@ def rename_soportes(
                 for it in applied:
                     w.writerow([it["new_name"], it["current_name"], it.get("cufe") or "", stamp])
             result["manifest"] = str(manifest_path)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             result["manifest_error"] = f"{exc.__class__.__name__}: {exc}"
 
     result["counts"] = _counts(plan)

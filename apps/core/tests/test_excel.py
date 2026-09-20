@@ -1,4 +1,6 @@
+import os
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -152,3 +154,50 @@ def test_importe_ambiguo_no_se_adivina():
     que puede estar mil veces mal."""
     with pytest.raises(excel.ExcelParseError, match="ambiguo"):
         excel._normalize_row({"Total": "10.000"}, fila=4)
+
+
+# ── #14 — el periodo se valida antes de usarse ──────────────────────────────
+
+def test_periodo_solo_se_deriva_de_una_fecha_iso_valida():
+    """`_parse_date` deja pasar el texto original cuando no reconoce el formato,
+    así que cortar a ciegas fe[:7] producía periodos basura como 'Marzo 2' — y ese
+    periodo decide contra qué carpeta de soportes se valida el lote."""
+    assert excel.periodo_from_row({"Fecha Emisión": "2024-02-26"}) == "2024-02"
+    for basura in ("Marzo 2026", "26/02/2024", "2024-13-01", "2024-00-05", "", None, 20240226):
+        assert excel.periodo_from_row({"Fecha Emisión": basura}) is None, f"{basura!r}"
+
+
+# ── #15 — el mes dominante es determinista ──────────────────────────────────
+
+def test_mes_dominante_por_mayoria():
+    assert excel._periodo_dominante(["2024-03", "2024-02", "2024-02"]) == "2024-02"
+    assert excel._periodo_dominante([]) is None
+
+
+def test_mes_dominante_en_empate_gana_el_mas_antiguo():
+    empate = ["2024-03", "2024-02", "2024-03", "2024-02"]
+    assert excel._periodo_dominante(empate) == "2024-02"
+    assert excel._periodo_dominante(list(reversed(empate))) == "2024-02"
+
+
+def test_mes_dominante_no_depende_del_hash_del_proceso():
+    """El bug original: `max(set(p), key=p.count)` dependía del orden de iteración
+    de un set de strings, que cambia ENTRE PROCESOS por el hash aleatorio de
+    Python. Dentro de un mismo proceso la semilla es fija, así que repetir la
+    llamada en bucle no probaría nada: hay que lanzar procesos con semillas
+    distintas."""
+    import subprocess
+    import sys
+
+    codigo = (
+        "from contab_core.excel import _periodo_dominante;"
+        "print(_periodo_dominante(['2024-03','2024-02','2024-03','2024-02']))"
+    )
+    resultados = set()
+    for semilla in ("0", "1", "42", "12345", "99999"):
+        env = {**os.environ, "PYTHONHASHSEED": semilla}
+        r = subprocess.run([sys.executable, "-c", codigo], capture_output=True,
+                           text=True, env=env, cwd=str(Path(__file__).resolve().parents[1]))
+        assert r.returncode == 0, r.stderr
+        resultados.add(r.stdout.strip())
+    assert resultados == {"2024-02"}, f"el mes elegido varió entre procesos: {resultados}"
