@@ -9,6 +9,9 @@ from typing import Iterator
 
 SCHEMA_VERSION = 1
 
+# Cuánto espera una escritura a que se libere el lock antes de rendirse (ms).
+BUSY_TIMEOUT_MS = 5_000
+
 # Single source of truth for the empresa.db schema in E1.
 SCHEMA_SQL = """
 PRAGMA journal_mode = WAL;
@@ -179,6 +182,10 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path, isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # Sin esto, cualquier escritura que coincida con otra en curso falla al instante
+    # con "database is locked" en vez de esperar su turno. Con WAL y varias
+    # conexiones (indexado + consulta) es un choque normal, no un error.
+    conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
     return conn
 
 

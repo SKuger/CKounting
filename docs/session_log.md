@@ -253,3 +253,27 @@ Scrape real (NIT 860002180 → "SEGUROS COMERCIALES BOLIVAR S.A."); upload+parse
 - **Backend**: `puc.py` (`load_puc` parsea preámbulo empresa/NIT + tabla + pie; `persist_puc` upsert por código = fusionar; CRUD manual; `export_puc`). Tablas `puc_account` (con `fuente` dump/manual, `archived`, `nivel` derivado de la longitud del código) y `puc_import` (historial). 6 RPCs. Endpoint `upload-puc` (vista previa dry-run). **Bloqueo por NIT** del encabezado.
 - **Front**: página `/puc` (tabla con indentado por nivel, filtros clase/nivel/estado, buscador, subir dump con preview, CRUD, export), card en `empresa.vue`, nav match.
 - **Verificado**: dump real de 885 cuentas (REAL Seguros), NIT 900181831, merge sin duplicar, bloqueo por NIT distinto. 12 tests nuevos; 91/91 verdes. Probado en vivo por el usuario.
+
+---
+
+## Sesión 9 — 2026-09-20: Revisión crítica + primer bloque de correcciones
+
+**Resultado**: revisión completa del repo (core Python, capa servidor Nuxt, shell Electron, CI, empaquetado) y los 10 arreglos de mayor prioridad. Rama `fix/revision-bloque-1`. 108/108 tests verdes salvo un fallo de entorno preexistente (ver abajo).
+
+### Correcciones aplicadas
+1. **CI que corre los tests** (`.github/workflows/test.yml`) — antes el único workflow era el de release por tag: los tests no corrían nunca en push/PR.
+2. **Contrato único de error en la API** (D-071). `/api/rpc` y los 4 endpoints de subida devuelven SIEMPRE 200 con `{ok:true|false}`. Con 500, `$fetch` lanzaba antes de que `useRpc` leyera el cuerpo y todos los mensajes en español del sidecar se perdían tras un "FetchError: 500".
+3. **V3 compara en espacio de IVA** (D-072), no dividiendo por la tarifa: la tolerancia de ±5 pesos equivalía a ±0,25 de IVA al 5% y marcaba como no conformes facturas correctas con el IVA redondeado al peso.
+4. **El índice de soportes purga los PDFs borrados**: antes el CUFE de un soporte eliminado seguía en el índice y V1 daba la fila por respaldada.
+5. **Arranque en Windows**: `resolvePythonBin` (core y DIAN) busca `.venv\Scripts\python.exe`; solo probaba el layout POSIX y caía a `python3`, que en Windows no existe.
+6. **SQLite**: `PRAGMA busy_timeout` + COMMIT por archivo en `index_folder` (antes una sola transacción envolvía minutos de extracción; morir a mitad tiraba todo).
+7. **Build reproducible**: `requirements.txt` del sidecar DIAN con versiones fijas, cotas superiores en `pyproject.toml`, `package-lock.json` en `apps/shell`, `npm ci`, y **checksum SHA256 verificado de Poppler** antes de empaquetarlo.
+8. **Un importe ilegible ya no se vuelve 0** (D-073): `_to_number` distingue vacío (→0) de ininterpretable (→error con fila y columna), y **se niega a adivinar** formatos ambiguos como `"10.000"`.
+9. **Rutas de datos unificadas** (`server/utils/uploads.ts`): Node usaba `~/.local/share/Contab` (XDG) en un producto Windows mientras Python usaba `%APPDATA%\Contab`. De paso se eliminó la triplicación de `safeFilename`/`timestamp`, se añadió límite de tamaño de subida y se borra el archivo si la importación falla.
+10. **Travesía de rutas al restaurar** (D-074): el `nit` del `meta.json` de un backup se interpolaba crudo en el nombre del archivo; ahora se reduce a dígitos y el destino se verifica contenido en la carpeta de empresas.
+
+### Extra (encontrado durante el trabajo, no estaba en la lista)
+- **Los tests escribían en los datos REALES del usuario en Windows.** Aislaban con `XDG_DATA_HOME`, que `paths.data_dir()` solo consulta en Linux; en win32 operaban sobre `%APPDATA%\Contab` — incluyendo los tests que archivan y **borran** empresas. `conftest.py` ahora parchea `paths.data_dir` (independiente del SO) en un fixture autouse.
+
+### Fallo de entorno abierto (NO regresión)
+- `test_extracts_expected_cufe[24-02 MOVISTAR …]` falla en esta máquina Windows: el PDF tiene la fuente ofuscada, así que el CUFE solo sale del QR, y `cv2.QRCodeDetector` de `opencv-python-headless` (probado en 4.14 y 5.0, de 150 a 800 dpi) **no decodifica nada**. Pasa en el entorno Linux del dev. Implica que el camino QR — único fallback para Movistar/Claro/Tigo — puede estar roto en el instalador que se entrega, verde en local. **Pendiente: verificar la extracción QR contra el sidecar empaquetado.**

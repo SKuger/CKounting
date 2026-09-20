@@ -292,6 +292,7 @@ class IndexStats:
     total_pdfs: int = 0
     indexed_now: int = 0
     cached: int = 0
+    pruned: int = 0                 # entradas de PDFs que ya no están en la carpeta
     failed: list[str] = None        # type: ignore
     no_cufe: list[str] = None       # type: ignore
 
@@ -307,16 +308,28 @@ class IndexStats:
             "total_pdfs": self.total_pdfs,
             "indexed_now": self.indexed_now,
             "cached": self.cached,
+            "pruned": self.pruned,
             "failed": self.failed,
             "no_cufe": self.no_cufe,
         }
 
 
 def index_folder(conn, folder: str | Path) -> IndexStats:
-    """Incrementally index every PDF in folder. Caller manages transactions.
+    """Incrementally index every PDF in folder.
     Re-extracts only when (mtime, size) changed or the PDF is new.
 
+    Transacciones: COMMIT por archivo (no una sola que envuelva toda la carpeta).
+    Extraer un mes de soportes son minutos de pdftotext + render + QR; con una
+    transacción única, morir en el PDF 79 de 80 tiraba TODO el trabajo por rollback
+    y mantenía el bloqueo de escritura abierto mientras tanto.
+
+    Al terminar purga las entradas de PDFs que ya no están en la carpeta: si no,
+    `get_indexed_cufes` seguiría devolviendo el CUFE de un soporte borrado y V1
+    daría por respaldada una fila que ya no tiene soporte.
+
     Uses tables pdf_cufe_index + pdf_cufe_value created in storage.SCHEMA_SQL."""
+    from .storage import transaction
+
     folder = Path(folder).resolve()
     stats = IndexStats(folder=str(folder))
     if not folder.is_dir():
@@ -327,9 +340,11 @@ def index_folder(conn, folder: str | Path) -> IndexStats:
         key=lambda p: p.name.lower(),
     )
     stats.total_pdfs = len(pdfs)
+    present: set[str] = set()
 
     for pdf_path in pdfs:
         full = str(pdf_path.resolve())
+        present.add(full)
         try:
             st = pdf_path.stat()
         except OSError as exc:
@@ -350,32 +365,59 @@ def index_folder(conn, folder: str | Path) -> IndexStats:
                 stats.no_cufe.append(pdf_path.name)
             continue
 
-        # Stale / new entry → re-extract.
+        # Stale / new entry → re-extract. La extracción va FUERA de la transacción:
+        # es la parte lenta y no toca la BD.
         result = extract_cufes(pdf_path)
-        conn.execute(
-            "DELETE FROM pdf_cufe_index WHERE folder_path = ? AND pdf_path = ?",
-            (str(folder), full),
-        )
-        cur = conn.execute(
-            "INSERT INTO pdf_cufe_index"
-            " (folder_path, pdf_path, pdf_mtime, pdf_size_bytes, extraction_status, extraction_error, extractor_version)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (str(folder), full, mtime, size, result.status, result.error, EXTRACTOR_VERSION),
-        )
-        idx_id = cur.lastrowid
-        if result.cufes:
-            conn.executemany(
-                "INSERT OR IGNORE INTO pdf_cufe_value(pdf_index_id, cufe_cude, label)"
-                " VALUES (?, ?, ?)",
-                [(idx_id, c.value, c.label) for c in result.cufes],
+        with transaction(conn):
+            conn.execute(
+                "DELETE FROM pdf_cufe_index WHERE folder_path = ? AND pdf_path = ?",
+                (str(folder), full),
             )
+            cur = conn.execute(
+                "INSERT INTO pdf_cufe_index"
+                " (folder_path, pdf_path, pdf_mtime, pdf_size_bytes, extraction_status, extraction_error, extractor_version)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (str(folder), full, mtime, size, result.status, result.error, EXTRACTOR_VERSION),
+            )
+            idx_id = cur.lastrowid
+            if result.cufes:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO pdf_cufe_value(pdf_index_id, cufe_cude, label)"
+                    " VALUES (?, ?, ?)",
+                    [(idx_id, c.value, c.label) for c in result.cufes],
+                )
         if result.status == EXTRACTION_STATUS_ERROR:
             stats.failed.append(f"{pdf_path.name}: {result.error or 'error'}")
         elif result.status != EXTRACTION_STATUS_OK:
             stats.no_cufe.append(pdf_path.name)
         stats.indexed_now += 1
 
+    stats.pruned = _prune_missing(conn, folder, present)
     return stats
+
+
+def _prune_missing(conn, folder: Path, present: set[str]) -> int:
+    """Borra del índice los PDFs que ya no están en la carpeta. Devuelve cuántos.
+
+    ON DELETE CASCADE se lleva sus pdf_cufe_value, así que el CUFE de un soporte
+    eliminado deja de contar como respaldo en V1."""
+    from .storage import transaction
+
+    known = [
+        r["pdf_path"]
+        for r in conn.execute(
+            "SELECT pdf_path FROM pdf_cufe_index WHERE folder_path = ?", (str(folder),)
+        ).fetchall()
+    ]
+    gone = [p for p in known if p not in present]
+    if not gone:
+        return 0
+    with transaction(conn):
+        conn.executemany(
+            "DELETE FROM pdf_cufe_index WHERE folder_path = ? AND pdf_path = ?",
+            [(str(folder), p) for p in gone],
+        )
+    return len(gone)
 
 
 def get_indexed_cufes(conn, folder: str | Path) -> set[str]:

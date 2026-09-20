@@ -31,13 +31,19 @@ export function dianBaseUrl(): string {
 
 function resolvePythonBin(): string {
   if (process.env.DIAN_PYTHON) return process.env.DIAN_PYTHON
+  // Mismo criterio que utils/sidecar.ts: el layout del venv depende del SO.
+  const isWin = process.platform === 'win32'
+  const venvRel = isWin ? ['Scripts', 'python.exe'] : ['bin', 'python']
   // apps/desktop is the Nuxt cwd; the venv lives at ../dian-rut/.venv.
-  const candidates = [
-    resolve(process.cwd(), '..', 'dian-rut', '.venv', 'bin', 'python'),
-    resolve(process.cwd(), '..', '..', 'apps', 'dian-rut', '.venv', 'bin', 'python'),
+  const roots = [
+    resolve(process.cwd(), '..', 'dian-rut', '.venv'),
+    resolve(process.cwd(), '..', '..', 'apps', 'dian-rut', '.venv'),
   ]
-  for (const c of candidates) if (existsSync(c)) return c
-  return 'python3'
+  for (const root of roots) {
+    const candidate = resolve(root, ...venvRel)
+    if (existsSync(candidate)) return candidate
+  }
+  return isWin ? 'python' : 'python3'
 }
 
 function dianCwd(): string {

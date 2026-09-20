@@ -62,6 +62,12 @@ MEDIO_PAGO_LABELS: dict[str, str] = {
 _WS_RE = re.compile(r"\s+")
 _DATE_RE = re.compile(r"^\s*(\d{1,2})-(\d{1,2})-(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?\s*$")
 
+# Importes escritos como texto. Solo se aceptan formas SIN ambigüedad (ver _to_number).
+_CO_DECIMAL_RE = re.compile(r"[+-]?\d{1,3}(?:\.\d{3})*,\d+|[+-]?\d+,\d+")  # 1.234,56 · 1234,56
+_THOUSANDS_RE = re.compile(r"[+-]?\d{1,3}(?:\.\d{3}){2,}")                  # 1.234.567
+_AMBIGUOUS_RE = re.compile(r"[+-]?\d{1,3}\.\d{3}")                          # 10.000 → ¿miles o decimal?
+_PLAIN_RE = re.compile(r"[+-]?\d+(?:\.\d+)?")                               # 1234 · 1234.56
+
 
 class ExcelParseError(Exception):
     pass
@@ -113,14 +119,41 @@ def _parse_date(value: Any) -> str | None:
 
 
 def _to_number(value: Any) -> float | int | None:
-    if value is None or value == "":
+    """None = celda VACÍA (ausencia legítima → 0). Un valor presente pero
+    ininterpretable levanta ValueError: nunca debe colapsarse al mismo 0."""
+    if value is None:
         return None
+    if isinstance(value, bool):
+        raise ValueError(f"valor booleano en columna numérica: {value!r}")
     if isinstance(value, (int, float)):
         return value
-    try:
-        return float(value)
-    except (TypeError, ValueError):
+    s = str(value).strip()
+    if not s:
         return None
+    # Importe en texto. openpyxl entrega números como números, así que esto es el
+    # camino raro — y en dinero NO se adivina: solo se aceptan formas sin ambigüedad.
+    cleaned = s.replace("$", "").replace("\xa0", "").replace(" ", "")
+    if cleaned.startswith("(") and cleaned.endswith(")"):  # contabilidad: (123) = -123
+        cleaned = "-" + cleaned[1:-1]
+
+    if "," in cleaned:
+        # La coma marca el decimal (es-CO) → el punto solo puede ser de miles.
+        if _CO_DECIMAL_RE.fullmatch(cleaned):
+            return float(cleaned.replace(".", "").replace(",", "."))
+        raise ValueError(f"formato numérico no reconocido: {value!r}")
+    if _THOUSANDS_RE.fullmatch(cleaned):
+        # Dos o más grupos ("1.234.567") solo pueden ser miles.
+        return float(cleaned.replace(".", ""))
+    if _AMBIGUOUS_RE.fullmatch(cleaned):
+        # "10.000" puede ser diez mil (es-CO) o diez con tres decimales (en-US).
+        # Equivocarse son tres órdenes de magnitud en un importe: mejor parar.
+        raise ValueError(
+            f"{value!r} es ambiguo: no se sabe si el punto separa miles o decimales. "
+            "Corrige la columna en el Excel (dale formato de número) y vuelve a subirlo"
+        )
+    if _PLAIN_RE.fullmatch(cleaned):
+        return float(cleaned)
+    raise ValueError(f"no se pudo interpretar como número: {value!r}")
 
 
 def is_nota_credito(tipo: Any) -> bool:
@@ -129,8 +162,10 @@ def is_nota_credito(tipo: Any) -> bool:
     return tipo.lower().lstrip().startswith(NC_TIPO_PREFIX)
 
 
-def _normalize_row(raw: dict[str, Any]) -> dict[str, Any]:
-    """Apply column-specific coercion. The result is what we persist."""
+def _normalize_row(raw: dict[str, Any], fila: int = 0) -> dict[str, Any]:
+    """Apply column-specific coercion. The result is what we persist.
+    `fila` es el número de fila del Excel (1-based, contando el encabezado) y solo
+    se usa para que el error diga dónde está el problema."""
     out: dict[str, Any] = {}
     for col in DIAN_COLUMNS:
         v = raw.get(col)
@@ -148,7 +183,16 @@ def _normalize_row(raw: dict[str, Any]) -> dict[str, Any]:
             out[col] = _parse_date(v)
         else:
             # numeric column (impuestos / retenciones / Total)
-            n = _to_number(v)
+            try:
+                n = _to_number(v)
+            except ValueError as exc:
+                # Vacío → 0 es legítimo. Ilegible → error: un importe mal leído que
+                # se guarda como 0 pasa V3 en silencio (IVA=0 se omite) y descuadra
+                # el reporte sin que nadie lo note.
+                raise ExcelParseError(
+                    f"Fila {fila}: la columna «{col}» trae un valor que no es un número "
+                    f"({v!r}). Revisa el archivo: {exc}"
+                ) from None
             out[col] = n if n is not None else 0
     return out
 
@@ -199,14 +243,14 @@ def load_excel(path: str | Path) -> LoadedExcel:
 
         col_index = {h: i for i, h in enumerate(headers)}
         rows: list[dict[str, Any]] = []
-        for data in iterator:
+        for fila, data in enumerate(iterator, start=2):  # 1 es el encabezado
             if data is None or all(c is None for c in data):
                 continue
             raw = {
                 col: (data[col_index[col]] if col_index[col] < len(data) else None)
                 for col in DIAN_COLUMNS
             }
-            normalized = _normalize_row(raw)
+            normalized = _normalize_row(raw, fila=fila)
             normalized.update(_derive_columns(normalized))
             rows.append(normalized)
 

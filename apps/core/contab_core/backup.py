@@ -185,10 +185,21 @@ def _disambiguate(name: str, seen: set[str]) -> str:
         i += 1
 
 
+def _assert_dentro_de(base: Path, candidate: Path) -> Path:
+    """Defensa en profundidad: el destino de un restore debe quedar DENTRO de la
+    carpeta de empresas. El slug ya sanea el NIT (paths.empresa_slug), pero el
+    meta.json viene de un archivo externo y esto no debe depender de una sola capa."""
+    base_r = base.resolve()
+    cand_r = (base_r / candidate.name).resolve() if candidate.name else base_r
+    if cand_r.parent != base_r:
+        raise ValueError("Backup inválido: la ruta de destino se sale de la carpeta de empresas.")
+    return cand_r
+
+
 def _unique_db_path(empresas_dir: Path, slug: str) -> tuple[Path, str | None]:
     """Return a (path, conflict_action) tuple. Tries the natural slug first; if
     occupied, appends _restored[_N]."""
-    natural = empresas_dir / f"{slug}.db"
+    natural = _assert_dentro_de(empresas_dir, empresas_dir / f"{slug}.db")
     if not natural.exists():
         return natural, None
     suffix = "_restored"

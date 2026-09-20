@@ -255,8 +255,8 @@ def _h_reindex_pdfs(params: dict) -> dict:
 
     conn = storage_module.connect(db_path)
     try:
-        with storage_module.transaction(conn):
-            stats = pdf_cufe_module.index_folder(conn, folder)
+        # index_folder hace COMMIT por archivo: no envolverlo en una transacción.
+        stats = pdf_cufe_module.index_folder(conn, folder)
     finally:
         conn.close()
     return {"folder": stats.folder, "stats": stats.to_dict(), "error": None}
@@ -289,11 +289,11 @@ def _h_list_load_soportes(params: dict) -> dict:
                     "reindexed": False, "error": f"La carpeta de soportes no existe: {folder_path}"}
 
         if reindex:
-            with storage_module.transaction(conn):
-                if force:
+            if force:
+                with storage_module.transaction(conn):
                     conn.execute("DELETE FROM pdf_cufe_index WHERE folder_path = ?",
                                  (str(folder_path.resolve()),))
-                pdf_cufe_module.index_folder(conn, folder_path)
+            pdf_cufe_module.index_folder(conn, folder_path)
 
         indexed_by_path = {r["pdf_path"]: r for r in pdf_cufe_module.list_indexed_pdfs(conn, folder_path)}
     finally:
@@ -510,8 +510,7 @@ def _index_folder_cufes(conn, folder: str | None) -> tuple[set[str] | None, dict
     folder_path = Path(folder)
     if not folder_path.is_dir():
         return set(), {"folder": str(folder_path), "missing": True}
-    with storage_module.transaction(conn):
-        stats = pdf_cufe_module.index_folder(conn, folder_path)
+    stats = pdf_cufe_module.index_folder(conn, folder_path)
     cufes = pdf_cufe_module.get_indexed_cufes(conn, folder_path)
     return cufes, stats.to_dict()
 
