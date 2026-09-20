@@ -1,6 +1,8 @@
+from decimal import Decimal
+
 import pytest
 
-from contab_core import excel
+from contab_core import excel, money
 
 
 def test_loads_sample(sample_excel):
@@ -22,8 +24,8 @@ def test_diferencia_near_zero_when_iva_at_19pct(sample_excel):
     loaded = excel.load_excel(sample_excel)
     for row in loaded.rows:
         if row["# de factura"] == "FELE-827":
-            assert abs(row["Valor Base"] - 40462) < 1
-            assert abs(row["Base IVA"] - (7688 / 0.19)) < 1
+            assert abs(row["Valor Base"] - Decimal("40462")) < 1
+            assert abs(row["Base IVA"] - money.quantize(Decimal("7688") / Decimal("0.19"))) < 1
             assert abs(row["Diferencia"]) < 5
             return
     raise AssertionError("FELE-827 missing from sample")
@@ -34,8 +36,9 @@ def test_base_iva_always_iva_over_19pct(sample_excel):
     'pegar a Valor Base' from D-045 was reverted."""
     loaded = excel.load_excel(sample_excel)
     for row in loaded.rows:
-        if row["IVA"] != 0:
-            assert abs(row["Base IVA"] - (row["IVA"] / 0.19)) < 0.01
+        if row["IVA"] != money.ZERO:
+            esperado = money.quantize(row["IVA"] / Decimal("0.19"))
+            assert row["Base IVA"] == esperado, "Base IVA es IVA/0.19 cuantizado a centavos"
 
 
 def test_diferencia_is_valor_base_minus_base_iva(sample_excel):
@@ -121,7 +124,7 @@ def test_whitespace_trimmed_in_razon_social(sample_excel):
 def test_celda_numerica_vacia_es_cero():
     """Ausencia legítima → 0 (el comportamiento de siempre)."""
     row = excel._normalize_row({"IVA": None, "Total": 1000}, fila=2)
-    assert row["IVA"] == 0 and row["Total"] == 1000
+    assert row["IVA"] == money.ZERO and row["Total"] == Decimal("1000.00")
 
 
 def test_importe_ilegible_falla_en_vez_de_volverse_cero():
@@ -138,8 +141,8 @@ def test_importe_ilegible_falla_en_vez_de_volverse_cero():
 def test_importe_en_texto_formato_colombiano():
     """'1.234,56' es 1234.56, no un error ni un 0."""
     row = excel._normalize_row({"IVA": "1.234,56", "Total": "$ 1.234.567"}, fila=2)
-    assert row["IVA"] == pytest.approx(1234.56)
-    assert row["Total"] == pytest.approx(1234567.0)
+    assert row["IVA"] == Decimal("1234.56")
+    assert row["Total"] == Decimal("1234567.00")
 
 
 def test_importe_ambiguo_no_se_adivina():

@@ -5,10 +5,13 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 from openpyxl import load_workbook
+
+from . import money
 
 # The 32 expected DIAN columns, in original order.
 DIAN_COLUMNS: list[str] = [
@@ -24,27 +27,43 @@ DIAN_COLUMNS: list[str] = [
 
 DERIVED_COLUMNS: list[str] = ["# de factura", "Valor Base", "Base IVA", "Diferencia"]
 
-IVA_RATE_GENERAL = 0.19
-IVA_TOLERANCE_PESOS = 5.0
+# Columnas que llevan IMPORTES (D-075): se manejan en Decimal de punta a punta.
+# Son todas las de DIAN_COLUMNS que no son texto ni fecha, más las derivadas.
+MONEY_COLUMNS: frozenset[str] = frozenset({
+    "IVA", "ICA", "IC", "INC", "Timbre", "INC Bolsas",
+    "IN Carbono", "IN Combustibles", "IC Datos", "ICL",
+    "INPP", "IBUA", "ICUI",
+    "Rete IVA", "Rete Renta", "Rete ICA",
+    "Total",
+    "Valor Base", "Base IVA", "Diferencia",
+})
+
+IVA_RATE_GENERAL = Decimal("0.19")
+IVA_TOLERANCE_PESOS = Decimal("5")
 
 
 def compute_iva_columns(
-    iva: float,
-    total: float,
+    iva: Decimal,
+    total: Decimal,
     *,
-    rate: float = IVA_RATE_GENERAL,
-) -> tuple[float, float, float]:
+    rate: Decimal = IVA_RATE_GENERAL,
+) -> tuple[Decimal, Decimal, Decimal]:
     """Return the trio (Valor Base, Base IVA, Diferencia) — D-046 (revisa D-045).
 
       Valor Base = Total − IVA              (siempre)
       Base IVA   = IVA / 0.19               (siempre, salvo IVA = 0 → 0)
       Diferencia = Valor Base − Base IVA    (literal; 0 cuando la tarifa es 19% exacta)
+
+    Los tres salen cuantizados a centavos: `IVA / 0.19` es periódico y antes se
+    guardaba y exportaba crudo (40463.15789473684) en la columna que ve el contador.
     """
-    valor_base = total - iva
-    if iva == 0:
-        return valor_base, 0.0, 0.0
-    base_iva = iva / rate
-    return valor_base, base_iva, valor_base - base_iva
+    iva = money.to_money(iva)
+    total = money.to_money(total)
+    valor_base = money.quantize(total - iva)
+    if iva == money.ZERO:
+        return valor_base, money.ZERO, money.ZERO
+    base_iva = money.quantize(iva / rate)
+    return valor_base, base_iva, money.quantize(valor_base - base_iva)
 
 # Order applied to the export (D-014, D-027).
 EXPORT_ORDER: list[str] = DIAN_COLUMNS + DERIVED_COLUMNS + ["razon_falla"]
@@ -118,15 +137,17 @@ def _parse_date(value: Any) -> str | None:
     return iso
 
 
-def _to_number(value: Any) -> float | int | None:
+def _to_number(value: Any) -> Decimal | None:
     """None = celda VACÍA (ausencia legítima → 0). Un valor presente pero
-    ininterpretable levanta ValueError: nunca debe colapsarse al mismo 0."""
+    ininterpretable levanta ValueError: nunca debe colapsarse al mismo 0.
+
+    Devuelve Decimal cuantizado a centavos (D-075)."""
     if value is None:
         return None
     if isinstance(value, bool):
         raise ValueError(f"valor booleano en columna numérica: {value!r}")
-    if isinstance(value, (int, float)):
-        return value
+    if isinstance(value, (int, float, Decimal)):
+        return money.to_money(value)
     s = str(value).strip()
     if not s:
         return None
@@ -139,11 +160,11 @@ def _to_number(value: Any) -> float | int | None:
     if "," in cleaned:
         # La coma marca el decimal (es-CO) → el punto solo puede ser de miles.
         if _CO_DECIMAL_RE.fullmatch(cleaned):
-            return float(cleaned.replace(".", "").replace(",", "."))
+            return money.to_money(cleaned.replace(".", "").replace(",", "."))
         raise ValueError(f"formato numérico no reconocido: {value!r}")
     if _THOUSANDS_RE.fullmatch(cleaned):
         # Dos o más grupos ("1.234.567") solo pueden ser miles.
-        return float(cleaned.replace(".", ""))
+        return money.to_money(cleaned.replace(".", ""))
     if _AMBIGUOUS_RE.fullmatch(cleaned):
         # "10.000" puede ser diez mil (es-CO) o diez con tres decimales (en-US).
         # Equivocarse son tres órdenes de magnitud en un importe: mejor parar.
@@ -152,7 +173,7 @@ def _to_number(value: Any) -> float | int | None:
             "Corrige la columna en el Excel (dale formato de número) y vuelve a subirlo"
         )
     if _PLAIN_RE.fullmatch(cleaned):
-        return float(cleaned)
+        return money.to_money(cleaned)
     raise ValueError(f"no se pudo interpretar como número: {value!r}")
 
 
@@ -193,7 +214,7 @@ def _normalize_row(raw: dict[str, Any], fila: int = 0) -> dict[str, Any]:
                     f"Fila {fila}: la columna «{col}» trae un valor que no es un número "
                     f"({v!r}). Revisa el archivo: {exc}"
                 ) from None
-            out[col] = n if n is not None else 0
+            out[col] = n if n is not None else money.ZERO
     return out
 
 
@@ -201,12 +222,12 @@ def _derive_columns(row: dict[str, Any]) -> dict[str, Any]:
     """# de factura / Valor Base / Base IVA / Diferencia — calculated from raw
     (non-V2) values (D-024, D-029, D-045). V2 inversion is applied only at
     evaluation / export time."""
-    iva = _to_number(row.get("IVA")) or 0
-    total = _to_number(row.get("Total")) or 0
+    iva = _to_number(row.get("IVA")) or money.ZERO
+    total = _to_number(row.get("Total")) or money.ZERO
     prefijo = row.get("Prefijo") or ""
     folio = row.get("Folio") or ""
     numero = f"{prefijo}-{folio}" if (prefijo or folio) else ""  # D-030
-    valor_base, base_iva, diferencia = compute_iva_columns(float(iva), float(total))
+    valor_base, base_iva, diferencia = compute_iva_columns(iva, total)
     return {
         "# de factura": numero,
         "Valor Base": valor_base,
@@ -294,13 +315,39 @@ def persist_load(conn, source_path: str, loaded: LoadedExcel, periodo: str | Non
                     row.get("CUFE/CUDE"),
                     row.get("Grupo"),
                     row.get("Tipo de documento"),
-                    json.dumps(row, ensure_ascii=False, default=str),
+                    _dump_row_json(row),
                     row_periodos[i],
                 )
                 for i, row in enumerate(loaded.rows)
             ],
         )
     return load_id
+
+
+def _dump_row_json(row: dict[str, Any]) -> str:
+    """Serializa una fila a `data_json`. Los importes van como STRING exacto
+    ("12952.83"), no como número JSON: un float en el archivo reintroduce por la
+    puerta de atrás la representación binaria que estamos evitando (D-075)."""
+    return json.dumps(
+        {k: (str(v) if isinstance(v, Decimal) else v) for k, v in row.items()},
+        ensure_ascii=False,
+        default=str,
+    )
+
+
+def _revive_money(row: dict[str, Any]) -> dict[str, Any]:
+    """Devuelve los importes de `data_json` a Decimal.
+
+    Soporta cargas VIEJAS, donde quedaron como números JSON (float): `to_money`
+    los pasa por `repr()`, así que 12952.83 vuelve como Decimal('12952.83') y no
+    como el binario largo."""
+    for col in MONEY_COLUMNS:
+        if col in row and row[col] is not None:
+            try:
+                row[col] = money.to_money(row[col])
+            except ValueError:
+                row[col] = money.ZERO
+    return row
 
 
 def fetch_load_rows(conn, load_id: int) -> list[dict[str, Any]]:
@@ -315,7 +362,7 @@ def fetch_load_rows(conn, load_id: int) -> list[dict[str, Any]]:
     )
     out: list[dict[str, Any]] = []
     for r in cur.fetchall():
-        row = json.loads(r["data_json"])
+        row = _revive_money(json.loads(r["data_json"]))
         row.update(_derive_columns(row))
         out.append(row)
     return out

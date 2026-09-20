@@ -336,10 +336,30 @@ const table = useVueTable({
   getFilteredRowModel: getFilteredRowModel(),
 })
 
+// D-076: validar re-indexa la carpeta de soportes del mes, que no tiene techo de
+// duracion. Va como trabajo en segundo plano con progreso, no como peticion que
+// revienta a los 30 s mientras Python sigue trabajando.
+const jobValidar = useJob()
+const jobSoportes = useJob()
+
+// Vista unificada para la barra: solo uno de los dos corre a la vez.
+const trabajo = computed(() => {
+  const j = jobValidar.corriendo.value ? jobValidar : jobSoportes.corriendo.value ? jobSoportes : null
+  return {
+    activo: j !== null,
+    percent: j ? j.progreso.value.percent : null,
+    etiqueta: j ? j.etiqueta.value : '',
+  }
+})
+
+async function cancelarTrabajo() {
+  await Promise.all([jobValidar.cancelar(), jobSoportes.cancelar()])
+}
+
 async function ejecutarValidaciones(opts: { silent?: boolean } = {}) {
   validating.value = true
   try {
-    const result = await rpc<RunResult>('run_validations', {
+    const result = await jobValidar.correr<RunResult>('run_validations', {
       db_path: dbPath.value,
       load_id: loadId.value,
     })
@@ -430,11 +450,16 @@ const soportesOpen = ref(false)
 
 async function refreshSoportes(opts: { reindex?: boolean; force?: boolean } = {}) {
   if (!dbPath.value || !loadId.value) return
+  const params = {
+    db_path: dbPath.value, load_id: loadId.value,
+    reindex: opts.reindex ?? false, force: opts.force ?? false,
+  }
   try {
-    soportes.value = await rpc<SoportesInfo>('list_load_soportes', {
-      db_path: dbPath.value, load_id: loadId.value,
-      reindex: opts.reindex ?? false, force: opts.force ?? false,
-    })
+    // Sin reindex es solo lectura (instantanea). Con reindex se re-extraen los
+    // PDFs: eso va como trabajo en segundo plano.
+    soportes.value = params.reindex
+      ? await jobSoportes.correr<SoportesInfo>('list_load_soportes', params)
+      : await rpc<SoportesInfo>('list_load_soportes', params)
   } catch { /* el panel es auxiliar: no romper la página si falla */ }
 }
 
@@ -594,6 +619,23 @@ watch(loadId, refresh)
         <Button data-tour="load-validar" :disabled="validating || !data" title="Atajo: v" @click="ejecutarValidaciones()">
           {{ validating ? 'Validando…' : 'Validar' }}
         </Button>
+        <!-- D-076: progreso real del trabajo en segundo plano. Antes la operación
+             era opaca y reventaba a los 30 s sin decir en qué iba. -->
+        <div v-if="trabajo.activo" class="flex min-w-56 items-center gap-2">
+          <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-muted" role="progressbar"
+               :aria-valuenow="trabajo.percent ?? undefined" aria-valuemin="0" aria-valuemax="100">
+            <div
+              class="h-full rounded-full bg-primary transition-all duration-300"
+              :class="trabajo.percent === null ? 'w-1/3 animate-pulse' : ''"
+              :style="trabajo.percent !== null ? { width: `${trabajo.percent}%` } : undefined"
+            />
+          </div>
+          <span class="max-w-56 truncate text-xs text-muted-foreground" :title="trabajo.etiqueta">
+            {{ trabajo.etiqueta }}
+          </span>
+          <button type="button" class="text-xs text-muted-foreground underline hover:text-foreground"
+                  @click="cancelarTrabajo">Cancelar</button>
+        </div>
         <Button variant="secondary" @click="exportPickerOpen = true">
           <FolderOpen class="size-4" /> {{ exportFolder ? 'Cambiar salida' : 'Carpeta de salida' }}
         </Button>

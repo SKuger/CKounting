@@ -116,6 +116,30 @@ function ensureProcess() {
   return proc
 }
 
+// Timeout por método (ms). El de por defecto asume una operación interactiva.
+// Lo que NO tiene techo — extraer los PDFs de un mes, validar un lote entero — no
+// vive aquí: se pide con `<método>_async`, devuelve un job_id al instante y el
+// progreso se consulta con `job_status` (D-076). Un timeout fijo de 30 s sobre
+// trabajo sin límite solo producía un error mientras Python seguía ocupado.
+const DEFAULT_TIMEOUT_MS = 30_000
+const METHOD_TIMEOUT_MS: Record<string, number> = {
+  import_excel: 120_000,
+  puc_import: 120_000,
+  export_no_conformes: 120_000,
+  export_missing_supports: 120_000,
+  puc_export: 120_000,
+  backup_empresa: 300_000,
+  restore_empresa: 300_000,
+  consulta_inconsistencias: 120_000,
+  rename_soportes: 120_000,
+}
+
+function timeoutFor(method: string): number {
+  // Los `*_async` solo arrancan el hilo y vuelven: son instantáneos.
+  if (method.endsWith('_async')) return 10_000
+  return METHOD_TIMEOUT_MS[method] ?? DEFAULT_TIMEOUT_MS
+}
+
 export async function callSidecar<T = unknown>(
   method: string,
   params: Record<string, unknown> = {},
@@ -125,21 +149,28 @@ export async function callSidecar<T = unknown>(
   const id = String(state.nextId++)
   const payload = JSON.stringify({ id, method, params })
   return new Promise<T>((res, rej) => {
+    const timer = setTimeout(() => {
+      if (state.pending.has(id)) {
+        state.pending.delete(id)
+        rej(new Error(
+          `El sidecar no respondió a tiempo (${method}). Si la operación es larga, ` +
+          'debería pedirse como trabajo en segundo plano.',
+        ))
+      }
+    }, timeoutFor(method))
+
+    // Limpiar el temporizador al resolver evita que cada llamada deje un timer
+    // vivo reteniendo su closure hasta que venza.
     state.pending.set(id, {
-      resolve: (v) => res(v as T),
-      reject: rej,
+      resolve: (v) => { clearTimeout(timer); res(v as T) },
+      reject: (e) => { clearTimeout(timer); rej(e) },
     })
     proc.stdin!.write(payload + '\n', (err) => {
       if (err) {
+        clearTimeout(timer)
         state.pending.delete(id)
         rej(err)
       }
     })
-    setTimeout(() => {
-      if (state.pending.has(id)) {
-        state.pending.delete(id)
-        rej(new Error(`sidecar timeout (method=${method}, id=${id})`))
-      }
-    }, 30_000)
   })
 }
