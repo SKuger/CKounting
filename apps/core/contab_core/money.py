@@ -73,6 +73,23 @@ def to_json(value: Any) -> Any:
     return value
 
 
+def a_centavos(value: Decimal | None) -> int | None:
+    """Decimal → entero de centavos, para guardarlo en una columna INTEGER.
+
+    Es la forma de tener importes **sumables en SQL sin perder exactitud**: un
+    REAL reintroduciría el binario que evitamos, y un TEXT no suma (D-091)."""
+    if value is None:
+        return None
+    return int(quantize(value) * 100)
+
+
+def de_centavos(value: int | None) -> Decimal | None:
+    """Entero de centavos → Decimal. Exacto en los dos sentidos."""
+    if value is None:
+        return None
+    return quantize(Decimal(value) / 100)
+
+
 def row_to_json(row: dict[str, Any]) -> dict[str, Any]:
     """Aplica `to_json` a todos los importes de una fila."""
     return {k: to_json(v) for k, v in row.items()}

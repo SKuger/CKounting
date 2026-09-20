@@ -787,6 +787,33 @@ Este era el fallo que llevaba toda la revisión atribuido a `cv2.QRCodeDetector`
 
 ---
 
+## D-091 — Los campos consultables salen del blob JSON (2026-09-20)
+
+`excel_row` gana cuatro columnas proyectadas desde `data_json`: `total_centavos`, `iva_centavos`, `nit_emisor` y `fecha_emision` (migración 3, con backfill de lo ya cargado). `data_json` **sigue siendo la fuente de verdad** de la fila completa — D-039 intacto: no se renombra ningún header de la DIAN.
+
+Los importes van en **centavos como INTEGER**, no como REAL ni TEXT: `SUM` en SQL es exacto, un REAL reintroduciría el binario del que salimos en D-075 y un TEXT no suma. `money.a_centavos` / `money.de_centavos` convierten en ambos sentidos sin pérdida.
+
+Motivo: toda la fila vivía como un blob JSON, así que no se podía sumar, agrupar ni filtrar en SQL — cualquier total pasaba por cargar el lote entero a memoria en Python. Eso bloqueaba cualquier reporte agregado o comparación entre meses.
+
+Se añaden `resumen_periodos` y `resumen_emisores` como primeros consumidores, para que la capacidad quede demostrada y no solo prometida.
+
+Nota de implementación: los índices de las columnas nuevas NO van en `SCHEMA_SQL`. En una BD antigua la tabla ya existe sin ellas (`CREATE TABLE IF NOT EXISTS` no las añade) y el `CREATE INDEX` falla — exactamente la trampa que el código ya documentaba para `idx_excel_row_periodo`.
+
+---
+
+## D-092 — `load.vue` se parte en composables (2026-09-20)
+
+La página juntaba seis responsabilidades en 934 líneas y es el archivo que más se toca del repo. Se extraen a `app/composables/`:
+
+- `useColumnasTabla` — visibilidad, grupos y panel de columnas.
+- `useExportarFaltantes` — reporte de faltantes de soporte (D-047).
+- `useRenombrarSoportes` — plan y aplicación del renombrado (D-066).
+- `useSoportesDelMes` — panel de soportes y re-verificación (D-068).
+
+La página queda con lo que es suyo: la tabla, las validaciones y los overrides. Las dependencias entre piezas van como parámetros explícitos (`alAplicar`, `alReverificar`), no como variables compartidas por estar en el mismo archivo.
+
+---
+
 ## Decisiones pendientes (a tomar más adelante)
 
 - **D-E1-13** ⏸ Behavior de R-V3 cuando IVA = 0 (default actual: skip). Confirmar si lo cambiamos a "marcar excluido" o "tarifa 0%".

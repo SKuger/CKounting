@@ -189,3 +189,112 @@ def test_es_idempotente(tmp_path):
         assert conn.execute("SELECT COUNT(*) FROM excel_row").fetchone()[0] == 2
     finally:
         conn.close()
+
+
+# ── #23 (D-091) — columnas consultables fuera del blob JSON ─────────────────
+
+def test_migracion_rellena_las_columnas_consultables(tmp_path):
+    """Una BD existente debe quedar consultable sin recargar los Excel."""
+    db = tmp_path / "vieja.db"
+    _db_v1_con_datos(db)
+
+    conn = storage.connect(db)
+    try:
+        storage.ensure_schema(conn)
+        filas = conn.execute(
+            "SELECT total_centavos, iva_centavos, nit_emisor, fecha_emision"
+            " FROM excel_row ORDER BY row_index"
+        ).fetchall()
+        assert [f["total_centavos"] for f in filas] == [4815000, 9999950]
+        assert all(f["fecha_emision"] == "2024-02-26" for f in filas)
+    finally:
+        conn.close()
+
+
+def test_suma_en_sql_exacta_y_coincide_con_python(tmp_path, sample_excel):
+    """El punto del cambio: sumar un mes sin cargarlo entero a memoria, y que el
+    resultado sea EXACTO. Por eso los importes van en centavos como INTEGER: un
+    REAL reintroduciría el binario del que salimos en D-075."""
+    from decimal import Decimal
+
+    from contab_core import money
+
+    db = tmp_path / "e.db"
+    storage.init_empresa_db(db, "900181831", "4", "REAL")
+    conn = storage.connect(db)
+    try:
+        loaded = excel.load_excel(sample_excel)
+        load_id = excel.persist_load(conn, "x.xlsx", loaded, periodo="2024-02")
+
+        en_sql = money.de_centavos(
+            conn.execute("SELECT SUM(total_centavos) FROM excel_row").fetchone()[0]
+        )
+        en_python = sum(
+            (r["Total"] for r in excel.fetch_load_rows(conn, load_id)), Decimal("0.00")
+        )
+        assert en_sql == en_python
+    finally:
+        conn.close()
+
+
+def test_resumen_por_periodo_agrupa_en_sql(tmp_path, sample_excel):
+    db = tmp_path / "e.db"
+    storage.init_empresa_db(db, "900181831", "4", "REAL")
+    conn = storage.connect(db)
+    try:
+        loaded = excel.load_excel(sample_excel)
+        excel.persist_load(conn, "feb.xlsx", loaded, periodo="2024-02")
+        excel.persist_load(conn, "mar.xlsx", loaded, periodo="2024-03")
+
+        resumen = excel.resumen_por_periodo(conn)
+        assert [r["periodo"] for r in resumen] == ["2024-03", "2024-02"], "más reciente primero"
+        assert all(r["documentos"] == len(loaded.rows) for r in resumen)
+        assert resumen[0]["total"] == resumen[1]["total"] > 0
+        assert resumen[0]["emisores"] > 0
+    finally:
+        conn.close()
+
+
+def test_resumen_por_emisor_ordena_por_importe(tmp_path, sample_excel):
+    db = tmp_path / "e.db"
+    storage.init_empresa_db(db, "900181831", "4", "REAL")
+    conn = storage.connect(db)
+    try:
+        excel.persist_load(conn, "x.xlsx", excel.load_excel(sample_excel), periodo="2024-02")
+        emisores = excel.resumen_por_emisor(conn, "2024-02")
+        assert len(emisores) > 1
+        totales = [e["total"] for e in emisores]
+        assert totales == sorted(totales, reverse=True)
+        assert all(e["nit"] for e in emisores)
+    finally:
+        conn.close()
+
+
+def test_el_resumen_ignora_los_lotes_en_la_papelera(tmp_path, sample_excel):
+    """La papelera del lote (excel_load.deleted_at) es la que SÍ existe."""
+    db = tmp_path / "e.db"
+    storage.init_empresa_db(db, "900181831", "4", "REAL")
+    conn = storage.connect(db)
+    try:
+        load_id = excel.persist_load(
+            conn, "x.xlsx", excel.load_excel(sample_excel), periodo="2024-02"
+        )
+        assert excel.resumen_por_periodo(conn) != []
+
+        with storage.transaction(conn):
+            conn.execute(
+                "UPDATE excel_load SET deleted_at = datetime('now') WHERE id = ?", (load_id,)
+            )
+        assert excel.resumen_por_periodo(conn) == []
+    finally:
+        conn.close()
+
+
+def test_centavos_van_y_vuelven_sin_perder_nada():
+    from decimal import Decimal
+
+    from contab_core import money
+
+    for v in ("0.00", "0.01", "-0.01", "48150.00", "15399.99", "99999999.99", "-2447.16"):
+        d = Decimal(v)
+        assert money.de_centavos(money.a_centavos(d)) == d, v

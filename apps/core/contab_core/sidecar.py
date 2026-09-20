@@ -409,6 +409,33 @@ def _h_import_excel(params: dict) -> dict:
     }
 
 
+def _h_resumen_periodos(params: dict) -> dict:
+    """Totales por mes, agregados en SQL (D-091).
+
+    Antes esto era imposible sin cargar todas las filas a memoria: la fila entera
+    vivía como blob JSON y no había nada que agrupar."""
+    db_path = Path(params["db_path"])
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return {"periodos": excel_module.resumen_por_periodo(conn)}
+    finally:
+        conn.close()
+
+
+def _h_resumen_emisores(params: dict) -> dict:
+    """Mayores emisores, del mes indicado o de toda la empresa (D-091)."""
+    db_path = Path(params["db_path"])
+    periodo = params.get("periodo")
+    limite = int(params.get("limite", 50))
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return {"emisores": excel_module.resumen_por_emisor(conn, periodo, limite)}
+    finally:
+        conn.close()
+
+
 def _h_list_loads(params: dict) -> list[dict]:
     db_path = Path(params["db_path"])
     periodo = params.get("periodo")
@@ -1055,6 +1082,8 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "list_load_soportes": _h_list_load_soportes,
     "import_excel": _h_import_excel,
     "list_loads": _h_list_loads,
+    "resumen_periodos": _h_resumen_periodos,
+    "resumen_emisores": _h_resumen_emisores,
     "list_folder_files": _h_list_folder_files,
     "get_load_rows": _h_get_load_rows,
     "run_validations": _h_run_validations,
