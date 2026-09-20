@@ -300,3 +300,29 @@ en 0,000 s y se atendieron 12 peticiones mientras el trabajo corría. Timeouts d
 `callSidecar` por método y temporizador liberado al resolver.
 
 123 tests verdes (eran 84 al empezar la sesión); sigue el fallo de entorno del QR.
+
+### Sesión 9 (cont.) — hallazgos 11 a 20
+
+Con esto la revisión queda cerrada del #1 al #20; siguen abiertos del #21 al #35.
+
+**#11 — Crear una empresa que ya existe** (D-079). `create_empresa` falla si el `.db` ya existe y también si el NIT ya está registrado con otra razón social. Antes devolvía éxito con la razón social enviada mientras la BD conservaba la anterior.
+
+**#12 — El catálogo central** (D-077). `unregister_empresa` nuevo; `sync_registry` purga filas huérfanas; `restore_empresa` da de alta lo restaurado.
+
+**#13 — Borrado con red de seguridad** (D-078). El `.db` se mueve a `<data_dir>/papelera/`, se conserva 30 días y se purga solo. RPCs `papelera_list` / `papelera_restore`.
+
+**#14 y #15 — Periodo** (D-081). Se valida la forma `AAAA-MM` antes de usarla, y el mes dominante usa `Counter` con desempate explícito. Comprobado que la implementación anterior daba resultados distintos según `PYTHONHASHSEED`.
+
+**#16 — Poppler ausente** (D-080). `PopplerNoDisponible` + `status=error` con el motivo real + RPC `check_dependencies`.
+
+**#19 — Linters** (D-082). `ruff` en el core (34 avisos, todos corregidos; queda limpio) y `vue-tsc` contra los dos tsconfig de Nuxt. Hubo que añadir `@types/node`, que faltaba: todo el servidor usaba `process`/`Buffer`/`node:*` sin tipos. El primer typecheck encontró 5 errores reales de `possibly undefined` en `useUser.ts`, `consulta-dian.vue` y `consulta-inconsistencias.vue`.
+
+**#20 — Tests de frontend**. `vitest` + 22 tests sobre `server/utils/uploads.ts` y `composables/useJob.ts`. **Pendiente**: un smoke end-to-end que arranque la app de verdad. Lo que hay cubre lógica pura, no la integración.
+
+**#18 (fleco) — NO cerrado.** Intenté generar `requirements.lock.txt` para el sidecar
+DIAN, pero en esta máquina solo hay Python 3.14 y el build usa 3.10: un lockfile resuelto
+con otro intérprete puede producir pines que no instalen. Descartado antes de commitear y
+documentado el procedimiento en `requirements.txt`. Las dependencias DIRECTAS sí están
+fijadas con `==`, que es la mayor parte del beneficio.
+
+CI ampliado: `ruff` + `pytest` en el core; `vitest` + `typecheck` + `build` en el frontend.

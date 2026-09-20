@@ -4,8 +4,8 @@ from pathlib import Path
 import pytest
 from openpyxl import load_workbook
 
-from contab_core import excel, storage, validations
-from contab_core.export import export_missing_supports, MISSING_SUPPORTS_COLUMNS
+from contab_core import excel, storage
+from contab_core.export import MISSING_SUPPORTS_COLUMNS
 from contab_core.sidecar import HANDLERS
 
 

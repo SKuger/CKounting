@@ -24,8 +24,9 @@ import threading
 import time
 import traceback
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 # Un trabajo terminado se conserva este tiempo para que la UI alcance a leer su
 # resultado aunque tarde en preguntar; luego se recoge.
@@ -123,7 +124,7 @@ def start(method: str, fn: Callable[[Callable[..., None]], Any]) -> dict:
             with _LOCK:
                 job.status = STATUS_CANCELLED
                 job.error = "Cancelado por el usuario."
-        except Exception as exc:  # noqa: BLE001 — cualquier fallo se reporta al cliente
+        except Exception as exc:
             # La traza va al log (stderr), no al payload: la UI recibe el mensaje
             # para el usuario, no rutas internas ni nombres de módulo.
             print(f"[job {job.id}] {method} falló:\n{traceback.format_exc()}",

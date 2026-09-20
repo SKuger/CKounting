@@ -86,7 +86,7 @@ def test_override_excludes_from_no_conformes(empresa_with_load):
     must remove it from failing_rows and from the failures list."""
     db_path = empresa_with_load["db_path"]
     load_id = empresa_with_load["load_id"]
-    rows = empresa_with_load["rows"]
+    empresa_with_load["rows"]
 
     # Find a row that fails V3 in the baseline run.
     baseline = HANDLERS["run_validations"]({"db_path": str(db_path), "load_id": load_id})

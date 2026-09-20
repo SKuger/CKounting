@@ -2,6 +2,12 @@
 # se entrega al usuario. Sin fijar, dos builds del mismo commit producían binarios
 # distintos y podían romperse sin que cambiara una línea de código.
 # Para subir una versión: cambiarla aquí, correr el CI y verificar el instalador.
+#
+# PENDIENTE: las dependencias TRANSITIVAS no están fijadas. Para cerrarlo hace falta
+# un requirements.lock.txt generado con el MISMO Python que usa el build (3.10):
+#   pip install pip-tools && pip-compile --strip-extras -o requirements.lock.txt requirements.txt
+# Generarlo con otra versión de Python produce pines que pueden no instalar en 3.10,
+# así que no se commitea uno sin verificarlo en ese intérprete.
 fastapi==0.115.6
 uvicorn==0.34.0
 playwright==1.49.1
