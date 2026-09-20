@@ -41,7 +41,7 @@ El primer flujo concreto, implementado en E1, es el **cruce DIAN ↔ soportes**:
 - Una **DB SQLite por empresa**, nunca mezclar datos entre empresas (D-003).
 - **Sin auth** en las primeras entregas (single-user) (D-004).
 - Reportes DIAN llegan en **Excel y PDF** — Excel para datos, PDF como soporte (D-005).
-- Salida de reportes: **Excel `.xlsx`** con las columnas originales + 3 derivadas + `razon_falla` (D-006, D-014, D-024).
+- Salida de reportes: **Excel `.xlsx`** con las columnas originales + 3 derivadas + `razon_falla` (D-006, D-014, D-024). `Base IVA` usa la **tarifa detectada** (19% o 5%), no siempre 19% — D-093 supersede D-046, confirmado por el usuario.
 - Idioma de la UI: **Español (Colombia)** (D-009).
 - Contexto fiscal: **Colombia / DIAN** (D-009).
 - **Un solo identificador por PDF** con prioridad CUDS > CUDE > CUFE (D-033).

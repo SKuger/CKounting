@@ -33,14 +33,46 @@ def test_diferencia_near_zero_when_iva_at_19pct(sample_excel):
     raise AssertionError("FELE-827 missing from sample")
 
 
-def test_base_iva_always_iva_over_19pct(sample_excel):
-    """D-046 — Base IVA is ALWAYS IVA/0.19 (when IVA != 0). The conditional
-    'pegar a Valor Base' from D-045 was reverted."""
+def test_base_iva_usa_la_tarifa_detectada(sample_excel):
+    """D-093 (supersede D-046) — Base IVA = IVA / la tarifa que EXPLICA ese IVA.
+
+    D-046 fijaba IVA/0.19 siempre. En la muestra todas las filas con IVA son del
+    19%, así que el comportamiento coincide ahí; lo que se comprueba es la regla,
+    no el caso concreto."""
     loaded = excel.load_excel(sample_excel)
     for row in loaded.rows:
-        if row["IVA"] != money.ZERO:
-            esperado = money.quantize(row["IVA"] / Decimal("0.19"))
-            assert row["Base IVA"] == esperado, "Base IVA es IVA/0.19 cuantizado a centavos"
+        if row["IVA"] == money.ZERO:
+            continue
+        tarifa = excel.detectar_tarifa(row["IVA"], row["Valor Base"]) or excel.IVA_RATE_GENERAL
+        assert row["Base IVA"] == money.quantize(row["IVA"] / tarifa)
+
+
+def test_diferencia_es_cero_tambien_al_5pct():
+    """El motivo del cambio: la columna se EXPORTA al contador.
+
+    Con IVA/0.19 fijo, una factura al 5% daba una Base IVA cinco veces menor de lo
+    debido y una Diferencia enorme que no era un descuadre sino ruido."""
+    # Base 1.000.000 al 5% → IVA 50.000.
+    vb, bi, dif = excel.compute_iva_columns(Decimal("50000"), Decimal("1050000"))
+    assert vb == Decimal("1000000.00")
+    assert bi == Decimal("1000000.00"), "antes daba 263.157,89"
+    assert dif == Decimal("0.00"), "antes daba 736.842,11"
+
+
+def test_diferencia_sigue_destacando_una_tarifa_que_no_existe():
+    """El arreglo no puede volver la columna inútil: si ninguna tarifa cuadra se
+    usa el 19% como referencia y la Diferencia muestra cuánto se aparta."""
+    vb, _base_iva, dif = excel.compute_iva_columns(Decimal("100000"), Decimal("1100000"))  # 10%
+    assert vb == Decimal("1000000.00")
+    assert dif > Decimal("100000"), "una tarifa inventada tiene que saltar a la vista"
+
+
+def test_detectar_tarifa():
+    assert excel.detectar_tarifa(Decimal("1900"), Decimal("10000")) == excel.IVA_RATE_GENERAL
+    assert excel.detectar_tarifa(Decimal("500"), Decimal("10000")) == excel.IVA_RATE_REDUCED
+    # Dentro de la tolerancia de ±5 pesos sobre el IVA (D-072).
+    assert excel.detectar_tarifa(Decimal("49997"), Decimal("1000000")) == excel.IVA_RATE_REDUCED
+    assert excel.detectar_tarifa(Decimal("100000"), Decimal("1000000")) is None
 
 
 def test_diferencia_is_valor_base_minus_base_iva(sample_excel):
