@@ -123,3 +123,31 @@ describe('contabDataDir', () => {
     }
   })
 })
+
+describe('purgarSubidasAntiguas', () => {
+  // #29: cada Excel y cada dump de PUC se guardaban con marca temporal y nadie
+  // los borraba nunca.
+  it('borra lo viejo y respeta lo reciente', async () => {
+    const { mkdtemp, writeFile, utimes, readdir } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const { purgarSubidasAntiguas, RETENCION_SUBIDAS_DIAS } = await import('../server/utils/uploads')
+
+    const dir = await mkdtemp(join(tmpdir(), 'contab-purga-'))
+    const viejo = join(dir, 'viejo.xlsx')
+    const nuevo = join(dir, 'nuevo.xlsx')
+    await writeFile(viejo, 'x')
+    await writeFile(nuevo, 'y')
+
+    const hace = (dias: number) => new Date(Date.now() - dias * 86400 * 1000)
+    await utimes(viejo, hace(RETENCION_SUBIDAS_DIAS + 1), hace(RETENCION_SUBIDAS_DIAS + 1))
+
+    expect(await purgarSubidasAntiguas(dir)).toBe(1)
+    expect(await readdir(dir)).toEqual(['nuevo.xlsx'])
+  })
+
+  it('no falla si la carpeta no existe', async () => {
+    const { purgarSubidasAntiguas } = await import('../server/utils/uploads')
+    expect(await purgarSubidasAntiguas('/ruta/que/no/existe/jamas')).toBe(0)
+  })
+})

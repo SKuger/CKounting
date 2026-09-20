@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import log
+
 MANIFEST_NAME = "_renombrados.csv"
 _RAZON_MAXLEN = 60
 
@@ -80,8 +82,10 @@ def build_plan(
         for p in folder_path.iterdir():
             if p.is_file():
                 existing.add(p.name.lower())
-    except Exception:
-        pass
+    except OSError:
+        # Si no se puede listar la carpeta, el plan sale sin detectar colisiones
+        # de nombre: hay que poder verlo en el log.
+        log.exception("no se pudo listar %s para detectar nombres existentes", folder_path)
 
     assigned: set[str] = set()
     plan: list[dict[str, Any]] = []

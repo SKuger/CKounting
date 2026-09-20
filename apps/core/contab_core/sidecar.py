@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import sys
-import traceback
 from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
@@ -20,6 +19,7 @@ from . import dian_inconsistencias as dian_inc_module
 from . import excel as excel_module
 from . import export as export_module
 from . import jobs as jobs_module
+from . import log
 from . import nit as nit_module
 from . import paths as paths_module
 from . import pdf_cufe as pdf_cufe_module
@@ -55,7 +55,7 @@ def _h_list_empresas(params: dict) -> list[dict]:
         try:
             info = storage_module.read_empresa_info(db_path)
         except Exception:
-            pass
+            log.exception("no se pudo leer la empresa %s al listar", db_path)
         archived = bool(info["archived"]) if info else False
         if archived and not include_archived:
             continue
@@ -118,6 +118,7 @@ def _h_create_empresa(params: dict) -> dict:
         try:
             info_otra = storage_module.read_empresa_info(otra)
         except Exception:
+            log.warn("empresa ilegible al comprobar NIT duplicado: %s", otra)
             continue
         if info_otra and nit_module.normalize(info_otra.get("nit") or "") == body:
             raise ValueError(
@@ -129,7 +130,9 @@ def _h_create_empresa(params: dict) -> dict:
     try:
         program_db_module.register_empresa(db_path, body, dv, razon_social)
     except Exception:
-        pass  # el catálogo central es best-effort; la empresa ya quedó creada
+        # El catálogo central es best-effort: la empresa ya quedó creada y
+        # sync_registry la recogerá al arrancar. Pero que quede rastro.
+        log.exception("no se pudo registrar %s en el catálogo central", db_path)
     return {"db_path": str(db_path), "nit": body, "dv": dv, "razon_social": razon_social}
 
 
@@ -1121,13 +1124,12 @@ def handle_request(request: dict) -> dict:
         result = handler(params)
         return {"id": request_id, "result": result}
     except Exception as exc:
+        # La traza va al log (stderr), no al payload: la UI recibe el mensaje para
+        # el usuario, no rutas internas ni nombres de módulo (D-083).
+        log.exception("%s falló", method)
         return {
             "id": request_id,
-            "error": {
-                "code": exc.__class__.__name__,
-                "message": str(exc),
-                "trace": traceback.format_exc(limit=4),
-            },
+            "error": {"code": exc.__class__.__name__, "message": str(exc)},
         }
 
 
@@ -1137,7 +1139,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         program_db_module.sync_registry()
     except Exception:
-        pass
+        # Nunca debe impedir el arranque, pero sí debe verse en el log.
+        log.exception("sync_registry falló al arrancar")
     for raw_line in sys.stdin:
         line = raw_line.strip()
         if not line:

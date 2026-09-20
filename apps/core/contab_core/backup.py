@@ -24,9 +24,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from . import log, storage
 from . import paths as paths_module
 from . import program_db as program_db_module
-from . import storage
 
 BACKUP_VERSION = 1
 ZIP_DB_NAME = "empresa.db"
@@ -284,7 +284,7 @@ def restore_empresa(
             target_db, nit=nit, dv=meta.get("dv"), razon_social=razon
         )
     except Exception:
-        pass
+        log.exception("no se pudo registrar la empresa restaurada %s", target_db)
 
     return RestoreResult(
         db_path=str(target_db),
@@ -330,7 +330,7 @@ def listar_papelera() -> list[dict]:
         try:
             info = storage.read_empresa_info(f)
         except Exception:
-            pass
+            log.warn("archivo ilegible en la papelera: %s", f.name)
         borrado = datetime.fromtimestamp(st.st_mtime)
         out.append({
             "archivo": f.name,
@@ -362,7 +362,8 @@ def restaurar_de_papelera(archivo: str) -> dict:
             destino, nit=info["nit"], dv=info.get("dv"), razon_social=info["razon_social"]
         )
     except Exception:
-        pass  # el catálogo se reconcilia solo en el próximo arranque
+        # El catálogo se reconcilia solo en el próximo arranque (sync_registry).
+        log.exception("no se pudo registrar %s tras sacarla de la papelera", destino)
     return {
         "db_path": str(destino),
         "nit": info["nit"],
@@ -394,7 +395,9 @@ def delete_empresa_file(db_path: str | Path, confirm_nit: str) -> dict:
     try:
         storage.wal_checkpoint(db_path)
     except Exception:
-        pass
+        # Si el checkpoint falla se mueve igual, pero puede perderse lo último
+        # escrito: es exactamente la clase de cosa que hay que poder diagnosticar.
+        log.exception("wal_checkpoint falló antes de mandar %s a la papelera", db_path)
 
     destino = paths_module.papelera_dir() / f"{_sello()}_{db_path.name}"
     i = 1
@@ -413,7 +416,7 @@ def delete_empresa_file(db_path: str | Path, confirm_nit: str) -> dict:
     try:
         program_db_module.unregister_empresa(db_path)
     except Exception:
-        pass
+        log.exception("no se pudo desregistrar %s del catálogo central", db_path)
 
     purgados = purgar_papelera()
     return {

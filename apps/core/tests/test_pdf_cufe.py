@@ -266,3 +266,38 @@ def test_check_dependencies_expone_el_estado():
     res = sidecar._h_check_dependencies({})
     assert "pdftotext" in res
     assert res["ok"] == res["pdftotext"]["disponible"]
+
+
+# ── #36 — el renderizado no puede depender de una dependencia no declarada ──
+
+def test_render_no_necesita_pillow(tmp_path):
+    """La lectura por QR es la ÚNICA vía en PDFs con la fuente ofuscada
+    (Movistar/Claro/Tigo). Iba por `bitmap.to_pil()`, que importa Pillow — que NO
+    está en las dependencias del paquete. En un entorno limpio lanzaba
+    ModuleNotFoundError, el `except` lo volvía `None` y el CUFE se perdía en
+    silencio: se veía como "sin CUFE", nunca como un fallo de instalación."""
+    import builtins
+
+    from contab_core import pdf_cufe
+
+    src = SAMPLES / "24-02 MOVISTAR BEC-509558651.pdf"
+    if not src.exists():
+        pytest.skip(f"missing sample: {src}")
+
+    # Simula el entorno limpio: importar PIL falla.
+    real_import = builtins.__import__
+
+    def sin_pillow(name, *a, **kw):
+        if name == "PIL" or name.startswith("PIL."):
+            raise ModuleNotFoundError("No module named 'PIL'")
+        return real_import(name, *a, **kw)
+
+    builtins.__import__ = sin_pillow
+    try:
+        resultado = pdf_cufe.extract_cufes(src)
+    finally:
+        builtins.__import__ = real_import
+
+    assert resultado.status == EXTRACTION_STATUS_OK, resultado.error
+    assert resultado.source == "qr-scan"
+    assert resultado.cufes[0].value == EXPECTED_CUFES[src.name][0]

@@ -6,6 +6,7 @@ import {
   uniquePrefix,
   fallbackUploadsDir,
   checkUploadSize,
+  purgarSubidasAntiguas,
 } from '../utils/uploads'
 
 type EmpresaInfo = {
@@ -51,6 +52,8 @@ export default defineEventHandler(async (event) => {
   try {
     await mkdir(targetDir, { recursive: true })
     await writeFile(savedPath, filePart.data)
+    // Retención (D-087): los dumps de PUC se acumulaban para siempre.
+    void purgarSubidasAntiguas(targetDir)
   } catch (err) {
     return { ok: false, error: `No se pudo guardar el archivo en ${savedPath}: ${String(err)}` }
   }
