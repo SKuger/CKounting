@@ -23,6 +23,8 @@ import cv2
 import numpy as np
 import pypdfium2 as pdfium
 
+from . import log
+
 CUFE_RE = re.compile(r"^[a-f0-9]{96}$")
 # A run of hex chars possibly split by whitespace (line-wrapped CUFEs). We then
 # regroup by whitespace-separated segments so an adjacent number (e.g. the DIAN
@@ -183,14 +185,28 @@ def _pdftotext(pdf_path: Path, layout: bool, timeout: float = 30.0) -> str:
 
 
 def _render_page(page, dpi: int) -> np.ndarray | None:
-    """Render one PdfPage to a BGR numpy array."""
+    """Render one PdfPage to a BGR numpy array.
+
+    Va por `to_numpy()` y NO por `to_pil()` (D-090). `to_pil()` importa Pillow, que
+    NO está en las dependencias del paquete: en un entorno limpio lanzaba
+    ModuleNotFoundError, el `except` lo convertía en `None` y la lectura por QR
+    —única vía en los PDF con la fuente ofuscada, como los de Movistar/Claro/Tigo—
+    fallaba en silencio. Se veía como "sin CUFE", nunca como un fallo de
+    instalación. `to_numpy()` no necesita Pillow y devuelve el búfer directo.
+    """
     try:
-        scale = dpi / 72.0
-        bitmap = page.render(scale=scale)
-        pil = bitmap.to_pil().convert("RGB")
-        return cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
+        bitmap = page.render(scale=dpi / 72.0)
+        arr = bitmap.to_numpy()
     except Exception:
+        log.exception("no se pudo renderizar una página a %s dpi", dpi)
         return None
+    if arr.ndim != 3:
+        return None
+    if arr.shape[2] == 4:      # BGRA → BGR
+        return cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
+    if arr.shape[2] == 3:      # pdfium ya entrega BGR
+        return arr
+    return None
 
 
 def _decode_qrs_in_image(detector: cv2.QRCodeDetector, img: np.ndarray) -> list[str]:

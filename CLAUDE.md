@@ -29,7 +29,7 @@ El primer flujo concreto, implementado en E1, es el **cruce DIAN ↔ soportes**:
   - `@tanstack/vue-table` (tabla headless). `DirectoryPicker` propio (modal navegable server-side via `/api/list-dir`).
 - **Backend / lógica de negocio**: Python 3.10+ como *sidecar* en `apps/core/`.
   - IPC stdio JSON-lines (D-019).
-  - Deps: `openpyxl`, `xlsxwriter`, `pypdfium2`, `opencv-python-headless`, `numpy`, `Pillow`.
+  - Deps: `openpyxl`, `xlsxwriter`, `pypdfium2`, `opencv-python-headless`, `numpy`. **Pillow NO** (D-090): el renderizado usa `bitmap.to_numpy()`, no `to_pil()`. Figuraba aquí sin estar en `pyproject.toml`, y eso rompía en silencio la lectura por QR.
   - Binario de sistema requerido: `pdftotext` (Poppler) — viene con la mayoría de distros.
 - **Base de datos**: SQLite — **un archivo .db por empresa** (aislamiento total, D-003).
 - **Empaquetado** (E10, en curso): **Electron + electron-builder** (NSIS Windows per-user). Sidecars como `.exe` PyInstaller (onedir) + Poppler bundleado; el shell los inyecta a Nitro por env (`CONTAB_SIDECAR_BIN`, `DIAN_SIDECAR_BIN`, `CONTAB_PDFTOTEXT`, `DIAN_WORKDIR`). Build en GitHub Actions `windows-latest`; auto-update con electron-updater (sin firma Authenticode → integridad sha512; hosting de releases por decidir). Ver D-057/058/059 y [`apps/shell/README.md`](apps/shell/README.md).
@@ -66,27 +66,38 @@ Contab/
 ├── apps/
 │   ├── core/              ← Python sidecar
 │   │   ├── contab_core/
-│   │   │   ├── sidecar.py     stdio JSON-lines IPC loop
-│   │   │   ├── storage.py     schema SQLite + migraciones por empresa
+│   │   │   ├── sidecar.py     stdio JSON-lines IPC loop + registro de RPCs
+│   │   │   ├── jobs.py        trabajos en segundo plano con progreso (D-076)
+│   │   │   ├── money.py       importes en Decimal, redondeo contable (D-075)
+│   │   │   ├── log.py         registro a stderr (D-083)
+│   │   │   ├── storage.py     schema SQLite + migraciones numeradas (D-084)
+│   │   │   ├── program_db.py  contab.db: usuario, ajustes, catálogo de empresas
+│   │   │   ├── backup.py      backup/restore + papelera de empresas (D-078)
 │   │   │   ├── excel.py       parser DIAN + columnas derivadas
 │   │   │   ├── validations.py V1/V2/V3
 │   │   │   ├── export.py      xlsxwriter (no conformes)
 │   │   │   ├── pdf_cufe.py    extracción CUFE (pdftotext + cv2 QR) + indexer
+│   │   │   ├── puc.py         Plan Único de Cuentas por empresa (D-070)
+│   │   │   ├── rename_soportes.py  renombrado de PDFs (D-066)
+│   │   │   ├── dian_inconsistencias.py  consulta MUISCA por NIT+DV
 │   │   │   ├── paths.py       carpetas por SO
 │   │   │   └── nit.py         DV módulo 11 DIAN
-│   │   ├── tests/             37 tests
+│   │   ├── tests/             149 tests
 │   │   ├── .venv/             venv del proyecto (NO commitear)
-│   │   └── pyproject.toml
+│   │   └── pyproject.toml     deps + config de ruff
 │   └── desktop/           ← Nuxt 4 frontend
 │       ├── app/
 │       │   ├── pages/         index / empresa / load
 │       │   ├── components/    DirectoryPicker
 │       │   ├── layouts/       default
-│       │   ├── composables/   useRpc
+│       │   ├── composables/   useRpc / useJob / useToast / useBrand
+│       │   ├── plugins/       auth.client (credencial en cada petición)
 │       │   └── assets/css/    main.css (theme tokens)
 │       ├── server/
-│       │   ├── api/           rpc.post / upload-excel.post / list-dir.get
-│       │   └── utils/         sidecar (subprocess manager)
+│       │   ├── api/           rpc.post / upload-*.post / list-dir.get
+│       │   ├── middleware/    auth (credencial local, D-089)
+│       │   └── utils/         sidecar, dianSidecar, uploads, auth
+│       ├── test/              33 tests (vitest)
 │       ├── nuxt.config.ts
 │       └── package.json
 └── docs/

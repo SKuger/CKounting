@@ -101,27 +101,43 @@ El resultado se cachea por `(carpeta, archivo, mtime, tamaño, versión-del-extr
 Requisitos:
 - **Node ≥ 20**, **npm ≥ 10**
 - **Python ≥ 3.10**
-- **Poppler** (binario `pdftotext`). Debian/Ubuntu: `sudo apt install poppler-utils` · macOS: `brew install poppler` · Windows: viene en el bundle.
+- **Poppler** (binario `pdftotext`). Windows en desarrollo: instálalo y ponlo en el PATH, o apunta `CONTAB_PDFTOTEXT` al .exe; en la app instalada viene empaquetado. Debian/Ubuntu: `sudo apt install poppler-utils` · macOS: `brew install poppler`.
+  Si falta, Contab ahora lo dice (RPC `check_dependencies`, D-080) en vez de marcar todo el mes como «sin soporte».
+
+El producto es Windows, así que el setup va primero en PowerShell. El layout del
+venv cambia por SO: `Scripts\` en Windows, `bin/` en POSIX.
+
+```powershell
+# Sidecar Python (core) — Windows
+cd apps\core
+py -m venv .venv
+.venv\Scripts\pip install -e ".[dev]"
+.venv\Scripts\pytest -q            # 149 tests deben pasar
+.venv\Scriptsuff check .         # debe salir limpio
+
+# Frontend
+cd ..\desktop
+npm ci                              # ci, no install: respeta el lockfile
+npm test                            # 33 tests de frontend
+npm run typecheck
+```
 
 ```bash
-# Sidecar Python (core)
+# Lo mismo en Linux / macOS
 cd apps/core
 python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
-.venv/bin/pytest -q                 # 74 tests deben pasar
-
-# Frontend
-cd ../desktop
-npm install
+.venv/bin/pytest -q
+cd ../desktop && npm ci
 ```
 
 Para la Consulta de **Terceros** (opcional) hace falta el sidecar DIAN:
 
-```bash
-cd apps/dian-rut
-python3 -m venv .venv
-.venv/bin/pip install -e .
-.venv/bin/playwright install chromium
+```powershell
+cd apps\dian-rut
+py -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+.venv\Scripts\playwright install chromium
 ```
 
 ## Correr en dev
@@ -182,8 +198,13 @@ Endpoints del frontend: `POST /api/upload-excel`, `POST /api/upload-restore`, `G
 
 ## Tests
 
-```bash
-cd apps/core && .venv/bin/pytest -q          # 74 tests
+```powershell
+cd apps\core   ; .venv\Scripts\pytest -q ; .venv\Scripts\ruff check .   # 149 tests
+cd apps\desktop; npm test ; npm run typecheck                           # 33 tests
 ```
 
-Cubren el parser del Excel, el DV (módulo 11), V1/V2/V3, la extracción de CUFE (texto + QR + prioridad de etiquetas + invalidación de caché por versión) y el índice de PDFs, contra los samples de `docs/samples/`.
+El core cubre el parser del Excel, los importes en Decimal (D-075), el DV (módulo 11), V1/V2/V3, la extracción de CUFE (texto + QR + prioridad de etiquetas + invalidación de caché por versión), el índice de PDFs, las migraciones de esquema y el ciclo de vida de una empresa, contra los samples de `docs/samples/`.
+
+El frontend cubre las utilidades de servidor y los composables. **Falta** un smoke end-to-end que arranque la app de verdad.
+
+Todo esto corre solo en cada push y PR (`.github/workflows/test.yml`).

@@ -13,7 +13,6 @@
     "typecheck": "nuxt prepare && vue-tsc --noEmit -p .nuxt/tsconfig.app.json && vue-tsc --noEmit -p .nuxt/tsconfig.server.json"
   },
   "dependencies": {
-    "@lucide/vue": "^1.22.0",
     "@nuxt/fonts": "^0.14.0",
     "@pinia/nuxt": "^0.11.3",
     "@tanstack/vue-table": "^8.21.3",

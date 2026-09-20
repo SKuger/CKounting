@@ -7,7 +7,9 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+from . import log
+
+SCHEMA_VERSION = 2
 
 # Cuánto espera una escritura a que se libere el lock antes de rendirse (ms).
 BUSY_TIMEOUT_MS = 5_000
@@ -50,8 +52,9 @@ CREATE TABLE IF NOT EXISTS excel_row (
   grupo        TEXT,
   tipo_doc     TEXT,
   data_json    TEXT NOT NULL,
-  periodo      TEXT,          -- 'YYYY-MM' de la fila; movible entre meses (0.1.4)
-  deleted_at   TEXT           -- papelera (soft-delete) de la fila (0.1.4)
+  periodo      TEXT           -- 'YYYY-MM' de la fila (0.1.4)
+  -- D-085: no hay papelera POR FILA. La que existe es la del LOTE
+  -- (excel_load.deleted_at). La columna `deleted_at` de aquí nunca se escribió.
 );
 CREATE INDEX IF NOT EXISTS idx_excel_row_load ON excel_row(load_id);
 CREATE INDEX IF NOT EXISTS idx_excel_row_cufe ON excel_row(cufe_cude);
@@ -63,21 +66,10 @@ CREATE TABLE IF NOT EXISTS periodo_folder (
   pdfs_folder TEXT
 );
 
-CREATE TABLE IF NOT EXISTS validation_rule (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  name            TEXT NOT NULL,
-  description     TEXT,
-  type            TEXT NOT NULL,
-  scope_json      TEXT,
-  params_json     TEXT NOT NULL,
-  failure_message TEXT NOT NULL,
-  severity        TEXT NOT NULL DEFAULT 'error',
-  enabled         INTEGER NOT NULL DEFAULT 1,
-  vigencia_desde  TEXT,
-  vigencia_hasta  TEXT,
-  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
-);
+-- D-085: aquí vivía `validation_rule`, un motor de reglas con vigencias que
+-- NUNCA se implementó (ninguna línea la leía ni la escribía). Las validaciones
+-- V1/V2/V3 están en validations.py. Si algún día se hace el motor de verdad,
+-- esta tabla vuelve con una migración numerada.
 
 CREATE TABLE IF NOT EXISTS validation_run (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,7 +84,6 @@ CREATE TABLE IF NOT EXISTS validation_run (
 CREATE TABLE IF NOT EXISTS validation_failure (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   run_id         INTEGER NOT NULL REFERENCES validation_run(id) ON DELETE CASCADE,
-  rule_id        INTEGER REFERENCES validation_rule(id) ON DELETE SET NULL,
   row_index      INTEGER NOT NULL,
   cufe_cude      TEXT,
   column_name    TEXT,
@@ -209,6 +200,7 @@ def _backfill_row_periodo(conn: sqlite3.Connection) -> None:
         try:
             d = _json.loads(r["data_json"])
         except Exception:
+            log.warn("data_json ilegible en excel_row id=%s; se omite del backfill", r["id"])
             continue
         fe = d.get("Fecha Emisión")
         if isinstance(fe, str) and len(fe) >= 7:
@@ -217,8 +209,12 @@ def _backfill_row_periodo(conn: sqlite3.Connection) -> None:
         conn.executemany("UPDATE excel_row SET periodo = ? WHERE id = ?", updates)
 
 
-def _run_migrations(conn: sqlite3.Connection) -> None:
-    """Idempotent migrations for older empresa.db files."""
+def _m001_columnas_anteriores(conn: sqlite3.Connection) -> None:
+    """Migración 1 — columnas añadidas entre 0.1.0 y 0.2.1, sin versionar.
+
+    Se conserva tal cual (a base de `PRAGMA table_info` + ALTER idempotentes)
+    porque es lo que ya corrió en las BD instaladas: reescribirla cambiaría el
+    resultado para alguien. Las migraciones NUEVAS van numeradas (D-084)."""
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(empresa_info)").fetchall()}
     if "default_folder" not in cols:
         conn.execute("ALTER TABLE empresa_info ADD COLUMN default_folder TEXT")
@@ -261,14 +257,127 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         )
 
 
+def _m002_esquema_muerto(conn: sqlite3.Connection) -> None:
+    """Migración 2 — retira el esquema que describía un sistema inexistente (D-085).
+
+    - `validation_rule`: tabla completa con `severity`, `vigencia_desde/hasta` y
+      `params_json` que NADA leía ni escribía. Las reglas están en Python con dos
+      tarifas fijas. Prometía un motor de reglas con vigencias que no existe.
+    - `validation_failure.rule_id`: la clave foránea que la apuntaba.
+    - `excel_row.deleted_at`: papelera por fila que nunca se implementó (la que sí
+      funciona es la del LOTE, `excel_load.deleted_at`). Peor que inútil: si algún
+      día se filtrara por ella en `fetch_load_rows`, el `enumerate(rows)` de
+      validations dejaría de coincidir con el `row_index` de los overrides y las
+      aprobaciones manuales se aplicarían a filas equivocadas.
+
+    Solo se borra si están VACÍAS/sin usar: si alguien tuviera datos ahí, se deja
+    y se avisa, en vez de destruirlos.
+    """
+    tablas = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+
+    if "validation_rule" in tablas:
+        n = conn.execute("SELECT COUNT(*) FROM validation_rule").fetchone()[0]
+        if n:
+            log.warn("validation_rule tiene %s filas: no se borra (esquema muerto D-085)", n)
+        else:
+            # Hay que soltar primero la FK, que vive en validation_failure.
+            _rebuild_validation_failure_sin_rule_id(conn)
+            conn.execute("DROP TABLE validation_rule")
+
+    row_cols = {r["name"] for r in conn.execute("PRAGMA table_info(excel_row)").fetchall()}
+    if "deleted_at" in row_cols:
+        usados = conn.execute(
+            "SELECT COUNT(*) FROM excel_row WHERE deleted_at IS NOT NULL"
+        ).fetchone()[0]
+        if usados:
+            log.warn("excel_row.deleted_at tiene %s filas marcadas: no se borra", usados)
+        else:
+            conn.execute("ALTER TABLE excel_row DROP COLUMN deleted_at")
+
+
+def _rebuild_validation_failure_sin_rule_id(conn: sqlite3.Connection) -> None:
+    """Recrea validation_failure sin la columna `rule_id`.
+
+    SQLite no permite quitar una columna con clave foránea mediante ALTER, así que
+    toca el ciclo tabla nueva → copiar → renombrar."""
+    conn.executescript(
+        """
+        CREATE TABLE validation_failure_nueva (
+          id             INTEGER PRIMARY KEY AUTOINCREMENT,
+          run_id         INTEGER NOT NULL REFERENCES validation_run(id) ON DELETE CASCADE,
+          row_index      INTEGER NOT NULL,
+          cufe_cude      TEXT,
+          column_name    TEXT,
+          value_snapshot TEXT,
+          rule_severity  TEXT,
+          reason         TEXT NOT NULL
+        );
+        INSERT INTO validation_failure_nueva
+          (id, run_id, row_index, cufe_cude, column_name, value_snapshot, rule_severity, reason)
+          SELECT id, run_id, row_index, cufe_cude, column_name, value_snapshot, rule_severity, reason
+          FROM validation_failure;
+        DROP TABLE validation_failure;
+        ALTER TABLE validation_failure_nueva RENAME TO validation_failure;
+        CREATE INDEX IF NOT EXISTS idx_failure_run_row ON validation_failure(run_id, row_index);
+        """
+    )
+
+
+# Migraciones NUMERADAS. Cada una lleva su número y corre una sola vez, en orden.
+# Añadir una: escribir la función, ponerla aquí y subir SCHEMA_VERSION.
+MIGRACIONES: list[tuple[int, object]] = [
+    (1, _m001_columnas_anteriores),
+    (2, _m002_esquema_muerto),
+]
+
+
+class EsquemaMasNuevoQueLaApp(RuntimeError):
+    """La BD la escribió una versión posterior de Contab."""
+
+
+def _leer_version(conn: sqlite3.Connection) -> int:
+    try:
+        row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
+    except sqlite3.OperationalError:
+        return 0  # BD nueva: la tabla aún no existe
+    return int(row[0]) if row and row[0] is not None else 0
+
+
 def ensure_schema(conn: sqlite3.Connection) -> None:
-    """Apply CREATE-IF-NOT-EXISTS schema + migrations. Safe on existing DBs.
-    Caller MUST NOT be inside a transaction — executescript commits."""
+    """Crea el esquema y aplica las migraciones pendientes (D-084).
+
+    Caller MUST NOT be inside a transaction — executescript commits.
+
+    Dos cosas que antes no hacía:
+
+    1. **Bloquea el downgrade.** `SCHEMA_VERSION` llevaba en 1 desde el primer día
+       pese a los cambios de 0.1.4, 0.1.6 y 0.2.0, y una versión vieja de la app
+       abría una BD nueva y escribía tan tranquila. Con auto-update activo eso pasa.
+    2. **Sale temprano si no hay nada que hacer.** Antes ejecutaba el `executescript`
+       entero (decenas de DDL y PRAGMAs) y todos los `PRAGMA table_info` en CADA
+       llamada RPC, o sea en cada clic.
+    """
+    version = _leer_version(conn)
+
+    if version > SCHEMA_VERSION:
+        raise EsquemaMasNuevoQueLaApp(
+            f"Esta empresa fue abierta con una versión más reciente de Contab "
+            f"(esquema {version}; esta versión entiende hasta {SCHEMA_VERSION}). "
+            "Actualiza Contab para abrirla. No se modificó nada."
+        )
+
+    if version == SCHEMA_VERSION:
+        return  # nada que hacer: el camino habitual
+
     conn.executescript(SCHEMA_SQL)
-    _run_migrations(conn)
-    existing = conn.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0]
-    if existing == 0:
-        conn.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
+    for numero, migracion in MIGRACIONES:
+        if numero > version:
+            migracion(conn)  # type: ignore[operator]
+            conn.execute("DELETE FROM schema_version")
+            conn.execute("INSERT INTO schema_version(version) VALUES (?)", (numero,))
+            log.info("empresa.db migrada al esquema %s", numero)
 
 
 def init_empresa_db(db_path: str | Path, nit: str, dv: str | None, razon_social: str) -> None:

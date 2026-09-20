@@ -326,3 +326,45 @@ documentado el procedimiento en `requirements.txt`. Las dependencias DIRECTAS s�
 fijadas con `==`, que es la mayor parte del beneficio.
 
 CI ampliado: `ruff` + `pytest` en el core; `vitest` + `typecheck` + `build` en el frontend.
+
+### Sesión 9 (cont.) — hallazgos 21 a 36 (primera mitad)
+
+**#36 — el fallo del QR NO era el detector de OpenCV.** Llevaba toda la revisión
+atribuido a `cv2.QRCodeDetector`; al depurarlo de verdad resultó que
+`_render_page` devolvía `None` porque `bitmap.to_pil()` importa **Pillow**, que no
+está en `pyproject.toml` (aunque CLAUDE.md lo listaba). El `except Exception` lo
+convertía en `None` y la lectura por QR —única vía en PDFs con fuente ofuscada,
+como Movistar/Claro/Tigo— fallaba en silencio. Cambiado a `to_numpy()`, que no
+necesita Pillow. **149/149 tests verdes por primera vez en la sesión.** Es la
+demostración más clara del hallazgo #26: un `except` mudo escondió durante meses
+un fallo que afecta al producto entregado.
+
+**#21 + #22 (D-084, D-085)** — migraciones numeradas con bloqueo de downgrade y
+salida temprana; migración 2 retira `validation_rule`, `validation_failure.rule_id`
+y `excel_row.deleted_at`. Verificado con una BD v1 poblada: esquema muerto fuera,
+contabilidad intacta.
+
+**#25 + #26 (D-083)** — nuevo `log.py`; los `except: pass` pasan a registrar. La
+traza sale del payload y va al log.
+
+**#29 (D-087)** — retención de 90 días para Excels y dumps de PUC.
+
+**#31 (D-088)** — Electron: `sandbox`, `will-navigate`, filtro de esquemas en
+`openExternal`, permisos denegados, `activate` que ya no levanta un segundo
+servidor, y `uncaughtException` en vez del inútil `process.on('exit')`.
+
+**#32 (D-089)** — credencial local por arranque en todo `/api/**`. Verificado en
+vivo: sin credencial 401, equivocada 401, correcta pasa, `/api/version` abierta.
+El sidecar DIAN pasa a puerto aleatorio (estaba fijo en 8756).
+
+**#33 (D-086)** — `run.sh` y README del sidecar DIAN a `127.0.0.1`.
+
+**#34** — eliminada la librería de iconos duplicada (`@lucide/vue`); 11
+componentes migrados a `lucide-vue-next`.
+
+**#35** — README con setup de Windows primero y conteos reales; estructura del
+repo en CLAUDE.md con los módulos que faltaban; corregido que Pillow era una
+dependencia.
+
+Pendientes del bloque: **#23** (Excel como blobs JSON), **#30** (load.vue) y
+**#24**, que necesita decisión del usuario porque contradice D-046.

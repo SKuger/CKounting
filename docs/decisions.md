@@ -713,6 +713,80 @@ Antes, 'falta Poppler' y 'este PDF no tiene texto' acababan en el mismo sitio: e
 
 ---
 
+## D-083 — Los errores se registran, no se tragan (2026-09-20)
+
+Nuevo `log.py` (a stderr, que el shell recoge en `%APPDATA%/Contab/logs/`). Los `except Exception: pass` repartidos por el código pasan a `log.warn` / `log.exception`: la política no cambia (esas operaciones siguen sin tumbar nada) pero dejan rastro. Solo quedan dos `except` desnudos, al cerrar recursos de pdfium, marcados con `noqa`.
+
+La traza de una excepción deja de viajar en el payload de la respuesta y va al log: la UI recibe el mensaje para el usuario, no rutas internas.
+
+---
+
+## D-084 — Migraciones numeradas y bloqueo de downgrade (2026-09-20)
+
+`MIGRACIONES` es una lista `(número, función)` que corre en orden una sola vez. `ensure_schema` ahora:
+
+1. **Bloquea el downgrade**: si la BD declara un esquema mayor que el de la app, lanza `EsquemaMasNuevoQueLaApp` y no toca nada. Antes `SCHEMA_VERSION` llevaba en 1 desde el primer día pese a los cambios de 0.1.4/0.1.6/0.2.0, y una versión vieja abría y **escribía** en una BD nueva. Con auto-update eso pasa.
+2. **Sale temprano** cuando la versión ya coincide. Antes ejecutaba el `executescript` entero y todos los `PRAGMA table_info` en CADA llamada RPC, o sea en cada clic.
+
+La migración 1 conserva el código antiguo tal cual (ALTER idempotentes): es lo que ya corrió en las BD instaladas y reescribirla cambiaría el resultado para alguien.
+
+---
+
+## D-085 — Fuera el esquema que describía un sistema inexistente (2026-09-20)
+
+Migración 2. Retira `validation_rule` (motor de reglas con `severity` y vigencias que ninguna línea leía ni escribía), la FK `validation_failure.rule_id` que la apuntaba, y `excel_row.deleted_at` (papelera por fila que nunca se implementó; la que funciona es la del LOTE).
+
+`excel_row.deleted_at` no era solo inútil: si algún día se filtrara por ella en `fetch_load_rows`, el `enumerate(rows)` de validations dejaría de coincidir con el `row_index` de los overrides y las aprobaciones manuales se aplicarían a filas equivocadas.
+
+Se borra solo si está vacío. Si alguien tuviera datos ahí, se conserva y se avisa por log.
+
+---
+
+## D-086 — El sidecar DIAN escucha en loopback (2026-09-20)
+
+`run.sh` y el README pasan de `0.0.0.0` a `127.0.0.1`. Era herencia del despliegue web original y dejaba el scraper accesible desde toda la red. El `Dockerfile` mantiene `0.0.0.0` porque dentro de un contenedor es lo correcto, con un comentario que aclara que no se usa en el producto de escritorio.
+
+---
+
+## D-087 — Retención de los archivos subidos (2026-09-20)
+
+Cada Excel importado y cada dump de PUC se guardaban con marca temporal y nadie los borraba nunca. Se conservan **90 días** y se purgan al subir el siguiente. Los backups `.contab.zip` quedan fuera: los guarda el usuario donde quiere y son su copia de seguridad, no un temporal nuestro.
+
+---
+
+## D-088 — Endurecimiento del shell de Electron (2026-09-20)
+
+- `sandbox: true` y `webviewTag: false` en ambas ventanas. El preload seguía funcionando porque solo usa `contextBridge`/`ipcRenderer`; se quitó de él un `version` que además nadie leía (la sirve `/api/version`).
+- `will-navigate` limita la ventana a nuestro propio origen. Sin él, un enlace o un redirect llevaba el renderer a un sitio externo **conservando el puente del preload**.
+- `shell.openExternal` solo acepta `https:`, `http:` y `mailto:`. Antes aceptaba cualquier cosa, incluido `file://`.
+- `setPermissionRequestHandler` deniega todo: la app no usa cámara, micrófono ni geolocalización.
+- `activate` (macOS) reabre la ventana en vez de llamar a `boot()`, que levantaba un SEGUNDO servidor Nitro con sus sidecars.
+- `process.on('exit')` se sustituye por `uncaughtException`: en `exit` ya no se puede programar nada y `treeKill` es asíncrono, así que no servía de nada.
+
+---
+
+## D-089 — Credencial local para la API (2026-09-20)
+
+El shell genera un secreto por arranque, se lo pasa a Nitro por `CONTAB_TOKEN` y llega al renderer por el preload (IPC síncrono; un preload con sandbox no tiene `process.env`). Un middleware lo exige en todo `/api/**` salvo `/api/version`. El cliente lo adjunta reemplazando el `$fetch` global, así que las llamadas futuras quedan cubiertas sin acordarse.
+
+Sin `CONTAB_TOKEN` en el entorno la autenticación **no se activa**: `npm run dev` sigue funcionando con curl y con el navegador suelto.
+
+Motivo: `/api/rpc` es un ejecutor universal que recibe `db_path`, `source_path` y `output_path` sin validar. El puerto aleatorio en 127.0.0.1 descarta la red, pero no a otro proceso de la máquina ni a una página barriendo puertos de localhost. El sidecar DIAN pasa también a puerto aleatorio (estaba fijo en 8756).
+
+Un 401 aquí **sí** lleva código HTTP de error, a diferencia de D-071: esto es un fallo de autorización, no un error de dominio.
+
+---
+
+## D-090 — El renderizado de PDF no usa Pillow (2026-09-20)
+
+`_render_page` va por `bitmap.to_numpy()` y no por `to_pil()`.
+
+`to_pil()` importa Pillow, que **no está en las dependencias del paquete** (aunque CLAUDE.md lo listaba). En un entorno limpio lanzaba `ModuleNotFoundError`, el `except Exception` lo convertía en `None`, y la lectura por QR —única vía en los PDF con la fuente ofuscada, como los de Movistar/Claro/Tigo— fallaba en silencio. Se veía como «sin CUFE», nunca como un fallo de instalación.
+
+Este era el fallo que llevaba toda la revisión atribuido a `cv2.QRCodeDetector`. No era el detector: era que nunca le llegaba una imagen.
+
+---
+
 ## Decisiones pendientes (a tomar más adelante)
 
 - **D-E1-13** ⏸ Behavior de R-V3 cuando IVA = 0 (default actual: skip). Confirmar si lo cambiamos a "marcar excluido" o "tarifa 0%".
