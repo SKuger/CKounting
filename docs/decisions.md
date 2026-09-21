@@ -861,6 +861,117 @@ Cubre: el arranque completo, que el preload entrega la credencial **pese a `sand
 
 ---
 
+## D-096 — Contab es el puente; Siigo sigue siendo el libro contable ✅ (2026-09-21)
+
+Contab controla, causa y **exporta**; Siigo guarda los libros y produce los reportes oficiales. Decidido por el usuario en opción múltiple, frente a la alternativa de volver a Contab el libro completo.
+
+Por qué: el contador ya paga Siigo y confía en él para lo legal. Competirle con libros oficiales, estados financieros y partida doble es tres o cuatro veces más trabajo y traslada a Contab una responsabilidad legal que hoy no tiene.
+
+**Efecto en el roadmap**: **E6 (asientos contables) y E7 (reportes financieros) quedan aparcadas**. El cumplimiento que sí se hace (Fase 7 del plan de automatización) entrega **cifras para revisar, no documentos para presentar**: prellenado del 300 y el 350, y los formatos de exógena sobre la base de la causación.
+
+Costo asumido: se depende del formato y la disponibilidad de otro producto. Se mitiga diseñando el envío como **capa de adaptador** (el modelo interno de asiento es nuestro; Siigo es el primer destino, no el único), para que World Office, Helisa o Contapyme entren después sin rehacer el motor.
+
+Ver [`plans/dian-siigo-automation-plan.md`](../plans/dian-siigo-automation-plan.md).
+
+---
+
+## D-097 — Tres caminos de ingesta desde la DIAN ✅ (2026-09-21)
+
+La información de la DIAN entra por tres caminos hacia **una sola interfaz interna**:
+
+1. `token` — autenticación contra el portal y llamadas HTTP directas. El rápido: las N empresas en minutos.
+2. `robot` — Playwright sobre el portal, reusando el contexto persistente y el modo CDP que ya funciona en `apps/dian-rut`. El que sobrevive a Cloudflare y al segundo factor.
+3. `manual` — la subida del Excel que existe hoy. **No se retira nunca**: es el piso cuando los otros dos fallen.
+
+Por qué tres y no el mejor: el portal es un contrato que nadie firmó con nosotros y cambia sin avisar. Un solo camino convierte un cambio de la DIAN en un mes perdido.
+
+**Descartada por ahora**: la ingesta por correo (IMAP) del buzón de facturación del cliente. Es la vía más robusta y la única que trae el XML sin depender del portal, pero exige acceso al correo de cada empresa. Se revisa si los caminos del portal se caen.
+
+Antes de escribir el módulo hay una **sesión de reconocimiento** contra el portal real, documentada en `docs/dian-portal.md`. No se diseña sobre endpoints recordados de memoria.
+
+---
+
+## D-098 — Las credenciales de la DIAN se guardan cifradas en la máquina ✅ (2026-09-21)
+
+Una entrada por empresa en el **llavero del sistema operativo** (Windows Credential Manager). Nunca en la `.db`, nunca en el log, nunca en el payload de un error — con un test que lo comprueba.
+
+Por qué: la alternativa (pedirlas en cada corrida) mata justo lo que se venía a automatizar cuando son veinte empresas. La otra (heredar la sesión que el contador abrió a mano) no permite corridas desatendidas.
+
+Costo asumido y explícito: **Contab pasa a custodiar credenciales fiscales de terceros.** De ahí se siguen tres cosas que dejan de ser opcionales: el llavero del SO en vez de cifrado propio, la auditoría de quién disparó cada corrida, y la **firma Authenticode** del instalador que D-059 dejó pendiente — a un usuario que está por entregar las claves de la DIAN de sus clientes no se le recibe con una advertencia de SmartScreen.
+
+Queda abierto si las corridas pueden ser **desatendidas** (programadas de noche) o siempre las dispara el contador: es una decisión de política, no técnica.
+
+---
+
+## D-099 — El puente a Siigo va por la API de Siigo Nube ✅ (2026-09-21)
+
+Se envía por API con credenciales de integración, no por la plantilla de importación de archivo plano.
+
+Por qué la API y no el archivo: **un archivo se escribe pero no se lee de vuelta.** La API permite la **reconciliación inversa** — leer de Siigo lo que quedó contabilizado en el periodo y cruzarlo contra el reporte de la DIAN, en tres columnas: en la DIAN y en Siigo · solo en la DIAN (falta causar) · solo en Siigo (causado sin documento electrónico). Ese reporte responde la pregunta que hoy el contador no puede responder, y es la razón principal de la decisión.
+
+Dos cosas se confirman **antes** de diseñar: el contrato vigente de la API y el tipo de credencial. Un agente no inventa endpoints de memoria.
+
+Idempotencia por **CUFE**: un documento no sale dos veces, ni al repetir la corrida ni al reabrir el mes.
+
+A favor: el PUC que ya importa `puc.py` tiene la forma del catálogo de cuentas que exporta Siigo, así que buena parte del mapeo de cuentas es un join, no digitación.
+
+---
+
+## D-100 — El catálogo de terceros vive por empresa ✅ (2026-09-21)
+
+Los terceros enriquecidos con el RUT (responsabilidades, CIIU, municipio, estado) se guardan **en la `.db` de cada empresa**, no en un catálogo central.
+
+Se evaluó el caché central en `contab.db`: una consulta al RUT serviría a las veinte empresas en vez de repetirse veinte veces. Se descartó porque **habría necesitado una excepción explícita a D-003** («una DB por empresa, nunca mezclar»), y esa regla vale más que las consultas ahorradas. Una excepción escrita hoy es una excepción que alguien amplía en seis meses.
+
+Dos consecuencias para la implementación:
+
+- Cada fila de tercero guarda `consultado_at`, para distinguir una lectura fresca de una vieja.
+- Al **causar** un documento se copia el estado del tercero dentro del documento. Refrescar el catálogo después no puede reescribir lo que justificó una retención hace seis meses: la tarifa dependía de lo que el RUT decía **ese día**.
+
+---
+
+## D-101 — Toda corrida de ingesta la dispara el contador ✅ (2026-09-21)
+
+Sin programador y sin ejecución nocturna. Nada toca la cuenta DIAN de un cliente sin que haya un humano presente.
+
+D-098 (credenciales guardadas y cifradas) hacía *posible* la corrida desatendida; se decidió no quererla. Las credenciales guardadas siguen justificándose solas: son para **no teclear veinte claves por corrida**, no para correr sin nadie.
+
+Costo aceptado: arrancar y vigilar la corrida es trabajo manual que se repite cada mes. A cambio, un cambio del portal o un segundo factor nuevo fallan **delante de alguien**, no en silencio a las 3 de la mañana.
+
+---
+
+## D-102 — Las tarifas se importan de un Excel del contador ✅ (2026-09-21)
+
+La UVT del año, los conceptos de retención con su tarifa y su base mínima, y las tarifas de ICA por municipio **se cargan importando el Excel que el contador ya maneja**, con el mismo patrón de `puc.py`: alias de encabezado, upsert por clave, y las filas manuales se conservan.
+
+Por qué: es su fuente, la que ya usa y en la que confía. Un agente **no** siembra tarifas de impuestos de memoria ni de una búsqueda web — son ley, cambian por decreto, y un error citado con fuente convence más de lo que debería.
+
+Actualizar cada año es volver a subir el archivo. **Si un decreto obliga a publicar una versión de la aplicación, el diseño está mal.**
+
+Primer paso al implementar la Fase 4: pedir una muestra real de ese Excel y escribir `docs/tarifas-structure.md` contra ella, como se hizo con `docs/excel-structure.md` para el reporte DIAN.
+
+---
+
+## D-103 — El contrato de Siigo, verificado; el envío va por tipo de documento ✅ (2026-09-21)
+
+Verificado contra la documentación vigente de Siigo el 2026-09-21 (no de memoria):
+
+- **Autenticación**: `POST https://api.siigo.com/auth` con `username` + `access_key` → JWT con `expires_in: 86400` (24 horas). El header **`Partner-Id`** va en todas las llamadas. Las credenciales salen de Siigo Nube → *Alianzas → Mi Credencial API*; las de prueba se piden a `soporteapi@siigo.com` con el NIT. **No hay sandbox público.**
+- **Enrutamiento por tipo de documento**: factura recibida → `/purchases`; documento soporte con no obligados → `/purchase-support-documents`; `/journals` solo para lo que no encaje en ninguno de los dos.
+
+Por qué por tipo y no todo por `/journals`: el mundo del contador son documentos, no asientos sueltos, y **Siigo aplica la configuración de cada empresa** (proveedor, impuestos, retenciones) al contabilizar una compra. Eso evita que Contab tenga que replicar esa configuración empresa por empresa. El documento soporte, además, tiene recurso propio: forzarlo al molde de factura de compra ensuciaría justo el tipo que más se revisa.
+
+Costo aceptado: la configuración de cada empresa en Siigo tiene que estar bien, y el **ensayo en seco** obligatorio antes del primer envío real es donde se descubre que no lo está.
+
+Dos hallazgos del sondeo que cambian el diseño:
+
+1. **Las cuentas viajan por código.** Una línea referencia la cuenta por `code` (`"11050501"`) y `movement`, no por un id interno — el PUC que `puc.py` ya importa pasa directo. La tabla de mapeo se reduce a centros de costo, impuestos y tipos de comprobante.
+2. **No hay campo de referencia externa.** Lo más cercano es `observations` (cabecera) y `description` (línea). Por eso la idempotencia **no** puede apoyarse en Siigo: la tabla `siigo_envio` es la única autoridad sobre lo que ya salió, el CUFE se estampa además en `observations` para que un humano pueda rastrearlo dentro de Siigo, y la verificación posterior se hace **listando el periodo** (`date_start`/`date_end`, `page`/`page_size`, `total_results`), nunca preguntando por un CUFE.
+
+Ese mismo listado por rango de fechas es lo que hace viable la **reconciliación inversa**, que fue la razón de elegir la API sobre el archivo plano (D-099).
+
+---
+
 ## Decisiones pendientes (a tomar más adelante)
 
 - **D-E1-13** ⏸ Behavior de R-V3 cuando IVA = 0 (default actual: skip). Confirmar si lo cambiamos a "marcar excluido" o "tarifa 0%".
