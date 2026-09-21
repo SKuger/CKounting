@@ -66,6 +66,17 @@ Catálogo completo (103 entradas) → [`docs/decisions.md`](docs/decisions.md).
 - Cuando el usuario dice *"te voy a pasar un Excel de muestra"* o *"te guío en este punto"*, **detenerse y esperar el input** antes de inventar columnas, validaciones o estructuras.
 - Los datos de prueba en `docs/samples/` son **falsos** (sin PII real) y se pueden commitear.
 
+### El libro de avance (norma, 2026-09-21)
+
+Hay un **libro de avance publicado como artifact**, que es donde el dueño mira cómo va el plan sin abrir el repo:
+
+**https://claude.ai/artifact/QndrGPnMCXiF5hTXfUD5hU**
+
+- **Se actualiza al cerrar cada sub-fase** (cada tarea numerada del plan: 1.1, 1.2, 1.3…), no al cerrar la fase entera. Cerrar una sub-fase y no republicar deja el libro mintiendo.
+- Lo que hay que mover en cada actualización: las celdas de la tarea en el mapa, el marcador de arriba (cerradas / sin empezar / espera a una persona), el ancho de la barra, la entrada de la cabecera si el hallazgo lo merece, y **una línea nueva en «El recorrido»**.
+- **La fuente NO está en el repo.** El HTML vive en el scratchpad de la sesión que lo publicó, que no sobrevive. Para actualizarlo desde una sesión nueva: `Artifact` con `action: "read"` sobre esa URL, reconstruir sobre el archivo que devuelve, y republicar pasando la **misma URL** en `url` — publicar sin `url` crea un artifact nuevo y parte el historial en dos.
+- El tono no es de informe corporativo: se nombra lo que costó encontrar y lo que salió mal, con el número y el detalle concreto. Un libro que solo dice «avanzamos» no sirve para decidir nada.
+
 ## Estructura del repo
 
 ```
@@ -138,6 +149,12 @@ Contab/
 3. Listar al usuario qué puede probar **ya mismo** en esa entrega (instrucciones concretas, no genéricas).
 4. Actualizar [`docs/session_log.md`](docs/session_log.md) con el resumen de la sesión.
 5. Preguntarle (opción múltiple) qué quiere abordar a continuación.
+
+## Cuando cierres una sub-fase del plan de automatización
+
+1. Marcar la tarea como `[x]` en [`plans/dian-siigo-automation-plan.md`](plans/dian-siigo-automation-plan.md).
+2. **Actualizar el libro de avance** (ver la norma arriba). Es parte de cerrar, no un extra.
+3. Parar y mostrar qué quedó: el modo auto va por *slice*, no por plan entero.
 
 ## Comandos útiles para arranque rápido
 
