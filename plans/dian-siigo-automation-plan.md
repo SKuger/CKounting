@@ -191,7 +191,7 @@ Explicitly out of scope — not for this plan:
 > Decisión tomada (D-100): el catálogo de terceros vive **por empresa**, dentro de
 > su propia `.db`. D-003 queda intacta y sin excepciones.
 
-- [ ] **1.1** — Add `empresa_perfil_fiscal` to [`apps/core/contab_core/storage.py`](../apps/core/contab_core/storage.py)
+- [x] **1.1** — Add `empresa_perfil_fiscal` to [`apps/core/contab_core/storage.py`](../apps/core/contab_core/storage.py)
       as **migration 4**, following the numbered-migration rules of D-084:
       `regimen` (ordinario · SIMPLE), `responsable_iva`, `periodicidad_iva`
       (bimestral · cuatrimestral), `agente_retefuente`, `agente_reteiva`,
@@ -209,7 +209,7 @@ Explicitly out of scope — not for this plan:
     the first time you model it — retrofitting dates onto a table that already has
     rows is far more expensive. *(ES: todo atributo fiscal nace con fecha de
     vigencia; ponérsela después, con datos adentro, sale mucho más caro.)*
-- [ ] **1.2** — Add `empresa_municipio_ica` (municipio, DANE code, tarifa por mil,
+- [x] **1.2** — Add `empresa_municipio_ica` (municipio, DANE code, tarifa por mil,
       `vigencia_desde`) in the same migration. ICA is municipal: one company can
       withhold at different rates in different municipalities.
 - [ ] **1.3** — New module `apps/core/contab_core/terceros.py` + `tercero` table
