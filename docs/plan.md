@@ -2,11 +2,13 @@
 
 Roadmap por **Entregas** independientes y probables-de-usar. Cada entrega es una unidad funcional que se puede instalar/correr y probar antes de pasar a la siguiente.
 
-> **Estado global** (actualizado 2026-06-25)
+> **Estado global** (actualizado 2026-09-21)
 > - Entregas completadas: **E1 ✅**
 > - Repo: subido a `SKuger/CKounting` (privado, **monorepo**). El segundo proyecto (scraper DIAN de terceros) quedó integrado como `apps/dian-rut/`.
 > - Entrega en curso: **E-DIAN — Consulta de terceros** (base funcional integrada; falta validar un scrape real end-to-end).
 > - Próxima sugerida: validar E-DIAN contra el portal real, o **E2 — Catálogo de empresas** / **E5 — PUC + terceros** (ver `## Próxima sesión`).
+>
+> **2026-09-21 — cambio de rumbo.** El trabajo siguiente ya no sale de esta lista de entregas, sino del plan de automatización: [`plans/dian-siigo-automation-plan.md`](../plans/dian-siigo-automation-plan.md) — llevar el mes del contador desde la DIAN hasta Siigo con él aprobando, no tecleando. Lo enmarcan **D-096** (Contab es el puente, Siigo es el libro), **D-097** (tres caminos de ingesta), **D-098** (credenciales cifradas en la máquina) y **D-099** (Siigo Nube por API). Ese plan sigue el modelo de `Interval-Col/.github` (frontmatter v2.1, fases con Done-when y checkpoints).
 
 ## Próxima sesión — arranque rápido
 
@@ -351,7 +353,9 @@ Segunda consulta DIAN, servida por el **sidecar de `apps/core`** (HTTP plano, si
 
 ---
 
-## E6 — Asientos contables
+## E6 — Asientos contables ⏸ Aparcada (D-096)
+
+**Estado**: aparcada el 2026-09-21. Siigo es el libro contable; Contab causa y exporta. Se reactiva solo si D-096 se revisa.
 
 - Comprobantes (encabezado + detalle).
 - Numeración por tipo (CC, CE, CI, RC, RP, etc.).
@@ -360,7 +364,9 @@ Segunda consulta DIAN, servida por el **sidecar de `apps/core`** (HTTP plano, si
 
 ---
 
-## E7 — Reportes financieros
+## E7 — Reportes financieros ⏸ Aparcada (D-096)
+
+**Estado**: aparcada el 2026-09-21, por la misma razón que E6. Lo que sí se entrega son **cifras para revisar** (300, 350 y exógena) en la Fase 7 del plan de automatización, no reportes oficiales.
 
 - Libro mayor, libro auxiliar, balance de prueba.
 - Estado de resultados, balance general.

@@ -13,11 +13,11 @@ Software de contabilidad multi-empresa para escritorio (Windows). Este archivo e
 - **Renombrar soportes (D-066)**: en Carga, renombra los PDF del mes al patrón `DD-MM_NIT_RAZON-SOCIAL_FACTURA` con manifiesto reversible.
 - **Dev server**: `cd apps/desktop && npm run dev` → http://localhost:3000. El sidecar Python se levanta automáticamente como subprocess.
 - **Consultas DIAN (0.1.5)**: el sidebar agrupa **Terceros** (scraper Playwright, `apps/dian-rut`, sortea Cloudflare) e **Inconsistencias** (nueva — razón social por NIT+DV vía sidecar `apps/core`, **HTTP plano sin navegador**, MUISCA `DefSelPublicacionesExterna.faces`). RPCs: `parse_nit_dv`, `consulta_inconsistencias`, `export_inconsistencias`. Ver D-065.
-- **Próximo natural**: E2 (catálogo de empresas robusto) o E5 (PUC + terceros). Ver `## Próxima sesión` en `docs/plan.md`.
+- **Próximo natural (2026-09-21)**: la **Fase 1 del plan de automatización** — [`plans/dian-siigo-automation-plan.md`](plans/dian-siigo-automation-plan.md). El objetivo del plan es llevar el mes del contador desde la DIAN hasta Siigo con él aprobando, no tecleando: cimientos (perfil fiscal, terceros, tablero multiempresa) → ingesta automática del portal → el XML como fuente de verdad → causación asistida → puente a Siigo con reconciliación inversa. Sigue el modelo de planes de `Interval-Col/.github` (frontmatter v2.1, `✅ Done-when` por fase, `🚦 Checkpoint` como alto obligatorio **también en modo auto**, y `🛑 HUMAN DECISION` que un agente no puede resolver solo).
 
 ## Qué es Contab
 
-Aplicativo de escritorio que ayuda al contador a procesar la contabilidad de **varias empresas**. El alcance inicial NO incluye conexión a la DIAN ni uso de su token: trabajamos sobre los **reportes que el usuario descarga manualmente** de la DIAN y los **soportes que envía el cliente** (encargado dentro de cada empresa).
+Aplicativo de escritorio que ayuda al contador a procesar la contabilidad de **varias empresas**. Hasta 0.2.1 trabajaba solo sobre los **reportes que el usuario descarga manualmente** de la DIAN y los **soportes que envía el cliente** (encargado dentro de cada empresa). **Desde D-097 (2026-09-21) eso cambia**: la descarga desde el portal de la DIAN entra al alcance por tres caminos (`token`, `robot`, `manual`), y el envío a Siigo por su API (D-099). La subida manual del Excel se conserva como piso, no como único camino.
 
 El primer flujo concreto, implementado en E1, es el **cruce DIAN ↔ soportes**: cargar el reporte Excel de la DIAN, visualizarlo, aplicar tres validaciones definidas con el usuario y exportar las filas que no cumplen. La Validación 1 cruza el CUFE/CUDE de cada fila contra los PDFs de una carpeta de soportes (extracción real con pdftotext + cv2 QR scan).
 
@@ -48,8 +48,16 @@ El primer flujo concreto, implementado en E1, es el **cruce DIAN ↔ soportes**:
 - **Un solo identificador por PDF** con prioridad CUDS > CUDE > CUFE (D-033).
 - **Auto-listado de archivos** en `default_folder` y `pdfs_folder` — el usuario no escribe rutas, las elige con picker o las ve listadas (D-036).
 - **Auto-indexing** de PDFs en `run_validations` y `export_no_conformes` (D-037). El botón "Re-indexar" es solo para depurar.
+- **Contab es el puente; Siigo es el libro contable** (D-096). Contab controla, causa y exporta; los libros oficiales, los estados financieros y la partida doble los hace Siigo. **E6 y E7 quedan aparcadas.**
+- **Tres caminos de ingesta DIAN** —`token`, `robot`, `manual`— hacia una sola interfaz; el manual **nunca se retira** (D-097).
+- **Las credenciales de la DIAN van al llavero del SO**, nunca a la `.db` ni al log (D-098).
+- **El envío a Siigo va por la API de Siigo Nube**, con idempotencia por CUFE (D-099).
+- **El envío a Siigo va por tipo de documento** (D-103): `/purchases` para factura recibida, `/purchase-support-documents` para el documento soporte, `/journals` para lo que no encaje. Auth `POST /auth` (JWT 24 h) + header `Partner-Id`. Las cuentas viajan por **código PUC** (sin tabla de mapeo); **no hay campo de referencia externa**, así que la idempotencia vive en `siigo_envio` y se verifica listando el periodo.
+- **Los terceros viven por empresa**, no en un catálogo central (D-100) — D-003 sin excepciones.
+- **Toda corrida de ingesta la dispara el contador** (D-101). Sin programador ni ejecución nocturna.
+- **Las tarifas, la UVT y las bases mínimas se importan de un Excel del usuario** (D-102), con el patrón de `puc.py`. Un agente no las siembra de memoria.
 
-Catálogo completo (94 entradas) → [`docs/decisions.md`](docs/decisions.md).
+Catálogo completo (103 entradas) → [`docs/decisions.md`](docs/decisions.md).
 
 ## Cómo trabajamos juntos
 
@@ -101,6 +109,8 @@ Contab/
 │       ├── test/              33 tests (vitest)
 │       ├── nuxt.config.ts
 │       └── package.json
+├── plans/
+│   └── dian-siigo-automation-plan.md   ← plan de automatización DIAN → Siigo (modelo .github)
 └── docs/
     ├── plan.md            ← roadmap por entregas
     ├── decisions.md       ← registro completo (94 entradas)
