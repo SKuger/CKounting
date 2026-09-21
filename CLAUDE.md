@@ -2,10 +2,11 @@
 
 Software de contabilidad multi-empresa para escritorio (Windows). Este archivo es el punto de entrada que Claude debe leer en cada sesión.
 
-## Estado actual (último update 2026-08-14)
+## Estado actual (último update 2026-09-21 — revisión completa del repo, sesión 9)
 
 - **E1 completada ✅** end-to-end con muestras reales del usuario. Ver [`docs/session_log.md`](docs/session_log.md) para el resumen detallado.
-- **142 tests Python** + **22 de frontend** (vitest) (Excel parser, NIT DV, V1/V2/V3, PDF CUFE extraction incluido QR scan + invalidación de caché por versión, PUC). 141 verdes; `test_extracts_expected_cufe[…MOVISTAR…]` falla en Windows porque `cv2.QRCodeDetector` de las wheels de PyPI no decodifica ese QR — ver Sesión 9 en [`docs/session_log.md`](docs/session_log.md).
+- **158 tests Python + 33 de frontend (vitest) + 7 de smoke end-to-end, todos verdes.** Cubren el parser del Excel, los importes en Decimal, el DV, V1/V2/V3, la extracción de CUFE (texto + QR), el índice de PDFs, las migraciones de esquema, el ciclo de vida de una empresa, los trabajos en segundo plano y la credencial local.
+  - El fallo de `test_extracts_expected_cufe[…MOVISTAR…]` que se atribuía a `cv2.QRCodeDetector` **no era del detector**: el renderizado iba por `bitmap.to_pil()`, que importa Pillow — una dependencia no declarada. Arreglado en D-090.
 - **Los tests, ruff y el typecheck se corren solos** en push/PR (`.github/workflows/test.yml`). En `apps/desktop`: `npm test` (vitest) y `npm run typecheck`. En `apps/shell`: `npm run e2e` — smoke contra el Electron REAL (D-095), que es lo único que ve la cadena completa Electron → Nitro → sidecar Python → preload → credencial. `conftest.py` aísla `paths.data_dir` en un tmp_path: sin eso, en Windows la suite escribía (y borraba) en `%APPDATA%\Contab` real.
 - **Plan de Cuentas (PUC) por empresa (0.2.0, D-070)**: página `/puc` (desde la card en `empresa.vue`); sube el dump Excel (upsert por código = fusionar; bloquea si el NIT no coincide), edita/archiva/agrega cuentas, exporta. Módulo `puc.py`, tablas `puc_account`/`puc_import`, RPCs `puc_import`/`puc_list`/`puc_save_account`/`puc_archive_account`/`puc_delete_account`/`puc_export`, endpoint `upload-puc`.
 - **Extracción CUFE robusta (D-067)**: reconstruye el CUFE por segmentos hex (no pega el nº de autorización) + QR como verificación de lecturas dudosas + `extractor_version` que re-extrae el caché viejo. **Panel "Soportes del mes" (D-068)**: en Carga, ve cuáles PDFs tienen/no tienen CUFE y re-verifica sin re-subir el Excel.
@@ -41,14 +42,14 @@ El primer flujo concreto, implementado en E1, es el **cruce DIAN ↔ soportes**:
 - Una **DB SQLite por empresa**, nunca mezclar datos entre empresas (D-003).
 - **Sin auth** en las primeras entregas (single-user) (D-004).
 - Reportes DIAN llegan en **Excel y PDF** — Excel para datos, PDF como soporte (D-005).
-- Salida de reportes: **Excel `.xlsx`** con las columnas originales + 3 derivadas + `razon_falla` (D-006, D-014, D-024). `Base IVA` usa la **tarifa detectada** (19% o 5%), no siempre 19% — D-093 supersede D-046, confirmado por el usuario.
+- Salida de reportes: **Excel `.xlsx`** con las columnas originales + 4 derivadas + `razon_falla` (D-006, D-014, D-024). `Base IVA` usa la **tarifa detectada** (19% o 5%), no siempre 19% — D-093 supersede D-046, confirmado por el usuario.
 - Idioma de la UI: **Español (Colombia)** (D-009).
 - Contexto fiscal: **Colombia / DIAN** (D-009).
 - **Un solo identificador por PDF** con prioridad CUDS > CUDE > CUFE (D-033).
 - **Auto-listado de archivos** en `default_folder` y `pdfs_folder` — el usuario no escribe rutas, las elige con picker o las ve listadas (D-036).
 - **Auto-indexing** de PDFs en `run_validations` y `export_no_conformes` (D-037). El botón "Re-indexar" es solo para depurar.
 
-Catálogo completo (40 entradas) → [`docs/decisions.md`](docs/decisions.md).
+Catálogo completo (94 entradas) → [`docs/decisions.md`](docs/decisions.md).
 
 ## Cómo trabajamos juntos
 
@@ -82,7 +83,7 @@ Contab/
 │   │   │   ├── dian_inconsistencias.py  consulta MUISCA por NIT+DV
 │   │   │   ├── paths.py       carpetas por SO
 │   │   │   └── nit.py         DV módulo 11 DIAN
-│   │   ├── tests/             149 tests
+│   │   ├── tests/             158 tests
 │   │   ├── .venv/             venv del proyecto (NO commitear)
 │   │   └── pyproject.toml     deps + config de ruff
 │   └── desktop/           ← Nuxt 4 frontend
@@ -102,7 +103,7 @@ Contab/
 │       └── package.json
 └── docs/
     ├── plan.md            ← roadmap por entregas
-    ├── decisions.md       ← registro completo (40 entradas)
+    ├── decisions.md       ← registro completo (94 entradas)
     ├── glosario.md        ← términos DIAN / contables
     ├── excel-structure.md ← estructura verificada del Excel DIAN
     ├── session_log.md     ← bitácora de sesiones
