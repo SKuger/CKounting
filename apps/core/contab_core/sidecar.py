@@ -23,6 +23,7 @@ from . import log
 from . import nit as nit_module
 from . import paths as paths_module
 from . import pdf_cufe as pdf_cufe_module
+from . import perfil_fiscal as perfil_module
 from . import program_db as program_db_module
 from . import puc as puc_module
 from . import rename_soportes as rename_module
@@ -968,6 +969,63 @@ def _h_puc_import(params: dict) -> dict:
         conn.close()
 
 
+def _h_get_perfil_fiscal(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    fecha = params.get("fecha") or None
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return {
+            "perfil": perfil_module.perfil_vigente(conn, fecha=fecha),
+            "perfiles": perfil_module.listar_perfiles(conn),
+            "municipios_ica": perfil_module.listar_municipios_ica(conn),
+        }
+    finally:
+        conn.close()
+
+
+def _h_save_perfil_fiscal(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return perfil_module.guardar_perfil(conn, params.get("perfil") or {})
+    finally:
+        conn.close()
+
+
+def _h_delete_perfil_fiscal(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        perfil_module.eliminar_perfil(conn, params.get("vigencia_desde") or "")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+def _h_save_municipio_ica(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return perfil_module.guardar_municipio_ica(conn, params.get("municipio") or {})
+    finally:
+        conn.close()
+
+
+def _h_delete_municipio_ica(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        perfil_module.eliminar_municipio_ica(conn, params["municipio_id"])
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
 def _h_puc_list(params: dict) -> dict:
     db_path = Path(params["db_path"])
     include_archived = bool(params.get("include_archived", True))
@@ -1112,6 +1170,12 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "export_inconsistencias": _h_export_inconsistencias,
     # Renombrado de soportes PDF (DD-MM_NIT_RAZON-SOCIAL_FACTURA)
     "rename_soportes": _h_rename_soportes,
+    # Perfil fiscal de la empresa (Fase 1.1 del plan de automatización)
+    "get_perfil_fiscal": _h_get_perfil_fiscal,
+    "save_perfil_fiscal": _h_save_perfil_fiscal,
+    "delete_perfil_fiscal": _h_delete_perfil_fiscal,
+    "save_municipio_ica": _h_save_municipio_ica,
+    "delete_municipio_ica": _h_delete_municipio_ica,
     # Plan Único de Cuentas (PUC) por empresa (D-070)
     "puc_import": _h_puc_import,
     "puc_list": _h_puc_list,
