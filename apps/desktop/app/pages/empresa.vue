@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowLeft, Pencil, FolderOpen, FileSpreadsheet, Trash2, Archive, Download, ChevronRight, EllipsisVertical, CalendarPlus, RotateCcw, UploadCloud, BookText } from 'lucide-vue-next'
+import { ArrowLeft, Pencil, FolderOpen, FileSpreadsheet, Trash2, Archive, Download, ChevronRight, EllipsisVertical, CalendarPlus, RotateCcw, UploadCloud, BookText, Landmark, Plus, X } from 'lucide-vue-next'
 import { Popover, PopoverContent, PopoverTrigger } from '~/components/ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '~/components/ui/select'
 
@@ -7,6 +7,12 @@ type EmpresaInfo = { db_path: string; nit: string; dv: string | null; razon_soci
 type Periodo = { periodo: string; load_count: number; row_count: number; pdfs_folder: string | null; indexed_cufe_count: number }
 type Carga = { id: number; source_name: string; loaded_at: string; total_rows: number; periodo?: string | null; deleted?: boolean }
 type BackupResult = { path: string; size_bytes: number; excels_included: number; pdfs_included: number }
+type PerfilFiscal = {
+  vigencia_desde: string; regimen: string; responsable_iva: boolean; periodicidad_iva: string | null
+  agente_retefuente: boolean; agente_reteiva: boolean; agente_reteica: boolean
+  autorretenedor_renta: boolean; gran_contribuyente: boolean; ciiu: string | null; notas: string | null
+}
+type MunicipioIca = { id: number; municipio: string; codigo_dane: string | null; actividad: string | null; tarifa_por_mil: string; vigencia_desde: string }
 
 const route = useRoute()
 const dbPath = computed(() => (route.query.db as string) || '')
@@ -51,6 +57,34 @@ const moveTarget = ref<Carga | null>(null)
 const moveDestino = ref('')
 const showTrash = ref(false)
 
+// ── perfil fiscal ──
+function hoyISO(): string { return new Date().toISOString().slice(0, 10) }
+const perfil = ref<PerfilFiscal | null>(null)
+const perfiles = ref<PerfilFiscal[]>([])
+const municipiosIca = ref<MunicipioIca[]>([])
+const perfilOpen = ref(false)
+const savingPerfil = ref(false)
+const perfilHistorial = ref(false)
+const icaOpen = ref(false)
+const savingIca = ref(false)
+const perfilDraft = reactive({
+  vigencia_desde: hoyISO(), regimen: 'ordinario', responsable_iva: false,
+  periodicidad_iva: 'bimestral', agente_retefuente: false, agente_reteiva: false,
+  agente_reteica: false, autorretenedor_renta: false, gran_contribuyente: false,
+  ciiu: '', notas: '',
+})
+const icaDraft = reactive({ municipio: '', codigo_dane: '', actividad: '', tarifa_por_mil: '', vigencia_desde: hoyISO() })
+const BANDERAS_PERFIL = [
+  { key: 'agente_retefuente', label: 'Agente de retefuente' },
+  { key: 'agente_reteiva', label: 'Agente de ReteIVA' },
+  { key: 'agente_reteica', label: 'Agente de ReteICA' },
+  { key: 'autorretenedor_renta', label: 'Autorretenedor de renta' },
+  { key: 'gran_contribuyente', label: 'Gran contribuyente' },
+] as const
+const banderasActivas = computed(() =>
+  perfil.value ? BANDERAS_PERFIL.filter((b) => perfil.value?.[b.key]) : [],
+)
+
 const activeLoadsByPeriodo = computed(() => {
   const m = new Map<string, Carga[]>()
   for (const l of loads.value) {
@@ -81,7 +115,7 @@ async function refresh() {
   loading.value = true
   try {
     info.value = await rpc<EmpresaInfo>('open_empresa', { db_path: dbPath.value })
-    await Promise.all([reloadPeriodos(), reloadLoads()])
+    await Promise.all([reloadPeriodos(), reloadLoads(), reloadPerfil()])
   } catch (exc) {
     toast.error('No se pudo abrir la empresa', humanError(exc))
   } finally {
@@ -93,6 +127,83 @@ async function reloadPeriodos() {
 }
 async function reloadLoads() {
   loads.value = await rpc<Carga[]>('list_loads', { db_path: dbPath.value, include_deleted: true })
+}
+
+// ── perfil fiscal ──
+// Lo que la empresa es ante la DIAN decide cada retención de la causación. Va
+// fechado: si en agosto la nombran autorretenedora, marzo se sigue calculando
+// con lo que era en marzo.
+async function reloadPerfil() {
+  const r = await rpc<{ perfil: PerfilFiscal | null; perfiles: PerfilFiscal[]; municipios_ica: MunicipioIca[] }>(
+    'get_perfil_fiscal', { db_path: dbPath.value },
+  )
+  perfil.value = r.perfil
+  perfiles.value = r.perfiles
+  municipiosIca.value = r.municipios_ica
+}
+
+function openPerfil(base?: PerfilFiscal) {
+  const src = base ?? perfil.value
+  Object.assign(perfilDraft, {
+    vigencia_desde: base?.vigencia_desde ?? hoyISO(),
+    regimen: src?.regimen ?? 'ordinario',
+    responsable_iva: src?.responsable_iva ?? false,
+    periodicidad_iva: src?.periodicidad_iva ?? 'bimestral',
+    agente_retefuente: src?.agente_retefuente ?? false,
+    agente_reteiva: src?.agente_reteiva ?? false,
+    agente_reteica: src?.agente_reteica ?? false,
+    autorretenedor_renta: src?.autorretenedor_renta ?? false,
+    gran_contribuyente: src?.gran_contribuyente ?? false,
+    ciiu: src?.ciiu ?? '',
+    notas: src?.notas ?? '',
+  })
+  perfilOpen.value = true
+}
+
+async function savePerfil() {
+  savingPerfil.value = true
+  try {
+    await rpc('save_perfil_fiscal', { db_path: dbPath.value, perfil: { ...perfilDraft } })
+    await reloadPerfil()
+    perfilOpen.value = false
+    toast.success('Perfil fiscal guardado', `Vigente desde ${perfilDraft.vigencia_desde}`)
+  } catch (exc) {
+    toast.error('No se pudo guardar el perfil fiscal', humanError(exc))
+  } finally {
+    savingPerfil.value = false
+  }
+}
+
+async function deletePerfilVersion(vigencia: string) {
+  try {
+    await rpc('delete_perfil_fiscal', { db_path: dbPath.value, vigencia_desde: vigencia })
+    await reloadPerfil()
+  } catch (exc) {
+    toast.error('No se pudo borrar esa versión', humanError(exc))
+  }
+}
+
+async function saveMunicipio() {
+  savingIca.value = true
+  try {
+    await rpc('save_municipio_ica', { db_path: dbPath.value, municipio: { ...icaDraft } })
+    await reloadPerfil()
+    icaOpen.value = false
+    Object.assign(icaDraft, { municipio: '', codigo_dane: '', actividad: '', tarifa_por_mil: '', vigencia_desde: hoyISO() })
+  } catch (exc) {
+    toast.error('No se pudo guardar el municipio', humanError(exc))
+  } finally {
+    savingIca.value = false
+  }
+}
+
+async function deleteMunicipio(id: number) {
+  try {
+    await rpc('delete_municipio_ica', { db_path: dbPath.value, municipio_id: id })
+    await reloadPerfil()
+  } catch (exc) {
+    toast.error('No se pudo quitar el municipio', humanError(exc))
+  }
 }
 
 // ── meses ──
@@ -391,6 +502,204 @@ watch(dbPath, refresh)
         </div>
       </CardContent>
     </Card>
+
+    <!-- Perfil fiscal — qué es la empresa ante la DIAN (Fase 1.1) -->
+    <Card v-if="info">
+      <CardHeader>
+        <CardTitle class="flex items-center gap-2"><Landmark class="size-4 text-muted-foreground" /> Perfil fiscal</CardTitle>
+        <CardDescription>
+          Qué es esta empresa ante la DIAN: régimen, responsabilidades y municipios de ICA.
+          De aquí salen las retenciones al causar, así que cada dato vale <strong>desde una fecha</strong>:
+          si en agosto la nombran autorretenedora, marzo se sigue calculando con lo que era en marzo.
+        </CardDescription>
+        <CardAction>
+          <Button size="sm" :variant="perfil ? 'outline' : 'default'" @click="openPerfil()">
+            <Pencil v-if="perfil" class="size-3.5" /><Plus v-else class="size-4" />
+            {{ perfil ? 'Actualizar' : 'Configurar' }}
+          </Button>
+        </CardAction>
+      </CardHeader>
+      <CardContent class="space-y-4">
+        <p v-if="!perfil" class="text-sm text-muted-foreground">
+          Sin configurar. Mientras no esté, no se puede calcular ninguna retención —
+          y calcularla sobre un supuesto sería peor que no calcularla.
+        </p>
+
+        <template v-else>
+          <div class="grid gap-3 sm:grid-cols-3">
+            <div>
+              <div class="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">Régimen</div>
+              <div class="text-sm capitalize">{{ perfil.regimen }}</div>
+            </div>
+            <div>
+              <div class="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">IVA</div>
+              <div class="text-sm">
+                <template v-if="perfil.responsable_iva">Responsable · {{ perfil.periodicidad_iva }}</template>
+                <template v-else>No responsable</template>
+              </div>
+            </div>
+            <div>
+              <div class="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">CIIU</div>
+              <div class="text-sm">{{ perfil.ciiu || '—' }}</div>
+            </div>
+          </div>
+
+          <div class="flex flex-wrap gap-1.5">
+            <Badge v-for="b in banderasActivas" :key="b.key" variant="secondary">{{ b.label }}</Badge>
+            <span v-if="!banderasActivas.length" class="text-sm text-muted-foreground">Sin responsabilidades de retención marcadas.</span>
+          </div>
+
+          <p class="font-mono text-[11px] text-muted-foreground">Vigente desde {{ perfil.vigencia_desde }}</p>
+          <p v-if="perfil.notas" class="text-sm text-muted-foreground">{{ perfil.notas }}</p>
+        </template>
+
+        <Separator />
+
+        <!-- Municipios de ICA -->
+        <div>
+          <div class="mb-2 flex items-center justify-between">
+            <div class="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">Municipios de ICA</div>
+            <Button variant="ghost" size="sm" @click="icaOpen = true"><Plus class="size-3.5" /> Agregar</Button>
+          </div>
+          <p v-if="!municipiosIca.length" class="text-sm text-muted-foreground">
+            Ninguno. El ICA es municipal: la misma empresa retiene a tarifas distintas en municipios distintos.
+          </p>
+          <div v-for="m in municipiosIca" :key="m.id" class="flex items-center gap-2 py-1">
+            <span class="min-w-0 flex-1 truncate text-sm">
+              {{ m.municipio }}
+              <span v-if="m.actividad" class="text-muted-foreground">· {{ m.actividad }}</span>
+              <span class="font-mono text-muted-foreground"> · {{ m.tarifa_por_mil }} por mil · desde {{ m.vigencia_desde }}</span>
+            </span>
+            <Button variant="ghost" size="sm" @click="deleteMunicipio(m.id)"><X class="size-3.5" /></Button>
+          </div>
+        </div>
+
+        <!-- Historial de versiones -->
+        <div v-if="perfiles.length > 1">
+          <Button variant="ghost" size="sm" @click="perfilHistorial = !perfilHistorial">
+            {{ perfilHistorial ? 'Ocultar' : 'Ver' }} historial ({{ perfiles.length }} versiones)
+          </Button>
+          <div v-if="perfilHistorial" class="mt-1 border-t border-border pt-2">
+            <div v-for="v in perfiles" :key="v.vigencia_desde" class="flex items-center gap-2 py-1">
+              <span class="min-w-0 flex-1 truncate text-sm text-muted-foreground">
+                <span class="font-mono">{{ v.vigencia_desde }}</span> · {{ v.regimen }}
+                <span v-if="v.responsable_iva">· IVA {{ v.periodicidad_iva }}</span>
+              </span>
+              <Button variant="ghost" size="sm" @click="openPerfil(v)"><Pencil class="size-3.5" /></Button>
+              <Button variant="ghost" size="sm" @click="deletePerfilVersion(v.vigencia_desde)"><Trash2 class="size-3.5" /></Button>
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+
+    <!-- Editar el perfil fiscal -->
+    <Dialog :open="perfilOpen" @update:open="perfilOpen = $event">
+      <DialogContent class="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Perfil fiscal</DialogTitle>
+          <DialogDescription>
+            Guardar con una fecha nueva crea otra versión y deja intacta la anterior;
+            guardar con una fecha que ya existe actualiza esa versión.
+          </DialogDescription>
+        </DialogHeader>
+        <div class="grid gap-4 py-2">
+          <div class="grid gap-2 sm:grid-cols-2">
+            <div class="grid gap-1.5">
+              <Label>Vigente desde</Label>
+              <Input v-model="perfilDraft.vigencia_desde" type="date" />
+            </div>
+            <div class="grid gap-1.5">
+              <Label>Régimen</Label>
+              <Select v-model="perfilDraft.regimen">
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ordinario">Ordinario</SelectItem>
+                  <SelectItem value="simple">SIMPLE</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <Checkbox id="resp-iva" v-model="perfilDraft.responsable_iva" />
+            <Label for="resp-iva">Responsable de IVA</Label>
+          </div>
+          <div v-if="perfilDraft.responsable_iva" class="grid gap-1.5">
+            <Label>Periodicidad de IVA</Label>
+            <Select v-model="perfilDraft.periodicidad_iva">
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="bimestral">Bimestral</SelectItem>
+                <SelectItem value="cuatrimestral">Cuatrimestral</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div class="grid gap-2">
+            <div v-for="b in BANDERAS_PERFIL" :key="b.key" class="flex items-center gap-2">
+              <Checkbox :id="b.key" v-model="perfilDraft[b.key]" />
+              <Label :for="b.key">{{ b.label }}</Label>
+            </div>
+          </div>
+
+          <div class="grid gap-2 sm:grid-cols-2">
+            <div class="grid gap-1.5">
+              <Label>Actividad CIIU</Label>
+              <Input v-model="perfilDraft.ciiu" placeholder="6201" maxlength="4" />
+            </div>
+            <div class="grid gap-1.5">
+              <Label>Notas</Label>
+              <Input v-model="perfilDraft.notas" placeholder="Opcional" />
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" :disabled="savingPerfil" @click="perfilOpen = false">Cancelar</Button>
+          <Button :disabled="savingPerfil" @click="savePerfil">Guardar</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <!-- Agregar municipio de ICA -->
+    <Dialog :open="icaOpen" @update:open="icaOpen = $event">
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Municipio de ICA</DialogTitle>
+          <DialogDescription>La tarifa va por mil y también tiene fecha de vigencia.</DialogDescription>
+        </DialogHeader>
+        <div class="grid gap-3 py-2">
+          <div class="grid gap-1.5">
+            <Label>Municipio</Label>
+            <Input v-model="icaDraft.municipio" placeholder="Medellín" />
+          </div>
+          <div class="grid gap-2 sm:grid-cols-2">
+            <div class="grid gap-1.5">
+              <Label>Código DANE</Label>
+              <Input v-model="icaDraft.codigo_dane" placeholder="05001" maxlength="5" />
+            </div>
+            <div class="grid gap-1.5">
+              <Label>Tarifa por mil</Label>
+              <Input v-model="icaDraft.tarifa_por_mil" placeholder="6,9" />
+            </div>
+          </div>
+          <div class="grid gap-2 sm:grid-cols-2">
+            <div class="grid gap-1.5">
+              <Label>Actividad</Label>
+              <Input v-model="icaDraft.actividad" placeholder="Opcional" />
+            </div>
+            <div class="grid gap-1.5">
+              <Label>Vigente desde</Label>
+              <Input v-model="icaDraft.vigencia_desde" type="date" />
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" :disabled="savingIca" @click="icaOpen = false">Cancelar</Button>
+          <Button :disabled="savingIca" @click="saveMunicipio">Guardar</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
 
     <!-- Plan de Cuentas (PUC) — a nivel empresa -->
     <Card v-if="info">
