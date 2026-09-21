@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import log
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Cuánto espera una escritura a que se libere el lock antes de rendirse (ms).
 BUSY_TIMEOUT_MS = 5_000
@@ -175,6 +175,41 @@ CREATE TABLE IF NOT EXISTS puc_import (
   inserted    INTEGER NOT NULL DEFAULT 0,
   updated     INTEGER NOT NULL DEFAULT 0,
   imported_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Perfil fiscal de la empresa (Fase 1.1 del plan de automatización).
+-- Es una LISTA de versiones fechadas, no una fila: las responsabilidades cambian
+-- (a alguien lo nombran autorretenedor en agosto) y la contabilidad de marzo no
+-- puede recalcularse con lo que la empresa es hoy. Se lee la vigente a una fecha.
+CREATE TABLE IF NOT EXISTS empresa_perfil_fiscal (
+  id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+  vigencia_desde       TEXT NOT NULL,                      -- 'AAAA-MM-DD'
+  regimen              TEXT NOT NULL DEFAULT 'ordinario',  -- 'ordinario' | 'simple'
+  responsable_iva      INTEGER NOT NULL DEFAULT 0,
+  periodicidad_iva     TEXT,                               -- 'bimestral' | 'cuatrimestral' | NULL
+  agente_retefuente    INTEGER NOT NULL DEFAULT 0,
+  agente_reteiva       INTEGER NOT NULL DEFAULT 0,
+  agente_reteica       INTEGER NOT NULL DEFAULT 0,
+  autorretenedor_renta INTEGER NOT NULL DEFAULT 0,
+  gran_contribuyente   INTEGER NOT NULL DEFAULT 0,
+  ciiu                 TEXT,
+  notas                TEXT,
+  created_at           TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(vigencia_desde)
+);
+
+-- Municipios donde la empresa declara ICA, con su tarifa. El ICA es municipal:
+-- la misma empresa retiene a tarifas distintas en municipios distintos.
+-- La tarifa va como TEXT y se lee con Decimal (D-075: nada de float en importes).
+CREATE TABLE IF NOT EXISTS empresa_municipio_ica (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  municipio      TEXT NOT NULL,
+  codigo_dane    TEXT,
+  actividad      TEXT,
+  tarifa_por_mil TEXT NOT NULL,
+  vigencia_desde TEXT NOT NULL,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(municipio, actividad, vigencia_desde)
 );
 """
 
@@ -346,6 +381,22 @@ CREATE INDEX IF NOT EXISTS idx_excel_row_fecha ON excel_row(fecha_emision);
 """
 
 
+def _m004_perfil_fiscal(conn: sqlite3.Connection) -> None:
+    """Migración 4 — perfil fiscal de la empresa y sus municipios de ICA.
+
+    Las dos tablas se declaran en SCHEMA_SQL con `IF NOT EXISTS`, así que el
+    `executescript` de `ensure_schema` ya las crea tanto en una BD nueva como en
+    una que venía de la 3. Esta entrada existe porque la versión del esquema solo
+    avanza DENTRO del bucle de MIGRACIONES: sin ella, `SCHEMA_VERSION = 4` no se
+    escribiría nunca y `ensure_schema` volvería a ejecutar el esquema entero en
+    cada llamada RPC — justo la regresión que D-084 arregló.
+
+    No hay backfill: el perfil fiscal es información que solo tiene el contador.
+    Una empresa sin perfil se comporta exactamente como antes de esta migración.
+    """
+    return None
+
+
 def _m003_columnas_consultables(conn: sqlite3.Connection) -> None:
     """Migración 3 — saca de `data_json` los campos que hay que consultar (D-091).
 
@@ -401,6 +452,7 @@ MIGRACIONES: list[tuple[int, object]] = [
     (1, _m001_columnas_anteriores),
     (2, _m002_esquema_muerto),
     (3, _m003_columnas_consultables),
+    (4, _m004_perfil_fiscal),
 ]
 
 
