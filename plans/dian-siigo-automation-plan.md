@@ -1,8 +1,8 @@
 ---
-status: proposed
+status: in-progress
 owner: SKuger
 created: 2026-09-21
-updated: 2026-09-21
+updated: 2026-09-22
 issue: none — repo personal (SKuger/CKounting), sin board de proyecto; el índice de entregas vive en docs/plan.md
 start: 2026-09-21
 target: none — sin fecha de cierre; el plan avanza por fases y checkpoints, no por calendario (decidido 2026-09-21)
@@ -166,7 +166,15 @@ Explicitly out of scope — not for this plan:
 
 ---
 
-## Phase 1 — Foundations: fiscal profile, terceros, board
+## Phase 1 — Foundations: fiscal profile, terceros, board ✅
+
+**Cerrada el 2026-09-22.** Las seis tareas hechas, el Done-when verificado y el
+Checkpoint 1 recorrido con @SKuger sobre el tablero real. Dos cosas salieron de
+esa revisión y ya están corregidas: el perfil fiscal aparecía entre las etapas del
+mes —sugiriendo que se rehace cada mes, y es de la empresa—, y un mes con 50 filas
+no conformes se anunciaba como «Al día». La segunda es la firma de defecto de
+siempre: la pantalla informando un éxito que no entregó.
+
 
 > **Resumen (ES) — Fase 1: Cimientos.**
 >
@@ -268,7 +276,7 @@ Explicitly out of scope — not for this plan:
 una, el perfil fiscal sobrevive a cerrar la app, y lo que trae el RUT no lo pisa
 volver a derivar del Excel. Tests y typecheck en verde.)*
 
-🚦 **Checkpoint 1.** Show @SKuger: the board in the browser with three real
+🚦 **Checkpoint 1 — recorrido el 2026-09-22.** Show @SKuger: the board in the browser with three real
 companies, the `empresa_perfil_fiscal` rows queried live with `sqlite3`, and the
 pushed commits. Questions:
 1. Why does every fiscal attribute carry `vigencia_desde`, and what breaks in
