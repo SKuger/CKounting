@@ -2,7 +2,7 @@
 // Inicio — el tablero. La unidad de trabajo del contador no es una empresa, es
 // «mis N empresas este mes», y hasta la Fase 1.5 no había una sola pantalla que lo
 // respondiera: había que entrar una por una a ver en qué iba cada una.
-import { Building2, FileSearch, ArrowRight, Orbit, RefreshCw, ChevronLeft, ChevronRight, CircleAlert } from 'lucide-vue-next'
+import { Building2, FileSearch, ArrowRight, Orbit, RefreshCw, ChevronLeft, ChevronRight, CircleAlert, TriangleAlert } from 'lucide-vue-next'
 
 type EmpresaTablero = {
   db_path: string; nit: string; dv: string | null; razon_social: string
@@ -64,12 +64,13 @@ async function cargar() {
   }
 }
 
-// El estado que se muestra en cada fila. El orden importa: es el orden real del
-// trabajo, y la primera etapa sin cumplir es lo que le falta a esa empresa.
+// Las etapas DEL MES. El perfil fiscal no está aquí a propósito: es de la empresa
+// y solo cambia cuando la empresa cambia ante la DIAN —una vez al año o menos—,
+// así que ponerlo entre estas cuatro sugería que hay que rehacerlo cada mes.
+// Sale como aviso aparte, y solo cuando falta.
 function etapas(e: EmpresaTablero) {
   const soportesListos = e.soportes > 0 && e.soportes_con_cufe === e.soportes
   return [
-    { k: 'perfil', label: 'Perfil', ok: e.perfil_fiscal, detalle: e.perfil_fiscal ? 'Perfil fiscal configurado' : 'Sin perfil fiscal: no se pueden calcular retenciones' },
     { k: 'excel', label: 'Excel', ok: e.cargas > 0, detalle: e.cargas > 0 ? `${e.cargas} carga(s) · ${e.filas} filas` : 'Sin Excel de la DIAN este mes' },
     { k: 'soportes', label: 'Soportes', ok: soportesListos, parcial: e.soportes > 0 && !soportesListos, detalle: e.pdfs_folder ? `${e.soportes_con_cufe} de ${e.soportes} con CUFE` : 'Sin carpeta de soportes' },
     { k: 'validado', label: 'Validado', ok: !!e.validado_at, detalle: e.validado_at ? `Última validación: ${e.validado_at}` : 'Sin validar' },
@@ -82,10 +83,16 @@ function etapas(e: EmpresaTablero) {
 function siguientePaso(e: EmpresaTablero): { texto: string; pendiente: boolean } {
   if (e.error) return { texto: 'No se pudo leer', pendiente: true }
   const primera = etapas(e).find((et) => !et.ok)
-  if (!primera) return { texto: 'Al día', pendiente: false }
+  // Validado no es lo mismo que correcto: un mes con filas no conformes tiene
+  // trabajo pendiente, y decirle «al día» sería el defecto de siempre — la
+  // pantalla informando un éxito que no entregó.
+  if (!primera) {
+    return e.no_conformes
+      ? { texto: `${e.no_conformes} por revisar`, pendiente: true }
+      : { texto: 'Al día', pendiente: false }
+  }
   return {
     texto: {
-      perfil: 'Sin perfil fiscal',
       excel: 'Sin cargar',
       soportes: e.pdfs_folder ? 'Faltan soportes' : 'Sin carpeta de soportes',
       validado: 'Sin validar',
@@ -128,7 +135,7 @@ onMounted(() => {
         <div class="flex items-center gap-2">
           <p class="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">El mes</p>
           <Button variant="ghost" size="sm" aria-label="Mes anterior" @click="moverMes(-1)"><ChevronLeft class="size-4" /></Button>
-          <span class="min-w-40 text-center text-sm font-semibold capitalize text-foreground">{{ mesLargo }}</span>
+          <span class="min-w-40 text-center text-sm font-semibold text-foreground first-letter:uppercase">{{ mesLargo }}</span>
           <Button variant="ghost" size="sm" aria-label="Mes siguiente" @click="moverMes(1)"><ChevronRight class="size-4" /></Button>
         </div>
         <Button variant="outline" size="sm" :disabled="cargando" @click="cargar">
@@ -182,8 +189,18 @@ onMounted(() => {
           </div>
 
           <p
+            v-if="!e.error && !e.perfil_fiscal"
+            title="El perfil fiscal se configura una vez por empresa, no cada mes. Sin él no se pueden calcular retenciones."
+            class="hidden shrink-0 items-center gap-1.5 text-sm text-amber-600 sm:flex dark:text-amber-400"
+          >
+            <TriangleAlert class="size-3.5 shrink-0" /> Sin perfil fiscal
+          </p>
+
+          <p
             class="hidden shrink-0 text-sm sm:block"
-            :class="siguientePaso(e).pendiente ? 'text-muted-foreground' : 'text-primary'"
+            :class="siguientePaso(e).pendiente
+              ? (e.no_conformes && !etapas(e).some((et) => !et.ok) ? 'text-destructive' : 'text-muted-foreground')
+              : 'text-primary'"
           >{{ siguientePaso(e).texto }}</p>
 
           <p v-if="e.error" class="flex items-center gap-1.5 text-sm text-destructive">
@@ -202,11 +219,6 @@ onMounted(() => {
                   ? 'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400'
                   : 'border-border text-muted-foreground'"
             >{{ et.label }}</span>
-            <span
-              v-if="e.no_conformes"
-              :title="`${e.no_conformes} filas no conformes en la última validación`"
-              class="rounded-md border border-destructive/40 bg-destructive/10 px-2 py-0.5 font-mono text-[10px] tabular-nums text-destructive"
-            >{{ e.no_conformes }} NC</span>
           </div>
 
           <ArrowRight class="size-4 shrink-0 text-muted-foreground" />
@@ -214,7 +226,7 @@ onMounted(() => {
       </div>
 
       <p class="mt-2 text-xs text-muted-foreground">
-        Las etiquetas van en el orden real del trabajo, y el texto a su izquierda nombra la primera que falta: eso es lo que le toca a esa empresa este mes.
+        Las etiquetas son el trabajo <strong>de este mes</strong>, en su orden real, y el texto a su izquierda nombra la primera que falta. El perfil fiscal no está entre ellas porque es de la empresa, no del mes: solo aparece —en ámbar— cuando falta configurarlo.
       </p>
     </section>
 
