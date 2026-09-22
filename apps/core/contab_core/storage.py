@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import log
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # Cuánto espera una escritura a que se libere el lock antes de rendirse (ms).
 BUSY_TIMEOUT_MS = 5_000
@@ -201,6 +201,32 @@ CREATE TABLE IF NOT EXISTS empresa_perfil_fiscal (
 -- Municipios donde la empresa declara ICA, con su tarifa. El ICA es municipal:
 -- la misma empresa retiene a tarifas distintas en municipios distintos.
 -- La tarifa va como TEXT y se lee con Decimal (D-075: nada de float en importes).
+-- Catálogo de terceros de la empresa (Fase 1.3). Vive DENTRO de la .db de cada
+-- empresa y no en un catálogo central: D-100 descartó el caché compartido porque
+-- habría necesitado una excepción escrita a D-003, y esa regla vale más que las
+-- consultas ahorradas.
+--
+-- `responsabilidades` va como JSON (lista de códigos del RUT) igual que `data_json`
+-- en excel_row: es una lista corta y variable, y una tabla aparte solo añadiría
+-- dos joins sin darnos nada que consultar por separado.
+CREATE TABLE IF NOT EXISTS tercero (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  nit               TEXT NOT NULL,
+  dv                TEXT,
+  razon_social      TEXT NOT NULL DEFAULT '',
+  tipo              TEXT,                -- 'empresa' | 'persona' | NULL
+  responsabilidades TEXT,                -- JSON: ["O-13", "O-15", ...]
+  ciiu              TEXT,
+  municipio         TEXT,
+  estado_rut        TEXT,
+  consultado_at     TEXT,                -- cuándo se leyó el RUT; distingue dato fresco de viejo
+  origen            TEXT NOT NULL DEFAULT 'excel',   -- 'excel' | 'rut' | 'manual'
+  notas             TEXT,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(nit)
+);
+
 CREATE TABLE IF NOT EXISTS empresa_municipio_ica (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   municipio      TEXT NOT NULL,
@@ -381,6 +407,18 @@ CREATE INDEX IF NOT EXISTS idx_excel_row_fecha ON excel_row(fecha_emision);
 """
 
 
+def _m005_terceros(conn: sqlite3.Connection) -> None:
+    """Migración 5 — catálogo de terceros por empresa (Fase 1.3).
+
+    La tabla se declara en SCHEMA_SQL con `IF NOT EXISTS`, igual que las de la
+    migración 4. La siembra desde las filas del Excel NO se hace aquí: es una
+    operación que el contador dispara y cuyo resultado quiere ver (cuántos
+    terceros aparecieron, cuántos ya estaban), no un efecto silencioso de abrir
+    la empresa. Vive en `terceros.sembrar_desde_excel`.
+    """
+    return None
+
+
 def _m004_perfil_fiscal(conn: sqlite3.Connection) -> None:
     """Migración 4 — perfil fiscal de la empresa y sus municipios de ICA.
 
@@ -453,6 +491,7 @@ MIGRACIONES: list[tuple[int, object]] = [
     (2, _m002_esquema_muerto),
     (3, _m003_columnas_consultables),
     (4, _m004_perfil_fiscal),
+    (5, _m005_terceros),
 ]
 
 
