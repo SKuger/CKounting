@@ -76,6 +76,24 @@ function etapas(e: EmpresaTablero) {
   ]
 }
 
+// Lo que le falta a esa empresa, en texto. Las etiquetas solas obligaban a pasar
+// el mouse para saber qué significaba una apagada, y el estado de una empresa
+// tiene que leerse de un vistazo: son veinte filas, no una.
+function siguientePaso(e: EmpresaTablero): { texto: string; pendiente: boolean } {
+  if (e.error) return { texto: 'No se pudo leer', pendiente: true }
+  const primera = etapas(e).find((et) => !et.ok)
+  if (!primera) return { texto: 'Al día', pendiente: false }
+  return {
+    texto: {
+      perfil: 'Sin perfil fiscal',
+      excel: 'Sin cargar',
+      soportes: e.pdfs_folder ? 'Faltan soportes' : 'Sin carpeta de soportes',
+      validado: 'Sin validar',
+    }[primera.k] ?? 'Pendiente',
+    pendiente: true,
+  }
+}
+
 const modulos = [
   { to: '/empresas', tour: 'inicio-empresas', icon: Building2, title: 'Empresas', desc: 'Tus libros contables, uno por empresa.' },
   { to: '/consulta-dian', tour: 'inicio-dian', icon: FileSearch, title: 'Consulta DIAN', desc: 'Consulta masiva del RUT de terceros a partir de sus NIT.' },
@@ -163,8 +181,13 @@ onMounted(() => {
             </p>
           </div>
 
+          <p
+            class="hidden shrink-0 text-sm sm:block"
+            :class="siguientePaso(e).pendiente ? 'text-muted-foreground' : 'text-primary'"
+          >{{ siguientePaso(e).texto }}</p>
+
           <p v-if="e.error" class="flex items-center gap-1.5 text-sm text-destructive">
-            <CircleAlert class="size-4 shrink-0" /> No se pudo leer
+            <CircleAlert class="size-4 shrink-0" />
           </p>
 
           <div v-else class="flex flex-wrap items-center gap-1.5">
@@ -191,7 +214,7 @@ onMounted(() => {
       </div>
 
       <p class="mt-2 text-xs text-muted-foreground">
-        Las etiquetas van en el orden real del trabajo: la primera que esté apagada es lo que le falta a esa empresa este mes.
+        Las etiquetas van en el orden real del trabajo, y el texto a su izquierda nombra la primera que falta: eso es lo que le toca a esa empresa este mes.
       </p>
     </section>
 
