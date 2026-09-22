@@ -181,8 +181,9 @@ Explicitly out of scope — not for this plan:
 > 2. **1.2** — Agregar los municipios de ICA de la empresa con su tarifa por mil.
 > 3. **1.3** — Crear el catálogo de terceros por empresa y llenarlo con lo que ya
 >    trae el Excel.
-> 4. **1.4** — Ampliar la consulta del RUT para traer responsabilidades, CIIU,
->    municipio y estado, no solo la razón social.
+> 4. **1.4** — Consultar el RUT de un tercero desde el catálogo y sellar la fecha.
+>    Lo que la página pública no entrega —responsabilidades, CIIU, municipio— se
+>    fue a la 2.1, que ya abre sesión en el portal.
 > 5. **1.5** — Guardar el estado de cada (empresa, mes) en `contab.db` para poder
 >    verlo todo junto.
 > 6. **1.6** — Convertir la home de lanzador en tablero: las N empresas con su
@@ -215,21 +216,18 @@ Explicitly out of scope — not for this plan:
 - [x] **1.3** — New module `apps/core/contab_core/terceros.py` + `tercero` table
       per empresa. Seed it by upserting the counterparties already present in
       `excel_row` (`nit_emisor` is already projected by D-091).
-- [ ] **1.4** — Extend the RUT lookup to capture **responsabilidades, CIIU,
-      municipio and estado del RUT**, not only the razón social that
-      [`dian_inconsistencias.py`](../apps/core/contab_core/dian_inconsistencias.py)
-      returns today. The browser path already reaches the RUT status page in
-      [`apps/dian-rut/scraper.py`](../apps/dian-rut/scraper.py).
-  - ⚠️ **Partially delivered (2026-09-21).** What landed: the lookup writes
-    `razon_social` and `tipo` into the tercero and seals `consultado_at`, through
-    the plain-HTTP path that already existed. What did **not**: *responsabilidades*,
-    *CIIU* and *municipio*. The public RUT query's verified field set — the one the
-    working scraper extracts — is NIT, DV, names, razón social and estado; those
-    three are not in it. Writing selectors for them would mean designing against a
-    page nobody has looked at, which is the exact failure 2.1 exists to prevent.
-    They are editable by hand meanwhile, and the columns are there waiting. Fold
-    the real extraction into the 2.1 recon session, where a human is already
-    logged into the portal.
+- [x] **1.4** — Query a tercero's RUT from the catalogue: write `razon_social`
+      and `tipo` onto the tercero and seal `consultado_at`, through the plain-HTTP
+      path in [`dian_inconsistencias.py`](../apps/core/contab_core/dian_inconsistencias.py).
+      What the lookup returns wins over what the Excel imported.
+  - **Re-scoped on 2026-09-21, with @SKuger's call.** This task originally also
+    demanded *responsabilidades*, *CIIU* and *municipio*. They are **not** in the
+    public RUT query's verified field set — NIT, DV, names, razón social and estado
+    is what the working scraper extracts — so writing selectors for them would mean
+    designing against a page nobody has looked at, the exact failure 2.1 exists to
+    prevent. That extraction moved into **2.1**, where a human is already logged
+    into the portal and it costs one session instead of two. The columns exist and
+    are editable by hand meanwhile.
   - **Decided (D-100):** the enriched catalogue lives **per empresa**, in its own
     `.db`. A central cache in `contab.db` was considered and rejected — it would
     have needed an explicit exception to D-003, and D-003 is worth more than the
@@ -262,12 +260,13 @@ Explicitly out of scope — not for this plan:
   three with the current month's status; a company with no Excel reads *"sin
   cargar"*, not an empty cell.
 - A fiscal profile saved, app closed and reopened, still shows the same values.
-- A supplier row shows *responsabilidades* fetched from the RUT — you can point at
-  the field and say where it came from — not typed by hand.
+- *Consultar RUT* on a tercero brings its razón social from the DIAN and stamps
+  the date on the row — and running *Derivar del Excel* again does **not** overwrite
+  it. Do both, in that order, and watch the name stay.
 - `apps/core` tests and `ruff` pass; `npm run typecheck` passes.
-*(ES: el tablero muestra las tres empresas con su estado, el perfil fiscal
-sobrevive a cerrar la app, y un proveedor muestra las responsabilidades traídas
-del RUT. Tests y typecheck en verde.)*
+*(ES: el tablero muestra las tres empresas con su estado y lo que le falta a cada
+una, el perfil fiscal sobrevive a cerrar la app, y lo que trae el RUT no lo pisa
+volver a derivar del Excel. Tests y typecheck en verde.)*
 
 🚦 **Checkpoint 1.** Show @SKuger: the board in the browser with three real
 companies, the `empresa_perfil_fiscal` rows queried live with `sqlite3`, and the
@@ -293,7 +292,9 @@ pushed commits. Questions:
 > En orden, las tareas:
 >
 > 1. **2.1** — Sesión de reconocimiento contra el portal real y documentarla; no se
->    escribe código antes de esto.
+>    escribe código antes de esto. Incluye leer qué campos del RUT entrega de
+>    verdad —responsabilidades, CIIU, municipio— que es lo que quedó pendiente de
+>    la 1.4.
 > 2. **2.2** — Bóveda de credenciales en el llavero del sistema operativo, una
 >    entrada por empresa, nunca en la base ni en el log.
 > 3. **2.3** — `dian_portal.py` con una interfaz y tres implementaciones: token,
@@ -320,6 +321,10 @@ para correr sin él.)*
       issued and how long it lasts, the exact call behind the listado's *Exportar*
       button, and whether the XML/PDF of each document can be downloaded from
       there. **No module is designed before this file exists.**
+      While that session is open, also settle what the RUT consultation actually
+      returns — **responsabilidades, CIIU and municipio** (inherited from 1.4) — and
+      wire them into `terceros.actualizar_desde_rut`, whose columns are already
+      waiting. Two questions, one login.
   - 💡 **Heuristic.** The portal is a contract nobody signed with you. Write the
     reconnaissance into a file, not into the head of whoever ran it — when the
     portal changes (and it will), the diff between that file and reality is the
@@ -359,6 +364,9 @@ para correr sin él.)*
   credential.
 - Running the same month twice does not create a second load for it.
 - The manual upload still works with the sidecar's portal path disabled.
+- A tercero shows *responsabilidades* and *CIIU* that came from the RUT — you can
+  point at the field and say where it came from — not typed by hand (the debt 1.4
+  handed over).
 *(ES: tres empresas en una corrida, una con clave mala a propósito; las otras dos
 entran, ninguna clave aparece en los logs, repetir el mes no duplica la carga, y
 la subida manual sigue funcionando.)*
