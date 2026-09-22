@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowLeft, Pencil, FolderOpen, FileSpreadsheet, Trash2, Archive, Download, ChevronRight, EllipsisVertical, CalendarPlus, RotateCcw, UploadCloud, BookText, Landmark, Plus, X } from 'lucide-vue-next'
+import { ArrowLeft, Pencil, FolderOpen, FileSpreadsheet, Trash2, Archive, Download, ChevronRight, EllipsisVertical, CalendarPlus, RotateCcw, UploadCloud, BookText, Landmark, Plus, X, Users, Search, Sparkles } from 'lucide-vue-next'
 import { Popover, PopoverContent, PopoverTrigger } from '~/components/ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '~/components/ui/select'
 
@@ -11,6 +11,11 @@ type PerfilFiscal = {
   vigencia_desde: string; regimen: string; responsable_iva: boolean; periodicidad_iva: string | null
   agente_retefuente: boolean; agente_reteiva: boolean; agente_reteica: boolean
   autorretenedor_renta: boolean; gran_contribuyente: boolean; ciiu: string | null; notas: string | null
+}
+type Tercero = {
+  nit: string; dv: string | null; razon_social: string; tipo: string | null
+  responsabilidades: string[]; ciiu: string | null; municipio: string | null
+  estado_rut: string | null; consultado_at: string | null; origen: string; notas: string | null
 }
 type MunicipioIca = { id: number; municipio: string; codigo_dane: string | null; actividad: string | null; tarifa_por_mil: string; vigencia_desde: string }
 
@@ -74,6 +79,17 @@ const perfilDraft = reactive({
   ciiu: '', notas: '',
 })
 const icaDraft = reactive({ municipio: '', codigo_dane: '', actividad: '', tarifa_por_mil: '', vigencia_desde: hoyISO() })
+// ── terceros ──
+const terceros = ref<Tercero[]>([])
+const tercerosCounts = ref({ total: 0, con_rut: 0, sin_rut: 0 })
+const tercerosBuscar = ref('')
+const tercerosAbierto = ref(false)
+const sembrando = ref(false)
+const consultandoNit = ref<string | null>(null)
+const terceroOpen = ref(false)
+const savingTercero = ref(false)
+const terceroDraft = reactive({ nit: '', razon_social: '', ciiu: '', municipio: '', responsabilidades: '', notas: '' })
+
 const BANDERAS_PERFIL = [
   { key: 'agente_retefuente', label: 'Agente de retefuente' },
   { key: 'agente_reteiva', label: 'Agente de ReteIVA' },
@@ -115,7 +131,7 @@ async function refresh() {
   loading.value = true
   try {
     info.value = await rpc<EmpresaInfo>('open_empresa', { db_path: dbPath.value })
-    await Promise.all([reloadPeriodos(), reloadLoads(), reloadPerfil()])
+    await Promise.all([reloadPeriodos(), reloadLoads(), reloadPerfil(), reloadTerceros()])
   } catch (exc) {
     toast.error('No se pudo abrir la empresa', humanError(exc))
   } finally {
@@ -194,6 +210,77 @@ async function saveMunicipio() {
     toast.error('No se pudo guardar el municipio', humanError(exc))
   } finally {
     savingIca.value = false
+  }
+}
+
+// ── terceros ──
+// El tercero es la contraparte: el proveedor en una compra, el cliente en una
+// venta. Hasta ahora existían solo implícitos, repetidos en cada fila del Excel.
+async function reloadTerceros() {
+  const r = await rpc<{ terceros: Tercero[]; counts: { total: number; con_rut: number; sin_rut: number } }>(
+    'terceros_list', { db_path: dbPath.value, buscar: tercerosBuscar.value || undefined },
+  )
+  terceros.value = r.terceros
+  tercerosCounts.value = r.counts
+}
+
+async function sembrarTerceros() {
+  sembrando.value = true
+  try {
+    const r = await rpc<{ encontrados: number; nuevos: number; completados: number }>(
+      'terceros_sembrar', { db_path: dbPath.value },
+    )
+    await reloadTerceros()
+    tercerosAbierto.value = true
+    toast.success(
+      `${r.nuevos} terceros nuevos`,
+      `${r.encontrados} encontrados en el Excel · ${r.completados} completados`,
+    )
+  } catch (exc) {
+    toast.error('No se pudo derivar el catálogo', humanError(exc))
+  } finally {
+    sembrando.value = false
+  }
+}
+
+async function consultarRut(t: Tercero) {
+  consultandoNit.value = t.nit
+  try {
+    const r = await rpc<{ consulta: { found: boolean; razon_social: string } }>(
+      'tercero_consultar_rut', { db_path: dbPath.value, nit: t.nit, dv: t.dv },
+    )
+    await reloadTerceros()
+    if (r.consulta.found) toast.success('RUT consultado', r.consulta.razon_social)
+    else toast.error('Sin resultado en la DIAN', `El NIT ${t.nit} no devolvió datos`)
+  } catch (exc) {
+    toast.error('No se pudo consultar el RUT', humanError(exc))
+  } finally {
+    consultandoNit.value = null
+  }
+}
+
+function openTercero(t?: Tercero) {
+  Object.assign(terceroDraft, {
+    nit: t?.nit ?? '',
+    razon_social: t?.razon_social ?? '',
+    ciiu: t?.ciiu ?? '',
+    municipio: t?.municipio ?? '',
+    responsabilidades: (t?.responsabilidades ?? []).join(', '),
+    notas: t?.notas ?? '',
+  })
+  terceroOpen.value = true
+}
+
+async function saveTercero() {
+  savingTercero.value = true
+  try {
+    await rpc('tercero_save', { db_path: dbPath.value, tercero: { ...terceroDraft } })
+    await reloadTerceros()
+    terceroOpen.value = false
+  } catch (exc) {
+    toast.error('No se pudo guardar el tercero', humanError(exc))
+  } finally {
+    savingTercero.value = false
   }
 }
 
@@ -697,6 +784,115 @@ watch(dbPath, refresh)
         <DialogFooter>
           <Button variant="ghost" :disabled="savingIca" @click="icaOpen = false">Cancelar</Button>
           <Button :disabled="savingIca" @click="saveMunicipio">Guardar</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <!-- Terceros — la contraparte de cada fila (Fase 1.3) -->
+    <Card v-if="info">
+      <CardHeader>
+        <CardTitle class="flex items-center gap-2"><Users class="size-4 text-muted-foreground" /> Terceros</CardTitle>
+        <CardDescription>
+          Proveedores y clientes de esta empresa. Se derivan del Excel de la DIAN —el emisor en una
+          compra, el receptor en una venta— y de ahí colgarán las reglas de causación y las
+          retenciones, que dependen de lo que cada tercero sea ante la DIAN.
+        </CardDescription>
+        <CardAction>
+          <Button size="sm" variant="outline" :disabled="sembrando" @click="sembrarTerceros">
+            <Sparkles class="size-3.5" /> Derivar del Excel
+          </Button>
+        </CardAction>
+      </CardHeader>
+      <CardContent class="space-y-3">
+        <div class="flex flex-wrap items-center gap-x-6 gap-y-1">
+          <span class="font-mono text-sm tabular-nums text-foreground">{{ tercerosCounts.total }} terceros</span>
+          <span class="font-mono text-sm tabular-nums text-muted-foreground">{{ tercerosCounts.con_rut }} con RUT consultado</span>
+          <span v-if="tercerosCounts.sin_rut" class="font-mono text-sm tabular-nums text-muted-foreground">{{ tercerosCounts.sin_rut }} sin consultar</span>
+          <Button variant="ghost" size="sm" class="ml-auto" @click="tercerosAbierto = !tercerosAbierto">
+            {{ tercerosAbierto ? 'Ocultar' : 'Ver' }} listado
+          </Button>
+        </div>
+
+        <p v-if="!tercerosCounts.total" class="text-sm text-muted-foreground">
+          El catálogo está vacío. <strong>Derivar del Excel</strong> lo llena con las contrapartes de
+          las filas ya importadas; no duplica nada si lo corres dos veces.
+        </p>
+
+        <template v-if="tercerosAbierto">
+          <div class="flex items-center gap-2">
+            <Search class="size-4 shrink-0 text-muted-foreground" />
+            <Input v-model="tercerosBuscar" placeholder="Buscar por NIT o razón social" class="h-9 max-w-sm" @keyup.enter="reloadTerceros" />
+            <Button variant="ghost" size="sm" @click="reloadTerceros">Buscar</Button>
+            <Button variant="ghost" size="sm" class="ml-auto" @click="openTercero()"><Plus class="size-3.5" /> Agregar</Button>
+          </div>
+
+          <div class="max-h-96 overflow-y-auto rounded-md border border-border">
+            <div v-for="t in terceros" :key="t.nit" class="flex items-center gap-3 border-b border-border px-3 py-2 last:border-b-0">
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-sm text-foreground">{{ t.razon_social || '(sin razón social)' }}</p>
+                <p class="font-mono text-[11px] text-muted-foreground">
+                  {{ t.nit }}<template v-if="t.dv">-{{ t.dv }}</template>
+                  <template v-if="t.ciiu"> · CIIU {{ t.ciiu }}</template>
+                  <template v-if="t.municipio"> · {{ t.municipio }}</template>
+                </p>
+              </div>
+              <Badge v-for="r in t.responsabilidades" :key="r" variant="secondary" class="font-mono text-[10px]">{{ r }}</Badge>
+              <Badge v-if="t.consultado_at" variant="outline" class="font-mono text-[10px]">RUT</Badge>
+              <Button variant="ghost" size="sm" :disabled="consultandoNit === t.nit" @click="consultarRut(t)">
+                {{ consultandoNit === t.nit ? 'Consultando…' : 'Consultar RUT' }}
+              </Button>
+              <Button variant="ghost" size="sm" @click="openTercero(t)"><Pencil class="size-3.5" /></Button>
+            </div>
+            <p v-if="!terceros.length" class="px-3 py-4 text-sm text-muted-foreground">Ningún tercero coincide.</p>
+          </div>
+
+          <p class="text-xs text-muted-foreground">
+            <strong>Consultar RUT</strong> trae hoy la razón social y el tipo desde la DIAN. Las
+            responsabilidades, el CIIU y el municipio se escriben a mano hasta que una sesión contra
+            el portal real confirme de dónde leerlos: no se diseña contra una página que nadie ha visto.
+          </p>
+        </template>
+      </CardContent>
+    </Card>
+
+    <!-- Editar un tercero -->
+    <Dialog :open="terceroOpen" @update:open="terceroOpen = $event">
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Tercero</DialogTitle>
+          <DialogDescription>El NIT identifica al tercero; guardar con uno que ya existe lo actualiza.</DialogDescription>
+        </DialogHeader>
+        <div class="grid gap-3 py-2">
+          <div class="grid gap-1.5">
+            <Label>NIT</Label>
+            <Input v-model="terceroDraft.nit" placeholder="830008686" />
+          </div>
+          <div class="grid gap-1.5">
+            <Label>Razón social</Label>
+            <Input v-model="terceroDraft.razon_social" />
+          </div>
+          <div class="grid gap-2 sm:grid-cols-2">
+            <div class="grid gap-1.5">
+              <Label>Actividad CIIU</Label>
+              <Input v-model="terceroDraft.ciiu" placeholder="4711" maxlength="4" />
+            </div>
+            <div class="grid gap-1.5">
+              <Label>Municipio</Label>
+              <Input v-model="terceroDraft.municipio" placeholder="Medellín" />
+            </div>
+          </div>
+          <div class="grid gap-1.5">
+            <Label>Responsabilidades</Label>
+            <Input v-model="terceroDraft.responsabilidades" placeholder="O-13, O-15, O-23" />
+          </div>
+          <div class="grid gap-1.5">
+            <Label>Notas</Label>
+            <Input v-model="terceroDraft.notas" placeholder="Opcional" />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" :disabled="savingTercero" @click="terceroOpen = false">Cancelar</Button>
+          <Button :disabled="savingTercero" @click="saveTercero">Guardar</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
