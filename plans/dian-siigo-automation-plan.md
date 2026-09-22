@@ -212,7 +212,7 @@ Explicitly out of scope — not for this plan:
 - [x] **1.2** — Add `empresa_municipio_ica` (municipio, DANE code, tarifa por mil,
       `vigencia_desde`) in the same migration. ICA is municipal: one company can
       withhold at different rates in different municipalities.
-- [ ] **1.3** — New module `apps/core/contab_core/terceros.py` + `tercero` table
+- [x] **1.3** — New module `apps/core/contab_core/terceros.py` + `tercero` table
       per empresa. Seed it by upserting the counterparties already present in
       `excel_row` (`nit_emisor` is already projected by D-091).
 - [ ] **1.4** — Extend the RUT lookup to capture **responsabilidades, CIIU,
@@ -220,6 +220,16 @@ Explicitly out of scope — not for this plan:
       [`dian_inconsistencias.py`](../apps/core/contab_core/dian_inconsistencias.py)
       returns today. The browser path already reaches the RUT status page in
       [`apps/dian-rut/scraper.py`](../apps/dian-rut/scraper.py).
+  - ⚠️ **Partially delivered (2026-09-21).** What landed: the lookup writes
+    `razon_social` and `tipo` into the tercero and seals `consultado_at`, through
+    the plain-HTTP path that already existed. What did **not**: *responsabilidades*,
+    *CIIU* and *municipio*. The public RUT query's verified field set — the one the
+    working scraper extracts — is NIT, DV, names, razón social and estado; those
+    three are not in it. Writing selectors for them would mean designing against a
+    page nobody has looked at, which is the exact failure 2.1 exists to prevent.
+    They are editable by hand meanwhile, and the columns are there waiting. Fold
+    the real extraction into the 2.1 recon session, where a human is already
+    logged into the portal.
   - **Decided (D-100):** the enriched catalogue lives **per empresa**, in its own
     `.db`. A central cache in `contab.db` was considered and rejected — it would
     have needed an explicit exception to D-003, and D-003 is worth more than the
@@ -227,12 +237,20 @@ Explicitly out of scope — not for this plan:
     stale reading from a fresh one, and copy the tercero's state into the document
     at accrual time (Phase 4) — refreshing the catalogue later must not rewrite
     what justified a withholding six months ago.
-- [ ] **1.5** — Add `empresa_periodo_estado` to
+- [x] **1.5** — Add `empresa_periodo_estado` to
       [`apps/core/contab_core/program_db.py`](../apps/core/contab_core/program_db.py)
       (`contab.db`): one row per (empresa, periodo) with the stage flags — Excel
       loaded, supports %, validated, accrued, sent to Siigo — updated by the
       operations that already exist. New RPC `tablero`.
-- [ ] **1.6** — Rewrite [`apps/desktop/app/pages/index.vue`](../apps/desktop/app/pages/index.vue)
+  - ⚠️ **Built differently, on purpose (2026-09-21).** `tablero` exists and the
+    board works, but **the cache table was not created**. Everything it shows
+    already lives in each empresa's own `.db`, so a copy in `contab.db` could only
+    add one behaviour: going stale and lying. And a table whose `causado`/`enviado`
+    columns nothing writes until Phases 4-5 is the dead schema D-085 removed from
+    this repo. It is read live — a few indexed queries per empresa. The table will
+    be born in Phase 4, when there is finally something to store that has no other
+    home. The reasoning is in the module docstring, not only here.
+- [x] **1.6** — Rewrite [`apps/desktop/app/pages/index.vue`](../apps/desktop/app/pages/index.vue)
       from a launcher into the board: every company × current month with its
       status chips and a direct link into the month.
   - **Why:** the accountant's unit of work is *"my 20 companies this month"*, and
