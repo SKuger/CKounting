@@ -28,6 +28,8 @@ from . import program_db as program_db_module
 from . import puc as puc_module
 from . import rename_soportes as rename_module
 from . import storage as storage_module
+from . import tablero as tablero_module
+from . import terceros as terceros_module
 from . import validations as validations_module
 
 # ---------- handlers ----------
@@ -1026,6 +1028,76 @@ def _h_delete_municipio_ica(params: dict) -> dict:
         conn.close()
 
 
+def _h_terceros_list(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return {
+            "terceros": terceros_module.listar(
+                conn,
+                buscar=params.get("buscar"),
+                limit=int(params.get("limit", 500)),
+                offset=int(params.get("offset", 0)),
+            ),
+            "counts": terceros_module.contar(conn),
+        }
+    finally:
+        conn.close()
+
+
+def _h_terceros_sembrar(params: dict) -> dict:
+    """Deriva el catálogo de las filas del Excel ya importadas."""
+    db_path = Path(params["db_path"])
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return terceros_module.sembrar_desde_excel(conn)
+    finally:
+        conn.close()
+
+
+def _h_tercero_save(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return terceros_module.guardar(conn, params.get("tercero") or {})
+    finally:
+        conn.close()
+
+
+def _h_tercero_consultar_rut(params: dict) -> dict:
+    """Consulta el RUT de un tercero y vuelca lo que devuelva en el catálogo.
+
+    Hoy la consulta pública devuelve razón social y tipo. Las responsabilidades,
+    el CIIU y el municipio se escriben a mano hasta que una sesión contra el
+    portal real confirme de dónde leerlos — el mismo criterio de la tarea 2.1:
+    no se diseña contra una página que nadie ha visto.
+    """
+    db_path = Path(params["db_path"])
+    nit_param = str(params["nit"])
+    dv = str(params.get("dv") or "").strip() or nit_module.compute_dv(
+        nit_module.normalize(nit_param)
+    )
+    consulta = dian_inc_module.consultar(nit_param, dv)
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        if not consulta.get("found"):
+            return {"consulta": consulta, "tercero": terceros_module.obtener(conn, nit_param)}
+        tercero = terceros_module.actualizar_desde_rut(conn, nit_param, consulta)
+        return {"consulta": consulta, "tercero": tercero}
+    finally:
+        conn.close()
+
+
+def _h_tablero(params: dict) -> dict:
+    return tablero_module.tablero(
+        params.get("periodo"), include_archived=bool(params.get("include_archived", False))
+    )
+
+
 def _h_puc_list(params: dict) -> dict:
     db_path = Path(params["db_path"])
     include_archived = bool(params.get("include_archived", True))
@@ -1176,6 +1248,13 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "delete_perfil_fiscal": _h_delete_perfil_fiscal,
     "save_municipio_ica": _h_save_municipio_ica,
     "delete_municipio_ica": _h_delete_municipio_ica,
+    # Catálogo de terceros por empresa (Fase 1.3, D-100)
+    "terceros_list": _h_terceros_list,
+    "terceros_sembrar": _h_terceros_sembrar,
+    "tercero_save": _h_tercero_save,
+    "tercero_consultar_rut": _h_tercero_consultar_rut,
+    # Tablero multiempresa (Fase 1.5)
+    "tablero": _h_tablero,
     # Plan Único de Cuentas (PUC) por empresa (D-070)
     "puc_import": _h_puc_import,
     "puc_list": _h_puc_list,
