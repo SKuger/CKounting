@@ -9,28 +9,45 @@ from __future__ import annotations
 
 import json
 import sys
-import traceback
+from collections.abc import Callable
+from decimal import Decimal
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
+from . import backup as backup_module
+from . import dian_inconsistencias as dian_inc_module
 from . import excel as excel_module
+from . import export as export_module
+from . import jobs as jobs_module
+from . import log
 from . import nit as nit_module
 from . import paths as paths_module
-from . import storage as storage_module
-from . import validations as validations_module
-from . import export as export_module
 from . import pdf_cufe as pdf_cufe_module
-from . import backup as backup_module
+from . import perfil_fiscal as perfil_module
 from . import program_db as program_db_module
-from . import dian_inconsistencias as dian_inc_module
-from . import rename_soportes as rename_module
 from . import puc as puc_module
-
+from . import rename_soportes as rename_module
+from . import storage as storage_module
+from . import tablero as tablero_module
+from . import terceros as terceros_module
+from . import validations as validations_module
 
 # ---------- handlers ----------
 
 def _h_ping(_params: dict) -> dict:
     return {"pong": True}
+
+
+def _h_check_dependencies(_params: dict) -> dict:
+    """Estado de los binarios externos que Contab necesita (D-080).
+
+    Permite avisar ANTES de procesar un mes entero, en vez de que el usuario vea
+    todas las filas como 'sin soporte' sin saber que falta una instalación."""
+    poppler = pdf_cufe_module.comprobar_pdftotext()
+    return {
+        "ok": poppler["disponible"],
+        "pdftotext": poppler,
+    }
 
 
 def _h_list_empresas(params: dict) -> list[dict]:
@@ -41,7 +58,7 @@ def _h_list_empresas(params: dict) -> list[dict]:
         try:
             info = storage_module.read_empresa_info(db_path)
         except Exception:
-            pass
+            log.exception("no se pudo leer la empresa %s al listar", db_path)
         archived = bool(info["archived"]) if info else False
         if archived and not include_archived:
             continue
@@ -85,11 +102,40 @@ def _h_create_empresa(params: dict) -> dict:
     dv = dv or computed_dv
 
     db_path = paths_module.empresa_db_path(body, razon_social)
+
+    # D-079: crear sobre una empresa que ya existe NO puede devolver éxito.
+    # `init_empresa_db` es idempotente, así que antes se adoptaba el .db existente
+    # y se respondía con la razón social ENVIADA aunque la BD conservara la otra:
+    # el usuario creía haber creado una empresa nueva y estaba editando otra.
+    if db_path.exists():
+        existente = storage_module.read_empresa_info(db_path) or {}
+        raise ValueError(
+            f"Ya existe una empresa con ese NIT y esa razón social: "
+            f"{existente.get('nit', body)} · {existente.get('razon_social', razon_social)}. "
+            "Ábrela desde la lista de empresas en vez de crearla de nuevo."
+        )
+
+    # El mismo NIT con otra razón social generaría un archivo distinto y dos
+    # contabilidades paralelas para el mismo contribuyente: hay que avisar.
+    for otra in paths_module.scan_empresa_dbs():
+        try:
+            info_otra = storage_module.read_empresa_info(otra)
+        except Exception:
+            log.warn("empresa ilegible al comprobar NIT duplicado: %s", otra)
+            continue
+        if info_otra and nit_module.normalize(info_otra.get("nit") or "") == body:
+            raise ValueError(
+                f"El NIT {body} ya está registrado como «{info_otra.get('razon_social')}». "
+                "Si cambió de nombre, edita la razón social de esa empresa; no crees otra."
+            )
+
     storage_module.init_empresa_db(db_path, body, dv, razon_social)
     try:
         program_db_module.register_empresa(db_path, body, dv, razon_social)
     except Exception:
-        pass  # el catálogo central es best-effort; la empresa ya quedó creada
+        # El catálogo central es best-effort: la empresa ya quedó creada y
+        # sync_registry la recogerá al arrancar. Pero que quede rastro.
+        log.exception("no se pudo registrar %s en el catálogo central", db_path)
     return {"db_path": str(db_path), "nit": body, "dv": dv, "razon_social": razon_social}
 
 
@@ -172,6 +218,18 @@ def _h_delete_empresa(params: dict) -> dict:
     return backup_module.delete_empresa_file(db_path, confirm_nit)
 
 
+def _h_papelera_list(_params: dict) -> list[dict]:
+    """Qué empresas borradas siguen recuperables y cuántos días les quedan (D-078)."""
+    return backup_module.listar_papelera()
+
+
+def _h_papelera_restore(params: dict) -> dict:
+    archivo = params.get("archivo")
+    if not isinstance(archivo, str) or not archivo.strip():
+        raise ValueError("archivo requerido (string)")
+    return backup_module.restaurar_de_papelera(archivo)
+
+
 def _h_list_pdfs_folder_files(params: dict) -> dict:
     """List PDFs in the empresa's pdfs_folder, joined against the index cache.
     Returns extraction status + CUFE count per file."""
@@ -243,7 +301,7 @@ def _h_list_pdfs_folder_files(params: dict) -> dict:
     }
 
 
-def _h_reindex_pdfs(params: dict) -> dict:
+def _h_reindex_pdfs(params: dict, progress=None) -> dict:
     """Force a fresh incremental indexing of the empresa's pdfs_folder."""
     db_path = Path(params["db_path"])
     info = storage_module.read_empresa_info(db_path)
@@ -255,14 +313,14 @@ def _h_reindex_pdfs(params: dict) -> dict:
 
     conn = storage_module.connect(db_path)
     try:
-        with storage_module.transaction(conn):
-            stats = pdf_cufe_module.index_folder(conn, folder)
+        # index_folder hace COMMIT por archivo: no envolverlo en una transacción.
+        stats = pdf_cufe_module.index_folder(conn, folder, progress=progress)
     finally:
         conn.close()
     return {"folder": stats.folder, "stats": stats.to_dict(), "error": None}
 
 
-def _h_list_load_soportes(params: dict) -> dict:
+def _h_list_load_soportes(params: dict, progress=None) -> dict:
     """Soportes del MES de este load (carpeta del periodo): un item por PDF con su
     estado de extracción y el CUFE encontrado, para ver CUÁLES soportes no se
     leyeron y re-verificarlos sin re-subir el Excel (D-068).
@@ -289,11 +347,11 @@ def _h_list_load_soportes(params: dict) -> dict:
                     "reindexed": False, "error": f"La carpeta de soportes no existe: {folder_path}"}
 
         if reindex:
-            with storage_module.transaction(conn):
-                if force:
+            if force:
+                with storage_module.transaction(conn):
                     conn.execute("DELETE FROM pdf_cufe_index WHERE folder_path = ?",
                                  (str(folder_path.resolve()),))
-                pdf_cufe_module.index_folder(conn, folder_path)
+            pdf_cufe_module.index_folder(conn, folder_path, progress=progress)
 
         indexed_by_path = {r["pdf_path"]: r for r in pdf_cufe_module.list_indexed_pdfs(conn, folder_path)}
     finally:
@@ -354,6 +412,33 @@ def _h_import_excel(params: dict) -> dict:
     }
 
 
+def _h_resumen_periodos(params: dict) -> dict:
+    """Totales por mes, agregados en SQL (D-091).
+
+    Antes esto era imposible sin cargar todas las filas a memoria: la fila entera
+    vivía como blob JSON y no había nada que agrupar."""
+    db_path = Path(params["db_path"])
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return {"periodos": excel_module.resumen_por_periodo(conn)}
+    finally:
+        conn.close()
+
+
+def _h_resumen_emisores(params: dict) -> dict:
+    """Mayores emisores, del mes indicado o de toda la empresa (D-091)."""
+    db_path = Path(params["db_path"])
+    periodo = params.get("periodo")
+    limite = int(params.get("limite", 50))
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return {"emisores": excel_module.resumen_por_emisor(conn, periodo, limite)}
+    finally:
+        conn.close()
+
+
 def _h_list_loads(params: dict) -> list[dict]:
     db_path = Path(params["db_path"])
     periodo = params.get("periodo")
@@ -391,7 +476,7 @@ def _h_list_folder_files(params: dict) -> dict:
     """List .xlsx files inside the empresa's default_folder. Each entry is
     flagged with `imported=true` if there is an excel_load whose source_path
     matches the file path verbatim."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     db_path = Path(params["db_path"])
     info = storage_module.read_empresa_info(db_path)
@@ -501,7 +586,7 @@ def _load_periodo(conn, load_id: int) -> str | None:
     return r["periodo"] if r else None
 
 
-def _index_folder_cufes(conn, folder: str | None) -> tuple[set[str] | None, dict | None]:
+def _index_folder_cufes(conn, folder: str | None, progress=None) -> tuple[set[str] | None, dict | None]:
     """Index a PDFs folder and return (cufes_set, stats).
     Returns (None, None) if no folder. Caller manages the connection."""
     folder = (folder or "").strip()
@@ -510,21 +595,20 @@ def _index_folder_cufes(conn, folder: str | None) -> tuple[set[str] | None, dict
     folder_path = Path(folder)
     if not folder_path.is_dir():
         return set(), {"folder": str(folder_path), "missing": True}
-    with storage_module.transaction(conn):
-        stats = pdf_cufe_module.index_folder(conn, folder_path)
+    stats = pdf_cufe_module.index_folder(conn, folder_path, progress=progress)
     cufes = pdf_cufe_module.get_indexed_cufes(conn, folder_path)
     return cufes, stats.to_dict()
 
 
-def _resolve_load_cufes(conn, load_id: int) -> tuple[set[str] | None, dict | None]:
+def _resolve_load_cufes(conn, load_id: int, progress=None) -> tuple[set[str] | None, dict | None]:
     """0.1.4 — index the soportes folder OF THIS LOAD'S PERIODO (per-month),
     falling back to the empresa-wide folder if the month has none configured."""
     periodo = _load_periodo(conn, load_id)
     folder = storage_module.periodo_pdfs_folder(conn, periodo)
-    return _index_folder_cufes(conn, folder)
+    return _index_folder_cufes(conn, folder, progress=progress)
 
 
-def _h_run_validations(params: dict) -> dict:
+def _h_run_validations(params: dict, progress=None) -> dict:
     db_path = Path(params["db_path"])
     load_id = int(params["load_id"])
     run_v3 = bool(params.get("run_v3", True))
@@ -534,7 +618,9 @@ def _h_run_validations(params: dict) -> dict:
 
     conn = storage_module.connect(db_path)
     try:
-        indexed_cufes, index_stats = _resolve_load_cufes(conn, load_id)
+        indexed_cufes, index_stats = _resolve_load_cufes(conn, load_id, progress=progress)
+        if progress is not None:
+            progress(0, 0, "Aplicando validaciones")
         rows = excel_module.fetch_load_rows(conn, load_id)
         v3_overrides = storage_module.list_overrides(conn, load_id, "V3")
         overrides_by_row = {i: {"V3"} for i in v3_overrides}
@@ -864,7 +950,7 @@ def _h_puc_import(params: dict) -> dict:
         loaded = puc_module.load_puc(source_path)
     except puc_module.PucParseError:
         raise
-    except Exception as exc:  # noqa: BLE001 — cualquier fallo inesperado → mensaje claro
+    except Exception as exc:
         raise ValueError(
             "No pude leer el Excel de cuentas. Revisa que sea el archivo correcto "
             f"en formato .xlsx. Detalle: {exc}"
@@ -883,6 +969,133 @@ def _h_puc_import(params: dict) -> dict:
         return puc_module.persist_puc(conn, loaded, dry_run=dry_run)
     finally:
         conn.close()
+
+
+def _h_get_perfil_fiscal(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    fecha = params.get("fecha") or None
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return {
+            "perfil": perfil_module.perfil_vigente(conn, fecha=fecha),
+            "perfiles": perfil_module.listar_perfiles(conn),
+            "municipios_ica": perfil_module.listar_municipios_ica(conn),
+        }
+    finally:
+        conn.close()
+
+
+def _h_save_perfil_fiscal(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return perfil_module.guardar_perfil(conn, params.get("perfil") or {})
+    finally:
+        conn.close()
+
+
+def _h_delete_perfil_fiscal(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        perfil_module.eliminar_perfil(conn, params.get("vigencia_desde") or "")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+def _h_save_municipio_ica(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return perfil_module.guardar_municipio_ica(conn, params.get("municipio") or {})
+    finally:
+        conn.close()
+
+
+def _h_delete_municipio_ica(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        perfil_module.eliminar_municipio_ica(conn, params["municipio_id"])
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+def _h_terceros_list(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return {
+            "terceros": terceros_module.listar(
+                conn,
+                buscar=params.get("buscar"),
+                limit=int(params.get("limit", 500)),
+                offset=int(params.get("offset", 0)),
+            ),
+            "counts": terceros_module.contar(conn),
+        }
+    finally:
+        conn.close()
+
+
+def _h_terceros_sembrar(params: dict) -> dict:
+    """Deriva el catálogo de las filas del Excel ya importadas."""
+    db_path = Path(params["db_path"])
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return terceros_module.sembrar_desde_excel(conn)
+    finally:
+        conn.close()
+
+
+def _h_tercero_save(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return terceros_module.guardar(conn, params.get("tercero") or {})
+    finally:
+        conn.close()
+
+
+def _h_tercero_consultar_rut(params: dict) -> dict:
+    """Consulta el RUT de un tercero y vuelca lo que devuelva en el catálogo.
+
+    Hoy la consulta pública devuelve razón social y tipo. Las responsabilidades,
+    el CIIU y el municipio se escriben a mano hasta que una sesión contra el
+    portal real confirme de dónde leerlos — el mismo criterio de la tarea 2.1:
+    no se diseña contra una página que nadie ha visto.
+    """
+    db_path = Path(params["db_path"])
+    nit_param = str(params["nit"])
+    dv = str(params.get("dv") or "").strip() or nit_module.compute_dv(
+        nit_module.normalize(nit_param)
+    )
+    consulta = dian_inc_module.consultar(nit_param, dv)
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        if not consulta.get("found"):
+            return {"consulta": consulta, "tercero": terceros_module.obtener(conn, nit_param)}
+        tercero = terceros_module.actualizar_desde_rut(conn, nit_param, consulta)
+        return {"consulta": consulta, "tercero": tercero}
+    finally:
+        conn.close()
+
+
+def _h_tablero(params: dict) -> dict:
+    return tablero_module.tablero(
+        params.get("periodo"), include_archived=bool(params.get("include_archived", False))
+    )
 
 
 def _h_puc_list(params: dict) -> dict:
@@ -945,8 +1158,41 @@ def _h_puc_export(params: dict) -> dict:
         conn.close()
 
 
+# ---------- trabajos en segundo plano (D-076) ----------
+
+# Métodos cuya duración no tiene techo (extracción de PDFs, validación de un mes
+# entero). Llamarlos con `"<método>_async"` arranca un trabajo y devuelve su
+# `job_id` al instante; el progreso se consulta con `job_status`.
+ASYNC_CAPABLE: dict[str, Callable[[dict, Any], Any]] = {
+    "run_validations": _h_run_validations,
+    "reindex_pdfs": lambda p, progress: _h_reindex_pdfs(p, progress=progress),
+    "list_load_soportes": lambda p, progress: _h_list_load_soportes(p, progress=progress),
+}
+
+
+def _h_job_status(params: dict) -> dict:
+    return jobs_module.status(str(params["job_id"]))
+
+
+def _h_job_cancel(params: dict) -> dict:
+    return jobs_module.cancel(str(params["job_id"]))
+
+
+def _h_job_list(_params: dict) -> list[dict]:
+    return jobs_module.listar()
+
+
+def _start_async(method: str, params: dict) -> dict:
+    fn = ASYNC_CAPABLE[method]
+    return jobs_module.start(method, lambda report: fn(params, report))
+
+
 HANDLERS: dict[str, Callable[[dict], Any]] = {
+    "job_status": _h_job_status,
+    "job_cancel": _h_job_cancel,
+    "job_list": _h_job_list,
     "ping": _h_ping,
+    "check_dependencies": _h_check_dependencies,
     "list_empresas": _h_list_empresas,
     "validate_nit": _h_validate_nit,
     "create_empresa": _h_create_empresa,
@@ -959,11 +1205,15 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "backup_empresa": _h_backup_empresa,
     "restore_empresa": _h_restore_empresa,
     "delete_empresa": _h_delete_empresa,
+    "papelera_list": _h_papelera_list,
+    "papelera_restore": _h_papelera_restore,
     "list_pdfs_folder_files": _h_list_pdfs_folder_files,
     "reindex_pdfs": _h_reindex_pdfs,
     "list_load_soportes": _h_list_load_soportes,
     "import_excel": _h_import_excel,
     "list_loads": _h_list_loads,
+    "resumen_periodos": _h_resumen_periodos,
+    "resumen_emisores": _h_resumen_emisores,
     "list_folder_files": _h_list_folder_files,
     "get_load_rows": _h_get_load_rows,
     "run_validations": _h_run_validations,
@@ -992,6 +1242,19 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "export_inconsistencias": _h_export_inconsistencias,
     # Renombrado de soportes PDF (DD-MM_NIT_RAZON-SOCIAL_FACTURA)
     "rename_soportes": _h_rename_soportes,
+    # Perfil fiscal de la empresa (Fase 1.1 del plan de automatización)
+    "get_perfil_fiscal": _h_get_perfil_fiscal,
+    "save_perfil_fiscal": _h_save_perfil_fiscal,
+    "delete_perfil_fiscal": _h_delete_perfil_fiscal,
+    "save_municipio_ica": _h_save_municipio_ica,
+    "delete_municipio_ica": _h_delete_municipio_ica,
+    # Catálogo de terceros por empresa (Fase 1.3, D-100)
+    "terceros_list": _h_terceros_list,
+    "terceros_sembrar": _h_terceros_sembrar,
+    "tercero_save": _h_tercero_save,
+    "tercero_consultar_rut": _h_tercero_consultar_rut,
+    # Tablero multiempresa (Fase 1.5)
+    "tablero": _h_tablero,
     # Plan Único de Cuentas (PUC) por empresa (D-070)
     "puc_import": _h_puc_import,
     "puc_list": _h_puc_list,
@@ -1004,24 +1267,41 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
 
 # ---------- IPC loop ----------
 
+def _json_default(obj: Any) -> Any:
+    """Único borde de salida de los importes (D-075).
+
+    Un `Decimal` debe viajar a la UI como NÚMERO JSON, no como string: con el
+    `default=str` anterior la tabla habría recibido "12952.83" y se le habría roto
+    el orden y el formato. Los importes están cuantizados a centavos, así que el
+    double más cercano los representa sin pérdida perceptible para mostrar.
+    Todo lo demás (Path, datetime…) sigue cayendo a `str`."""
+    if isinstance(obj, Decimal):
+        return float(obj)
+    return str(obj)
+
+
 def handle_request(request: dict) -> dict:
     request_id = request.get("id")
     method = request.get("method")
     params = request.get("params") or {}
-    handler = HANDLERS.get(method)
-    if handler is None:
-        return {"id": request_id, "error": {"code": "unknown_method", "message": method or ""}}
     try:
+        if isinstance(method, str) and method.endswith("_async") and method[:-6] in ASYNC_CAPABLE:
+            # Arranca el trabajo y responde al instante con su job_id: el bucle
+            # queda libre para atender job_status mientras el hilo trabaja.
+            result = _start_async(method[:-6], params)
+            return {"id": request_id, "result": result}
+        handler = HANDLERS.get(method)
+        if handler is None:
+            return {"id": request_id, "error": {"code": "unknown_method", "message": method or ""}}
         result = handler(params)
         return {"id": request_id, "result": result}
     except Exception as exc:
+        # La traza va al log (stderr), no al payload: la UI recibe el mensaje para
+        # el usuario, no rutas internas ni nombres de módulo (D-083).
+        log.exception("%s falló", method)
         return {
             "id": request_id,
-            "error": {
-                "code": exc.__class__.__name__,
-                "message": str(exc),
-                "trace": traceback.format_exc(limit=4),
-            },
+            "error": {"code": exc.__class__.__name__, "message": str(exc)},
         }
 
 
@@ -1031,7 +1311,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         program_db_module.sync_registry()
     except Exception:
-        pass
+        # Nunca debe impedir el arranque, pero sí debe verse en el log.
+        log.exception("sync_registry falló al arrancar")
     for raw_line in sys.stdin:
         line = raw_line.strip()
         if not line:
@@ -1042,7 +1323,7 @@ def main(argv: list[str] | None = None) -> int:
             response = {"id": None, "error": {"code": "invalid_json", "message": str(exc)}}
         else:
             response = handle_request(req)
-        sys.stdout.write(json.dumps(response, ensure_ascii=False, default=str) + "\n")
+        sys.stdout.write(json.dumps(response, ensure_ascii=False, default=_json_default) + "\n")
         sys.stdout.flush()
     return 0
 

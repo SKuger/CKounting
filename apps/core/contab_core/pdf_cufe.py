@@ -15,13 +15,15 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 import cv2
 import numpy as np
 import pypdfium2 as pdfium
+
+from . import log
 
 CUFE_RE = re.compile(r"^[a-f0-9]{96}$")
 # A run of hex chars possibly split by whitespace (line-wrapped CUFEs). We then
@@ -131,32 +133,83 @@ def _find_cufes_in_text(text: str) -> list[Cufe]:
     return [Cufe(value=candidates[0][1], label=None)]
 
 
-def _pdftotext(pdf_path: Path, layout: bool, timeout: float = 30.0) -> str:
+class PopplerNoDisponible(RuntimeError):
+    """`pdftotext` no está instalado o no se puede ejecutar."""
+
+
+def pdftotext_exe() -> str:
     # Packaged (Windows): CONTAB_PDFTOTEXT points at the bundled Poppler binary (not on PATH).
     # Dev / Linux: fall back to `pdftotext` from PATH.
-    exe = os.environ.get("CONTAB_PDFTOTEXT") or "pdftotext"
-    args = [exe, "-layout" if layout else "-raw", "-enc", "UTF-8", str(pdf_path), "-"]
+    return os.environ.get("CONTAB_PDFTOTEXT") or "pdftotext"
+
+
+def comprobar_pdftotext() -> dict:
+    """¿Está disponible el binario de Poppler? Para avisar ANTES de procesar.
+
+    Sin esto, una dependencia ausente era indistinguible de un PDF sin texto: el
+    usuario veía el mes entero como 'sin soporte' y no tenía forma de saber que
+    el problema era una instalación incompleta (D-080)."""
+    exe = pdftotext_exe()
+    try:
+        r = subprocess.run([exe, "-v"], capture_output=True, timeout=10, check=False)
+    except FileNotFoundError:
+        return {"disponible": False, "ruta": exe,
+                "error": f"No se encontró «{exe}». Contab necesita Poppler (pdftotext) "
+                         "para leer el CUFE de los PDF."}
+    except OSError as exc:
+        return {"disponible": False, "ruta": exe, "error": f"No se pudo ejecutar «{exe}»: {exc}"}
+    salida = (r.stderr or r.stdout or b"").decode("utf-8", errors="replace").strip()
+    return {"disponible": True, "ruta": exe, "version": salida.splitlines()[0] if salida else None,
+            "error": None}
+
+
+def _pdftotext(pdf_path: Path, layout: bool, timeout: float = 30.0) -> str:
+    """Texto del PDF. Lanza PopplerNoDisponible si falta el binario.
+
+    Antes devolvía "" ante CUALQUIER fallo, así que 'falta Poppler' y 'este PDF no
+    tiene texto' acababan en el mismo sitio (D-080)."""
+    args = [pdftotext_exe(), "-layout" if layout else "-raw", "-enc", "UTF-8", str(pdf_path), "-"]
     try:
         result = subprocess.run(args, capture_output=True, timeout=timeout, check=False)
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return ""
+    except FileNotFoundError as exc:
+        raise PopplerNoDisponible(
+            f"No se encontró «{args[0]}». Contab necesita Poppler (pdftotext) para leer "
+            "el CUFE de los PDF. Si instalaste Contab con el instalador, reinstálalo; "
+            "en desarrollo, instala Poppler y asegúrate de que esté en el PATH."
+        ) from exc
+    except subprocess.TimeoutExpired:
+        return ""  # este PDF concreto tardó demasiado; los demás pueden ir bien
     if result.returncode != 0:
         return ""
     return result.stdout.decode("utf-8", errors="replace")
 
 
 def _render_page(page, dpi: int) -> np.ndarray | None:
-    """Render one PdfPage to a BGR numpy array."""
+    """Render one PdfPage to a BGR numpy array.
+
+    Va por `to_numpy()` y NO por `to_pil()` (D-090). `to_pil()` importa Pillow, que
+    NO está en las dependencias del paquete: en un entorno limpio lanzaba
+    ModuleNotFoundError, el `except` lo convertía en `None` y la lectura por QR
+    —única vía en los PDF con la fuente ofuscada, como los de Movistar/Claro/Tigo—
+    fallaba en silencio. Se veía como "sin CUFE", nunca como un fallo de
+    instalación. `to_numpy()` no necesita Pillow y devuelve el búfer directo.
+    """
     try:
-        scale = dpi / 72.0
-        bitmap = page.render(scale=scale)
-        pil = bitmap.to_pil().convert("RGB")
-        return cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
+        bitmap = page.render(scale=dpi / 72.0)
+        arr = bitmap.to_numpy()
     except Exception:
+        log.exception("no se pudo renderizar una página a %s dpi", dpi)
         return None
+    if arr.ndim != 3:
+        return None
+    if arr.shape[2] == 4:      # BGRA → BGR
+        return cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
+    if arr.shape[2] == 3:      # pdfium ya entrega BGR
+        return arr
+    return None
 
 
-def _decode_qrs_in_image(detector: "cv2.QRCodeDetector", img: np.ndarray) -> list[str]:
+def _decode_qrs_in_image(detector: cv2.QRCodeDetector, img: np.ndarray) -> list[str]:
     """Return all distinct QR payloads decoded in one image."""
     payloads: set[str] = set()
     try:
@@ -249,7 +302,13 @@ def extract_cufes(
                                 error=f"PDF no encontrado: {pdf_path}")
 
     # Pass 1: raw text. Labeled hit → done.
-    text = _pdftotext(pdf_path, layout=False)
+    try:
+        text = _pdftotext(pdf_path, layout=False)
+    except PopplerNoDisponible as exc:
+        # Falta la dependencia, no es culpa del PDF: se reporta como ERROR con el
+        # motivo real en vez de dejar la fila como "sin soporte" (D-080).
+        return ExtractionResult(cufes=[], source="none",
+                                status=EXTRACTION_STATUS_ERROR, error=str(exc))
     cufes = _find_cufes_in_text(text)
     if cufes and cufes[0].label is not None:
         return ExtractionResult(cufes=cufes, source="pdftotext-raw", status=EXTRACTION_STATUS_OK)
@@ -292,6 +351,7 @@ class IndexStats:
     total_pdfs: int = 0
     indexed_now: int = 0
     cached: int = 0
+    pruned: int = 0                 # entradas de PDFs que ya no están en la carpeta
     failed: list[str] = None        # type: ignore
     no_cufe: list[str] = None       # type: ignore
 
@@ -307,16 +367,31 @@ class IndexStats:
             "total_pdfs": self.total_pdfs,
             "indexed_now": self.indexed_now,
             "cached": self.cached,
+            "pruned": self.pruned,
             "failed": self.failed,
             "no_cufe": self.no_cufe,
         }
 
 
-def index_folder(conn, folder: str | Path) -> IndexStats:
-    """Incrementally index every PDF in folder. Caller manages transactions.
+def index_folder(conn, folder: str | Path, progress=None) -> IndexStats:
+    """Incrementally index every PDF in folder.
     Re-extracts only when (mtime, size) changed or the PDF is new.
 
+    Transacciones: COMMIT por archivo (no una sola que envuelva toda la carpeta).
+    Extraer un mes de soportes son minutos de pdftotext + render + QR; con una
+    transacción única, morir en el PDF 79 de 80 tiraba TODO el trabajo por rollback
+    y mantenía el bloqueo de escritura abierto mientras tanto.
+
+    Al terminar purga las entradas de PDFs que ya no están en la carpeta: si no,
+    `get_indexed_cufes` seguiría devolviendo el CUFE de un soporte borrado y V1
+    daría por respaldada una fila que ya no tiene soporte.
+
+    `progress(done, total, message)` — opcional — se llama antes de cada PDF para
+    que un trabajo en segundo plano (jobs.py) publique avance y pueda cancelarse.
+
     Uses tables pdf_cufe_index + pdf_cufe_value created in storage.SCHEMA_SQL."""
+    from .storage import transaction
+
     folder = Path(folder).resolve()
     stats = IndexStats(folder=str(folder))
     if not folder.is_dir():
@@ -327,9 +402,13 @@ def index_folder(conn, folder: str | Path) -> IndexStats:
         key=lambda p: p.name.lower(),
     )
     stats.total_pdfs = len(pdfs)
+    present: set[str] = set()
 
-    for pdf_path in pdfs:
+    for i, pdf_path in enumerate(pdfs):
+        if progress is not None:
+            progress(i, len(pdfs), f"Leyendo {pdf_path.name}")
         full = str(pdf_path.resolve())
+        present.add(full)
         try:
             st = pdf_path.stat()
         except OSError as exc:
@@ -350,32 +429,61 @@ def index_folder(conn, folder: str | Path) -> IndexStats:
                 stats.no_cufe.append(pdf_path.name)
             continue
 
-        # Stale / new entry → re-extract.
+        # Stale / new entry → re-extract. La extracción va FUERA de la transacción:
+        # es la parte lenta y no toca la BD.
         result = extract_cufes(pdf_path)
-        conn.execute(
-            "DELETE FROM pdf_cufe_index WHERE folder_path = ? AND pdf_path = ?",
-            (str(folder), full),
-        )
-        cur = conn.execute(
-            "INSERT INTO pdf_cufe_index"
-            " (folder_path, pdf_path, pdf_mtime, pdf_size_bytes, extraction_status, extraction_error, extractor_version)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (str(folder), full, mtime, size, result.status, result.error, EXTRACTOR_VERSION),
-        )
-        idx_id = cur.lastrowid
-        if result.cufes:
-            conn.executemany(
-                "INSERT OR IGNORE INTO pdf_cufe_value(pdf_index_id, cufe_cude, label)"
-                " VALUES (?, ?, ?)",
-                [(idx_id, c.value, c.label) for c in result.cufes],
+        with transaction(conn):
+            conn.execute(
+                "DELETE FROM pdf_cufe_index WHERE folder_path = ? AND pdf_path = ?",
+                (str(folder), full),
             )
+            cur = conn.execute(
+                "INSERT INTO pdf_cufe_index"
+                " (folder_path, pdf_path, pdf_mtime, pdf_size_bytes, extraction_status, extraction_error, extractor_version)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (str(folder), full, mtime, size, result.status, result.error, EXTRACTOR_VERSION),
+            )
+            idx_id = cur.lastrowid
+            if result.cufes:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO pdf_cufe_value(pdf_index_id, cufe_cude, label)"
+                    " VALUES (?, ?, ?)",
+                    [(idx_id, c.value, c.label) for c in result.cufes],
+                )
         if result.status == EXTRACTION_STATUS_ERROR:
             stats.failed.append(f"{pdf_path.name}: {result.error or 'error'}")
         elif result.status != EXTRACTION_STATUS_OK:
             stats.no_cufe.append(pdf_path.name)
         stats.indexed_now += 1
 
+    if progress is not None:
+        progress(len(pdfs), len(pdfs), "Cerrando el índice")
+    stats.pruned = _prune_missing(conn, folder, present)
     return stats
+
+
+def _prune_missing(conn, folder: Path, present: set[str]) -> int:
+    """Borra del índice los PDFs que ya no están en la carpeta. Devuelve cuántos.
+
+    ON DELETE CASCADE se lleva sus pdf_cufe_value, así que el CUFE de un soporte
+    eliminado deja de contar como respaldo en V1."""
+    from .storage import transaction
+
+    known = [
+        r["pdf_path"]
+        for r in conn.execute(
+            "SELECT pdf_path FROM pdf_cufe_index WHERE folder_path = ?", (str(folder),)
+        ).fetchall()
+    ]
+    gone = [p for p in known if p not in present]
+    if not gone:
+        return 0
+    with transaction(conn):
+        conn.executemany(
+            "DELETE FROM pdf_cufe_index WHERE folder_path = ? AND pdf_path = ?",
+            [(str(folder), p) for p in gone],
+        )
+    return len(gone)
 
 
 def get_indexed_cufes(conn, folder: str | Path) -> set[str]:

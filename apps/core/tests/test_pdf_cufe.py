@@ -82,15 +82,13 @@ def test_index_folder_caches(tmp_path: Path):
     storage.init_empresa_db(db_path, nit="900181831", dv="4", razon_social="REAL")
     conn = storage.connect(db_path)
     try:
-        with storage.transaction(conn):
-            first = index_folder(conn, pdfs_dir)
+        first = index_folder(conn, pdfs_dir)
         assert first.total_pdfs == 2
         assert first.indexed_now == 2
         assert first.cached == 0
 
         # Second pass should be 100% cached.
-        with storage.transaction(conn):
-            second = index_folder(conn, pdfs_dir)
+        second = index_folder(conn, pdfs_dir)
         assert second.cached == 2
         assert second.indexed_now == 0
 
@@ -120,12 +118,10 @@ def test_index_reextracts_on_stale_extractor_version(tmp_path: Path):
     storage.init_empresa_db(db_path, nit="900181831", dv="4", razon_social="REAL")
     conn = storage.connect(db_path)
     try:
-        with storage.transaction(conn):
-            index_folder(conn, pdfs_dir)
+        index_folder(conn, pdfs_dir)
         # Simulate a cache written by the OLD extractor.
         conn.execute("UPDATE pdf_cufe_index SET extractor_version = 0")
-        with storage.transaction(conn):
-            again = index_folder(conn, pdfs_dir)
+        again = index_folder(conn, pdfs_dir)
         assert again.cached == 0, "stale-version entry should NOT count as cached"
         assert again.indexed_now == 1, "stale-version entry should be re-extracted"
     finally:
@@ -142,9 +138,166 @@ def test_index_handles_non_pdf_files_silently(tmp_path: Path):
     storage.init_empresa_db(db_path, nit="900181831", dv="4", razon_social="REAL")
     conn = storage.connect(db_path)
     try:
-        with storage.transaction(conn):
-            stats = index_folder(conn, pdfs_dir)
+        stats = index_folder(conn, pdfs_dir)
         assert stats.total_pdfs == 0
         assert get_indexed_cufes(conn, pdfs_dir) == set()
     finally:
         conn.close()
+
+
+def _conn(tmp_path):
+    db = tmp_path / "empresa.db"
+    conn = storage.connect(db)
+    storage.ensure_schema(conn)
+    return conn
+
+
+def test_index_purga_pdfs_que_ya_no_estan(tmp_path):
+    """Un soporte borrado de la carpeta deja de contar como respaldo en V1.
+
+    Antes, index_folder solo añadía/actualizaba: el CUFE de un PDF eliminado
+    seguía en el índice para siempre y la fila del Excel aprobaba V1 apuntando a
+    un archivo que ya no existe."""
+    import shutil
+
+    folder = tmp_path / "soportes"
+    folder.mkdir()
+    origen = SAMPLES / "26-02 D1 FRA 94DD49995.pdf"
+    if not origen.exists():
+        pytest.skip(f"missing sample: {origen}")
+    copia = folder / origen.name
+    shutil.copy(origen, copia)
+
+    conn = _conn(tmp_path)
+    try:
+        stats = index_folder(conn, folder)
+        assert stats.total_pdfs == 1 and stats.pruned == 0
+        cufes = get_indexed_cufes(conn, folder)
+        assert len(cufes) == 1
+
+        copia.unlink()
+        stats2 = index_folder(conn, folder)
+        assert stats2.total_pdfs == 0
+        assert stats2.pruned == 1, "la entrada del PDF borrado debe purgarse"
+        assert get_indexed_cufes(conn, folder) == set()
+        assert list_indexed_pdfs(conn, folder) == []
+    finally:
+        conn.close()
+
+
+def test_index_commitea_por_archivo(tmp_path):
+    """Lo ya indexado sobrevive a un fallo a mitad de carpeta.
+
+    Con una sola transacción envolviendo toda la carpeta, morir en el archivo N
+    tiraba por rollback los N-1 anteriores (minutos de extracción perdidos)."""
+    import shutil
+
+    folder = tmp_path / "soportes"
+    folder.mkdir()
+    muestras = sorted(SAMPLES.glob("*.pdf"))[:2]
+    if len(muestras) < 2:
+        pytest.skip("se necesitan 2 PDFs de muestra")
+    for m in muestras:
+        shutil.copy(m, folder / m.name)
+
+    conn = _conn(tmp_path)
+    try:
+        index_folder(conn, folder)
+        # Una conexión independiente solo ve lo que quedó COMMITeado.
+        otra = storage.connect(tmp_path / "empresa.db")
+        try:
+            n = otra.execute(
+                "SELECT COUNT(*) FROM pdf_cufe_index WHERE folder_path = ?",
+                (str(folder.resolve()),),
+            ).fetchone()[0]
+            assert n == 2
+        finally:
+            otra.close()
+    finally:
+        conn.close()
+
+
+# ── #16 — falta de Poppler vs PDF sin texto ─────────────────────────────────
+
+def test_falta_poppler_se_distingue_de_pdf_sin_texto(tmp_path, monkeypatch):
+    """Antes `_pdftotext` devolvía "" ante CUALQUIER fallo, así que una dependencia
+    ausente y un PDF sin texto acababan igual: el usuario veía el mes entero como
+    'sin soporte' sin saber que faltaba una instalación."""
+    from contab_core import pdf_cufe
+
+    src = SAMPLES / "26-02 ANNY CASTANEDA FRA SP144.pdf"
+    if not src.exists():
+        pytest.skip(f"missing sample: {src}")
+    pdf = tmp_path / src.name
+    pdf.write_bytes(src.read_bytes())
+
+    monkeypatch.setenv("CONTAB_PDFTOTEXT", str(tmp_path / "no-existe-pdftotext"))
+
+    with pytest.raises(pdf_cufe.PopplerNoDisponible, match="Poppler"):
+        pdf_cufe._pdftotext(pdf, layout=False)
+
+    res = pdf_cufe.extract_cufes(pdf)
+    assert res.status == pdf_cufe.EXTRACTION_STATUS_ERROR, "debe ser ERROR, no 'sin texto'"
+    assert "Poppler" in (res.error or ""), res.error
+
+
+def test_comprobar_pdftotext_reporta_ausencia(tmp_path, monkeypatch):
+    from contab_core import pdf_cufe
+
+    monkeypatch.setenv("CONTAB_PDFTOTEXT", str(tmp_path / "no-existe"))
+    estado = pdf_cufe.comprobar_pdftotext()
+    assert estado["disponible"] is False
+    assert "Poppler" in estado["error"]
+
+
+def test_comprobar_pdftotext_cuando_si_esta():
+    from contab_core import pdf_cufe
+
+    estado = pdf_cufe.comprobar_pdftotext()
+    if not estado["disponible"]:
+        pytest.skip("pdftotext no está instalado en este entorno")
+    assert estado["error"] is None
+    assert estado["ruta"]
+
+
+def test_check_dependencies_expone_el_estado():
+    from contab_core import sidecar
+
+    res = sidecar._h_check_dependencies({})
+    assert "pdftotext" in res
+    assert res["ok"] == res["pdftotext"]["disponible"]
+
+
+# ── #36 — el renderizado no puede depender de una dependencia no declarada ──
+
+def test_render_no_necesita_pillow(tmp_path):
+    """La lectura por QR es la ÚNICA vía en PDFs con la fuente ofuscada
+    (Movistar/Claro/Tigo). Iba por `bitmap.to_pil()`, que importa Pillow — que NO
+    está en las dependencias del paquete. En un entorno limpio lanzaba
+    ModuleNotFoundError, el `except` lo volvía `None` y el CUFE se perdía en
+    silencio: se veía como "sin CUFE", nunca como un fallo de instalación."""
+    import builtins
+
+    from contab_core import pdf_cufe
+
+    src = SAMPLES / "24-02 MOVISTAR BEC-509558651.pdf"
+    if not src.exists():
+        pytest.skip(f"missing sample: {src}")
+
+    # Simula el entorno limpio: importar PIL falla.
+    real_import = builtins.__import__
+
+    def sin_pillow(name, *a, **kw):
+        if name == "PIL" or name.startswith("PIL."):
+            raise ModuleNotFoundError("No module named 'PIL'")
+        return real_import(name, *a, **kw)
+
+    builtins.__import__ = sin_pillow
+    try:
+        resultado = pdf_cufe.extract_cufes(src)
+    finally:
+        builtins.__import__ = real_import
+
+    assert resultado.status == EXTRACTION_STATUS_OK, resultado.error
+    assert resultado.source == "qr-scan"
+    assert resultado.cufes[0].value == EXPECTED_CUFES[src.name][0]

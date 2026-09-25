@@ -15,7 +15,11 @@ export interface Profile {
 // initials from a name ("Carlos Kuger" → "CK"); falls back to the email's first letter.
 export function initialsOf(p: Pick<Profile, 'name' | 'email'>) {
   const parts = (p.name || '').trim().split(/\s+/).filter(Boolean)
-  if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+  // noUncheckedIndexedAccess: con length >= 2 estos existen, pero el tipo no
+  // lo sabe. Desestructurar lo hace explícito sin aserciones.
+  const [primera, ...resto] = parts
+  const ultima = resto.at(-1)
+  if (primera && ultima) return (primera[0]! + ultima[0]!).toUpperCase()
   if (parts.length === 1 && parts[0]) return parts[0].slice(0, 2).toUpperCase()
   return (p.email || '?').slice(0, 2).toUpperCase()
 }

@@ -4,7 +4,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createInterface, type Interface } from 'node:readline'
 import { existsSync } from 'node:fs'
-import { resolve, dirname } from 'node:path'
+import { resolve, dirname, join } from 'node:path'
 
 type PendingResolver = {
   resolve: (value: unknown) => void
@@ -33,15 +33,46 @@ function getState(): SidecarState {
   return g[GLOBAL_KEY] as SidecarState
 }
 
-function resolvePythonBin(): string {
+/**
+ * Localiza `apps/core` subiendo desde el directorio actual (D-094).
+ *
+ * No se puede calcular con un número fijo de `..`: el cwd depende de QUIÉN
+ * arrancó Nitro. Con `npm run dev` es `apps/desktop`; cuando lo lanza el shell
+ * de Electron es `apps/desktop/.output`, y entonces `../core` y `../../apps/core`
+ * apuntaban los dos a carpetas inexistentes. El sidecar se lanzaba con un cwd
+ * inválido, moría al instante y todas las peticiones fallaban con
+ * "Cannot call write after a stream was destroyed".
+ *
+ * `CONTAB_CORE_DIR` permite fijarlo a mano si hiciera falta.
+ */
+function resolveCoreDir(): string | null {
+  if (process.env.CONTAB_CORE_DIR) return process.env.CONTAB_CORE_DIR
+
+  const marcador = join('contab_core', 'sidecar.py')
+  let dir = process.cwd()
+  for (let i = 0; i < 6; i++) {
+    for (const candidato of [resolve(dir, 'core'), resolve(dir, 'apps', 'core')]) {
+      if (existsSync(join(candidato, marcador))) return candidato
+    }
+    const padre = dirname(dir)
+    if (padre === dir) break
+    dir = padre
+  }
+  return null
+}
+
+function resolvePythonBin(coreDir: string | null): string {
   if (process.env.CONTAB_PYTHON) return process.env.CONTAB_PYTHON
-  // apps/desktop is the Nuxt cwd; the venv lives at ../core/.venv.
-  const candidates = [
-    resolve(process.cwd(), '..', 'core', '.venv', 'bin', 'python'),
-    resolve(process.cwd(), '..', '..', 'apps', 'core', '.venv', 'bin', 'python'),
-  ]
-  for (const c of candidates) if (existsSync(c)) return c
-  return 'python3'
+  // El layout del venv depende del SO: Scripts\python.exe en Windows,
+  // bin/python en POSIX. El producto es Windows, así que probar solo
+  // 'bin/python' dejaba el modo dev cayendo a 'python3', que en Windows no existe.
+  const isWin = process.platform === 'win32'
+  const venvRel = isWin ? ['Scripts', 'python.exe'] : ['bin', 'python']
+  if (coreDir) {
+    const candidate = resolve(coreDir, '.venv', ...venvRel)
+    if (existsSync(candidate)) return candidate
+  }
+  return isWin ? 'python' : 'python3'
 }
 
 function ensureProcess() {
@@ -59,10 +90,16 @@ function ensureProcess() {
     args = []
     cwd = dirname(sidecarBin)
   } else {
-    cmd = resolvePythonBin()
+    const coreDir = resolveCoreDir()
+    if (!coreDir) {
+      throw new Error(
+        'No se encontró apps/core desde ' + process.cwd() + '. ' +
+        'Si el servidor corre fuera del repositorio, define CONTAB_CORE_DIR.',
+      )
+    }
+    cmd = resolvePythonBin(coreDir)
     args = ['-u', '-m', 'contab_core.sidecar']
-    const coreDir = resolve(process.cwd(), '..', 'core')
-    cwd = existsSync(coreDir) ? coreDir : resolve(process.cwd(), '..', '..', 'apps', 'core')
+    cwd = coreDir
   }
 
   const proc = spawn(cmd, args, {
@@ -108,6 +145,30 @@ function ensureProcess() {
   return proc
 }
 
+// Timeout por método (ms). El de por defecto asume una operación interactiva.
+// Lo que NO tiene techo — extraer los PDFs de un mes, validar un lote entero — no
+// vive aquí: se pide con `<método>_async`, devuelve un job_id al instante y el
+// progreso se consulta con `job_status` (D-076). Un timeout fijo de 30 s sobre
+// trabajo sin límite solo producía un error mientras Python seguía ocupado.
+const DEFAULT_TIMEOUT_MS = 30_000
+const METHOD_TIMEOUT_MS: Record<string, number> = {
+  import_excel: 120_000,
+  puc_import: 120_000,
+  export_no_conformes: 120_000,
+  export_missing_supports: 120_000,
+  puc_export: 120_000,
+  backup_empresa: 300_000,
+  restore_empresa: 300_000,
+  consulta_inconsistencias: 120_000,
+  rename_soportes: 120_000,
+}
+
+function timeoutFor(method: string): number {
+  // Los `*_async` solo arrancan el hilo y vuelven: son instantáneos.
+  if (method.endsWith('_async')) return 10_000
+  return METHOD_TIMEOUT_MS[method] ?? DEFAULT_TIMEOUT_MS
+}
+
 export async function callSidecar<T = unknown>(
   method: string,
   params: Record<string, unknown> = {},
@@ -117,21 +178,28 @@ export async function callSidecar<T = unknown>(
   const id = String(state.nextId++)
   const payload = JSON.stringify({ id, method, params })
   return new Promise<T>((res, rej) => {
+    const timer = setTimeout(() => {
+      if (state.pending.has(id)) {
+        state.pending.delete(id)
+        rej(new Error(
+          `El sidecar no respondió a tiempo (${method}). Si la operación es larga, ` +
+          'debería pedirse como trabajo en segundo plano.',
+        ))
+      }
+    }, timeoutFor(method))
+
+    // Limpiar el temporizador al resolver evita que cada llamada deje un timer
+    // vivo reteniendo su closure hasta que venza.
     state.pending.set(id, {
-      resolve: (v) => res(v as T),
-      reject: rej,
+      resolve: (v) => { clearTimeout(timer); res(v as T) },
+      reject: (e) => { clearTimeout(timer); rej(e) },
     })
     proc.stdin!.write(payload + '\n', (err) => {
       if (err) {
+        clearTimeout(timer)
         state.pending.delete(id)
         rej(err)
       }
     })
-    setTimeout(() => {
-      if (state.pending.has(id)) {
-        state.pending.delete(id)
-        rej(new Error(`sidecar timeout (method=${method}, id=${id})`))
-      }
-    }, 30_000)
   })
 }

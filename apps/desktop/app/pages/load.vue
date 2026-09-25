@@ -7,30 +7,7 @@ import {
   getFilteredRowModel,
   useVueTable,
   type ColumnDef,
-  type VisibilityState,
 } from '@tanstack/vue-table'
-
-const HIDDEN_BY_DEFAULT = new Set<string>([
-  'Divisa', 'Forma de Pago', 'Medio de Pago',
-  'Fecha Emisión', 'Fecha Recepción',
-  'Nombre Emisor', 'Nombre Receptor',
-  'Prefijo', 'Folio', 'CUFE/CUDE',
-  'ICA', 'IC', 'INC', 'Timbre', 'INC Bolsas',
-  'IN Carbono', 'IN Combustibles', 'IC Datos', 'ICL', 'INPP', 'IBUA', 'ICUI',
-  'Rete IVA', 'Rete Renta', 'Rete ICA',
-  'Estado', 'Grupo',
-])
-
-const COLUMN_GROUPS: Record<string, string[]> = {
-  'Identificación': ['Tipo de documento', 'CUFE/CUDE', 'Prefijo', 'Folio', '# de factura'],
-  'Tercero': ['NIT Emisor', 'Nombre Emisor', 'NIT Receptor', 'Nombre Receptor'],
-  'Fechas': ['Fecha Emisión', 'Fecha Recepción'],
-  'Pago': ['Divisa', 'Forma de Pago', 'Medio de Pago'],
-  'Importes': ['Total', 'IVA', 'Valor Base', 'Base IVA', 'Diferencia'],
-  'Impuestos': ['ICA', 'IC', 'INC', 'Timbre', 'INC Bolsas', 'IN Carbono', 'IN Combustibles', 'IC Datos', 'ICL', 'INPP', 'IBUA', 'ICUI'],
-  'Retenciones': ['Rete IVA', 'Rete Renta', 'Rete ICA'],
-  'Estado': ['Estado', 'Grupo'],
-}
 
 type Row = Record<string, unknown>
 
@@ -53,11 +30,6 @@ type RunResult = {
   notes: string | null
   failures: Failure[]
   v3_overrides: number[]
-}
-
-type ExportResult = {
-  path: string
-  rows_written: number
 }
 
 type EmpresaInfo = {
@@ -84,20 +56,26 @@ const validating = ref(false)
 const validationRun = ref<RunResult | null>(null)
 const latestRun = ref<LatestRun | null>(null)
 
-const exporting = ref(false)
-const exportResult = ref<ExportResult | null>(null)
-const exportFolder = ref('')
-const exportPickerOpen = ref(false)
-
 // D-046: rows the user manually approved (V3 fail suppressed)
 const v3Overrides = ref<Set<number>>(new Set())
 const togglingOverride = ref<number | null>(null)
 
 const globalFilter = ref('')
-const columnVisibility = ref<VisibilityState>({})
-const showColumnsPanel = ref(false)
-const columnsSearch = ref('')
 const onlyFailing = ref(false)
+
+// #30 — la gestión de columnas vive en su propio composable.
+const columnasDisponibles = computed(() => data.value?.columns ?? [])
+const {
+  columnVisibility, showColumnsPanel, columnsSearch,
+  toggleColumn, inicializarVisibilidad, showAllColumns, resetColumnsToDefault, toggleGroup,
+  visibleCount, columnsForPanel,
+} = useColumnasTabla(columnasDisponibles)
+
+// #30 — exportación y renombrado, cada uno en su composable.
+const {
+  exporting, exportResult, exportFolder, exportPickerOpen, exportPath,
+  onExportFolderPicked, proponerCarpeta, exportar,
+} = useExportarFaltantes(dbPath, loadId)
 
 // Map<row_index, reason> — failures from the last validation_run, with V3
 // overrides applied client-side so checkbox toggles feel instant.
@@ -144,35 +122,12 @@ const v3FailingRows = computed(() => {
   return s
 })
 
-function buildExportFilename(id: number): string {
-  const d = new Date()
-  const pad = (n: number) => String(n).padStart(2, '0')
-  const stamp =
-    `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-` +
-    `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
-  return `faltantes_soporte_load${id}_${stamp}.xlsx`
-}
-
-const exportPath = computed(() => {
-  if (!exportFolder.value) return ''
-  const trimmed = exportFolder.value.replace(/[/\\]+$/, '')
-  return `${trimmed}/${buildExportFilename(loadId.value)}`
-})
-
-function onExportFolderPicked(path: string) {
-  exportFolder.value = path
-  exportPickerOpen.value = false
-  toast.info('Carpeta de salida elegida', path)
-}
-
 async function refresh() {
   if (!dbPath.value || !loadId.value) return
   loading.value = true
   try {
     empresaInfo.value = await rpc<EmpresaInfo>('open_empresa', { db_path: dbPath.value })
-    if (!exportFolder.value && empresaInfo.value?.default_folder) {
-      exportFolder.value = `${empresaInfo.value.default_folder.replace(/[/\\]+$/, '')}/exports`
-    }
+    proponerCarpeta(empresaInfo.value?.default_folder)
     data.value = await rpc<LoadRows>('get_load_rows', {
       db_path: dbPath.value,
       load_id: loadId.value,
@@ -180,11 +135,7 @@ async function refresh() {
       limit: 5000,
     })
     if (data.value) {
-      const next: VisibilityState = { ...columnVisibility.value }
-      for (const col of data.value.columns) {
-        if (!(col in next)) next[col] = !HIDDEN_BY_DEFAULT.has(col)
-      }
-      columnVisibility.value = next
+      inicializarVisibilidad()
       v3Overrides.value = new Set(data.value.v3_overrides ?? [])
     }
     // Fetch latest validation run if any.
@@ -204,66 +155,6 @@ async function refresh() {
     loading.value = false
   }
 }
-
-function toggleColumn(name: string) {
-  columnVisibility.value = {
-    ...columnVisibility.value,
-    [name]: columnVisibility.value[name] === false,
-  }
-}
-
-function showAllColumns() {
-  if (!data.value) return
-  const next: VisibilityState = {}
-  for (const col of data.value.columns) next[col] = true
-  columnVisibility.value = next
-}
-
-function resetColumnsToDefault() {
-  if (!data.value) return
-  const next: VisibilityState = {}
-  for (const col of data.value.columns) next[col] = !HIDDEN_BY_DEFAULT.has(col)
-  columnVisibility.value = next
-}
-
-function toggleGroup(groupCols: string[], desired: boolean) {
-  const next: VisibilityState = { ...columnVisibility.value }
-  for (const col of groupCols) {
-    if (data.value?.columns.includes(col)) next[col] = desired
-  }
-  columnVisibility.value = next
-}
-
-const visibleCount = computed(() => {
-  if (!data.value) return 0
-  return data.value.columns.reduce(
-    (n, c) => n + (columnVisibility.value[c] === false ? 0 : 1),
-    0,
-  )
-})
-
-const columnsForPanel = computed(() => {
-  if (!data.value) return [] as { group: string; columns: { name: string; visible: boolean }[] }[]
-  const needle = columnsSearch.value.trim().toLowerCase()
-  const groups: { group: string; columns: { name: string; visible: boolean }[] }[] = []
-  const seen = new Set<string>()
-  for (const [group, cols] of Object.entries(COLUMN_GROUPS)) {
-    const filtered = cols
-      .filter((c) => data.value!.columns.includes(c))
-      .filter((c) => !needle || c.toLowerCase().includes(needle))
-      .map((c) => {
-        seen.add(c)
-        return { name: c, visible: columnVisibility.value[c] !== false }
-      })
-    if (filtered.length) groups.push({ group, columns: filtered })
-  }
-  // Catch-all for columns not in any predefined group.
-  const others = data.value.columns
-    .filter((c) => !seen.has(c) && (!needle || c.toLowerCase().includes(needle)))
-    .map((c) => ({ name: c, visible: columnVisibility.value[c] !== false }))
-  if (others.length) groups.push({ group: 'Otros', columns: others })
-  return groups
-})
 
 function isNotaCredito(row: Row): boolean {
   const tipo = String(row['Tipo de documento'] || '').toLowerCase()
@@ -336,10 +227,29 @@ const table = useVueTable({
   getFilteredRowModel: getFilteredRowModel(),
 })
 
+// D-076: validar re-indexa la carpeta de soportes del mes, que no tiene techo de
+// duracion. Va como trabajo en segundo plano con progreso, no como peticion que
+// revienta a los 30 s mientras Python sigue trabajando.
+const jobValidar = useJob()
+
+// Vista unificada para la barra: solo uno de los dos corre a la vez.
+const trabajo = computed(() => {
+  const j = jobValidar.corriendo.value ? jobValidar : jobSoportes.corriendo.value ? jobSoportes : null
+  return {
+    activo: j !== null,
+    percent: j ? j.progreso.value.percent : null,
+    etiqueta: j ? j.etiqueta.value : '',
+  }
+})
+
+async function cancelarTrabajo() {
+  await Promise.all([jobValidar.cancelar(), jobSoportes.cancelar()])
+}
+
 async function ejecutarValidaciones(opts: { silent?: boolean } = {}) {
   validating.value = true
   try {
-    const result = await rpc<RunResult>('run_validations', {
+    const result = await jobValidar.correr<RunResult>('run_validations', {
       db_path: dbPath.value,
       load_id: loadId.value,
     })
@@ -363,121 +273,23 @@ async function ejecutarValidaciones(opts: { silent?: boolean } = {}) {
   }
 }
 
-// ── Renombrado de soportes (DD-MM_NIT_RAZON-SOCIAL_FACTURA) ──
-type RenameItem = { path: string; current_name: string; new_name: string | null; matched: boolean; status: string; reason: string | null; cufe: string | null }
-type RenameResult = { folder: string; date_field: string; dry_run: boolean; items: RenameItem[]; counts: Record<string, number>; manifest: string | null }
-const renaming = ref(false)
-const applyingRename = ref(false)
-const renameOpen = ref(false)
-const renameApplied = ref(false)
-const renamePlan = ref<RenameResult | null>(null)
+// #30 — el renombrado de soportes vive en su propio composable.
+const {
+  renaming, applyingRename, renameOpen, renameApplied, renamePlan,
+  previewRename, applyRename,
+} = useRenombrarSoportes({ dbPath, loadId, alAplicar: () => refreshSoportes() })
 
-async function previewRename() {
-  if (renaming.value) return
-  renaming.value = true
-  renameApplied.value = false
-  try {
-    renamePlan.value = await rpc<RenameResult>('rename_soportes', {
-      db_path: dbPath.value, load_id: loadId.value, dry_run: true,
-    })
-    renameOpen.value = true
-    const c = renamePlan.value.counts
-    if (!c.rename && !c.already) {
-      toast.warn('Nada para renombrar', 'Ningún PDF coincide con una fila del Excel de este mes.')
-    }
-  } catch (exc) {
-    toast.error('No se pudo analizar la carpeta', String(exc))
-  } finally {
-    renaming.value = false
-  }
-}
-
-async function applyRename() {
-  if (applyingRename.value) return
-  applyingRename.value = true
-  try {
-    renamePlan.value = await rpc<RenameResult>('rename_soportes', {
-      db_path: dbPath.value, load_id: loadId.value, dry_run: false,
-    })
-    renameApplied.value = true
-    const c = renamePlan.value.counts
-    toast.success(
-      `${c.renamed} archivo(s) renombrado(s)`,
-      c.error ? `${c.error} con error` : (renamePlan.value.manifest || undefined),
-    )
-    // los nombres cambiaron → el índice de esa carpeta quedó obsoleto; refrescar panel.
-    refreshSoportes()
-  } catch (exc) {
-    toast.error('Error al renombrar', String(exc))
-  } finally {
-    applyingRename.value = false
-  }
-}
-
-// ── Soportes del mes (visor con/sin CUFE + re-verificar sin re-subir Excel, D-068) ──
-type SoporteFile = {
-  name: string; path: string; has_cufe: boolean
-  extraction_status: string | null; cufe: string | null; label: string | null
-}
-type SoportesInfo = {
-  folder: string | null; periodo: string | null; files: SoporteFile[]
-  counts: { total: number; with_cufe: number; without_cufe: number }
-  reindexed: boolean; error: string | null
-}
-const soportes = ref<SoportesInfo | null>(null)
-const reverifying = ref(false)
-const soportesOpen = ref(false)
-
-async function refreshSoportes(opts: { reindex?: boolean; force?: boolean } = {}) {
-  if (!dbPath.value || !loadId.value) return
-  try {
-    soportes.value = await rpc<SoportesInfo>('list_load_soportes', {
-      db_path: dbPath.value, load_id: loadId.value,
-      reindex: opts.reindex ?? false, force: opts.force ?? false,
-    })
-  } catch { /* el panel es auxiliar: no romper la página si falla */ }
-}
-
-async function reverificarSoportes() {
-  if (reverifying.value) return
-  reverifying.value = true
-  try {
-    await refreshSoportes({ reindex: true, force: true })
-    // re-correr V1 para que la tabla refleje los CUFE recién leídos.
-    await ejecutarValidaciones({ silent: true })
-    const c = soportes.value?.counts
-    if (soportes.value?.error) toast.warn('Soportes', soportes.value.error)
-    else if (c) toast.success('Soportes re-verificados', `${c.with_cufe}/${c.total} con CUFE encontrado`)
-  } catch (exc) {
-    toast.error('No se pudieron re-verificar los soportes', String(exc))
-  } finally {
-    reverifying.value = false
-  }
-}
-
-async function exportar() {
-  if (!exportPath.value) {
-    toast.warn('Elige una carpeta de salida primero')
-    return
-  }
-  exporting.value = true
-  try {
-    // D-047: el reporte ahora es de FALTANTES DE SOPORTE (V1), 5 columnas.
-    exportResult.value = await rpc<ExportResult>('export_missing_supports', {
-      db_path: dbPath.value,
-      load_id: loadId.value,
-      output_path: exportPath.value,
-    })
-    toast.success(
-      `Faltantes de soporte exportados (${exportResult.value.rows_written} filas)`,
-      exportResult.value.path,
-    )
-  } catch (exc) {
-    toast.error('Error al exportar', String(exc))
-  } finally {
-    exporting.value = false
-  }
-}
+// #30 — el panel de soportes del mes vive en su propio composable.
+const {
+  soportes, reverifying, soportesOpen, refreshSoportes, reverificarSoportes,
+  job: jobSoportes,
+} = useSoportesDelMes({
+  dbPath,
+  loadId,
+  // Tras re-extraer hay CUFE nuevos: V1 tiene que volver a correr para que la
+  // tabla refleje lo que se acaba de leer.
+  alReverificar: () => ejecutarValidaciones({ silent: true }),
+})
 
 async function toggleOverride(rowIndex: number) {
   const active = !v3Overrides.value.has(rowIndex)
@@ -594,6 +406,23 @@ watch(loadId, refresh)
         <Button data-tour="load-validar" :disabled="validating || !data" title="Atajo: v" @click="ejecutarValidaciones()">
           {{ validating ? 'Validando…' : 'Validar' }}
         </Button>
+        <!-- D-076: progreso real del trabajo en segundo plano. Antes la operación
+             era opaca y reventaba a los 30 s sin decir en qué iba. -->
+        <div v-if="trabajo.activo" class="flex min-w-56 items-center gap-2">
+          <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-muted" role="progressbar"
+               :aria-valuenow="trabajo.percent ?? undefined" aria-valuemin="0" aria-valuemax="100">
+            <div
+              class="h-full rounded-full bg-primary transition-all duration-300"
+              :class="trabajo.percent === null ? 'w-1/3 animate-pulse' : ''"
+              :style="trabajo.percent !== null ? { width: `${trabajo.percent}%` } : undefined"
+            />
+          </div>
+          <span class="max-w-56 truncate text-xs text-muted-foreground" :title="trabajo.etiqueta">
+            {{ trabajo.etiqueta }}
+          </span>
+          <button type="button" class="text-xs text-muted-foreground underline hover:text-foreground"
+                  @click="cancelarTrabajo">Cancelar</button>
+        </div>
         <Button variant="secondary" @click="exportPickerOpen = true">
           <FolderOpen class="size-4" /> {{ exportFolder ? 'Cambiar salida' : 'Carpeta de salida' }}
         </Button>

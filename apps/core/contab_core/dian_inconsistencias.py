@@ -130,7 +130,7 @@ def consultar(nit: str, dv: str, *, timeout: int = 25) -> dict[str, Any]:
         result["found"] = bool(razon)
         if not razon:
             result["error"] = "Sin resultado (documento no encontrado o DV incorrecto)"
-    except Exception as exc:  # noqa: BLE001 — cualquier fallo de red/parse va a `error`
+    except Exception as exc:
         result["error"] = f"{exc.__class__.__name__}: {exc}"
     return result
 

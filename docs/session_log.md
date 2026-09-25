@@ -253,3 +253,211 @@ Scrape real (NIT 860002180 → "SEGUROS COMERCIALES BOLIVAR S.A."); upload+parse
 - **Backend**: `puc.py` (`load_puc` parsea preámbulo empresa/NIT + tabla + pie; `persist_puc` upsert por código = fusionar; CRUD manual; `export_puc`). Tablas `puc_account` (con `fuente` dump/manual, `archived`, `nivel` derivado de la longitud del código) y `puc_import` (historial). 6 RPCs. Endpoint `upload-puc` (vista previa dry-run). **Bloqueo por NIT** del encabezado.
 - **Front**: página `/puc` (tabla con indentado por nivel, filtros clase/nivel/estado, buscador, subir dump con preview, CRUD, export), card en `empresa.vue`, nav match.
 - **Verificado**: dump real de 885 cuentas (REAL Seguros), NIT 900181831, merge sin duplicar, bloqueo por NIT distinto. 12 tests nuevos; 91/91 verdes. Probado en vivo por el usuario.
+
+---
+
+## Sesión 9 — 2026-09-20: Revisión crítica + primer bloque de correcciones
+
+**Resultado**: revisión completa del repo (core Python, capa servidor Nuxt, shell Electron, CI, empaquetado) y los 10 arreglos de mayor prioridad. Rama `fix/revision-bloque-1`. 108/108 tests verdes salvo un fallo de entorno preexistente (ver abajo).
+
+### Correcciones aplicadas
+1. **CI que corre los tests** (`.github/workflows/test.yml`) — antes el único workflow era el de release por tag: los tests no corrían nunca en push/PR.
+2. **Contrato único de error en la API** (D-071). `/api/rpc` y los 4 endpoints de subida devuelven SIEMPRE 200 con `{ok:true|false}`. Con 500, `$fetch` lanzaba antes de que `useRpc` leyera el cuerpo y todos los mensajes en español del sidecar se perdían tras un "FetchError: 500".
+3. **V3 compara en espacio de IVA** (D-072), no dividiendo por la tarifa: la tolerancia de ±5 pesos equivalía a ±0,25 de IVA al 5% y marcaba como no conformes facturas correctas con el IVA redondeado al peso.
+4. **El índice de soportes purga los PDFs borrados**: antes el CUFE de un soporte eliminado seguía en el índice y V1 daba la fila por respaldada.
+5. **Arranque en Windows**: `resolvePythonBin` (core y DIAN) busca `.venv\Scripts\python.exe`; solo probaba el layout POSIX y caía a `python3`, que en Windows no existe.
+6. **SQLite**: `PRAGMA busy_timeout` + COMMIT por archivo en `index_folder` (antes una sola transacción envolvía minutos de extracción; morir a mitad tiraba todo).
+7. **Build reproducible**: `requirements.txt` del sidecar DIAN con versiones fijas, cotas superiores en `pyproject.toml`, `package-lock.json` en `apps/shell`, `npm ci`, y **checksum SHA256 verificado de Poppler** antes de empaquetarlo.
+8. **Un importe ilegible ya no se vuelve 0** (D-073): `_to_number` distingue vacío (→0) de ininterpretable (→error con fila y columna), y **se niega a adivinar** formatos ambiguos como `"10.000"`.
+9. **Rutas de datos unificadas** (`server/utils/uploads.ts`): Node usaba `~/.local/share/Contab` (XDG) en un producto Windows mientras Python usaba `%APPDATA%\Contab`. De paso se eliminó la triplicación de `safeFilename`/`timestamp`, se añadió límite de tamaño de subida y se borra el archivo si la importación falla.
+10. **Travesía de rutas al restaurar** (D-074): el `nit` del `meta.json` de un backup se interpolaba crudo en el nombre del archivo; ahora se reduce a dígitos y el destino se verifica contenido en la carpeta de empresas.
+
+### Extra (encontrado durante el trabajo, no estaba en la lista)
+- **Los tests escribían en los datos REALES del usuario en Windows.** Aislaban con `XDG_DATA_HOME`, que `paths.data_dir()` solo consulta en Linux; en win32 operaban sobre `%APPDATA%\Contab` — incluyendo los tests que archivan y **borran** empresas. `conftest.py` ahora parchea `paths.data_dir` (independiente del SO) en un fixture autouse.
+
+### Fallo de entorno abierto (NO regresión)
+- `test_extracts_expected_cufe[24-02 MOVISTAR …]` falla en esta máquina Windows: el PDF tiene la fuente ofuscada, así que el CUFE solo sale del QR, y `cv2.QRCodeDetector` de `opencv-python-headless` (probado en 4.14 y 5.0, de 150 a 800 dpi) **no decodifica nada**. Pasa en el entorno Linux del dev. Implica que el camino QR — único fallback para Movistar/Claro/Tigo — puede estar roto en el instalador que se entrega, verde en local. **Pendiente: verificar la extracción QR contra el sidecar empaquetado.**
+
+### Sesión 9 (cont.) — los dos refactors que faltaban de la lista
+
+El usuario señaló que el bloque anterior entregó 8 de los 10 hallazgos pedidos más
+cuatro sustitutos elegidos por mí; faltaban el #1 y el #6, que son los grandes.
+
+**#1 — Importes en Decimal (D-075).** Nuevo `money.py`. `excel.py`, `validations.py`
+y `export.py` operan en Decimal; `float` solo queda en los dos bordes (JSON a la UI,
+celda de xlsxwriter). Resultado visible: `Base IVA` pasa de `40463.15789473684` a
+`40463.16` y `Diferencia` de `-1.1578947368398076` a `-1.16` en el Excel que recibe
+el contador. Compatibilidad verificada con cargas viejas (floats en `data_json`).
+
+Nota honesta: la justificación de la revisión ("al cuadrar un mes los errores dejan
+de ser invisibles") **no se sostuvo al medirla** — a esta escala float64 no deriva.
+Lo que sí falla es el redondeo a centavos y la falta de cuantización. El refactor se
+hizo por eso.
+
+**#6 — Trabajos en segundo plano (D-076).** Nuevo `jobs.py` + `useJob.ts` + barra de
+progreso con cancelar en Carga. Verificado contra el sidecar real: arrancar responde
+en 0,000 s y se atendieron 12 peticiones mientras el trabajo corría. Timeouts de
+`callSidecar` por método y temporizador liberado al resolver.
+
+123 tests verdes (eran 84 al empezar la sesión); sigue el fallo de entorno del QR.
+
+### Sesión 9 (cont.) — hallazgos 11 a 20
+
+Con esto la revisión queda cerrada del #1 al #20; siguen abiertos del #21 al #35.
+
+**#11 — Crear una empresa que ya existe** (D-079). `create_empresa` falla si el `.db` ya existe y también si el NIT ya está registrado con otra razón social. Antes devolvía éxito con la razón social enviada mientras la BD conservaba la anterior.
+
+**#12 — El catálogo central** (D-077). `unregister_empresa` nuevo; `sync_registry` purga filas huérfanas; `restore_empresa` da de alta lo restaurado.
+
+**#13 — Borrado con red de seguridad** (D-078). El `.db` se mueve a `<data_dir>/papelera/`, se conserva 30 días y se purga solo. RPCs `papelera_list` / `papelera_restore`.
+
+**#14 y #15 — Periodo** (D-081). Se valida la forma `AAAA-MM` antes de usarla, y el mes dominante usa `Counter` con desempate explícito. Comprobado que la implementación anterior daba resultados distintos según `PYTHONHASHSEED`.
+
+**#16 — Poppler ausente** (D-080). `PopplerNoDisponible` + `status=error` con el motivo real + RPC `check_dependencies`.
+
+**#19 — Linters** (D-082). `ruff` en el core (34 avisos, todos corregidos; queda limpio) y `vue-tsc` contra los dos tsconfig de Nuxt. Hubo que añadir `@types/node`, que faltaba: todo el servidor usaba `process`/`Buffer`/`node:*` sin tipos. El primer typecheck encontró 5 errores reales de `possibly undefined` en `useUser.ts`, `consulta-dian.vue` y `consulta-inconsistencias.vue`.
+
+**#20 — Tests de frontend**. `vitest` + 22 tests sobre `server/utils/uploads.ts` y `composables/useJob.ts`. **Pendiente**: un smoke end-to-end que arranque la app de verdad. Lo que hay cubre lógica pura, no la integración.
+
+**#18 (fleco) — NO cerrado.** Intenté generar `requirements.lock.txt` para el sidecar
+DIAN, pero en esta máquina solo hay Python 3.14 y el build usa 3.10: un lockfile resuelto
+con otro intérprete puede producir pines que no instalen. Descartado antes de commitear y
+documentado el procedimiento en `requirements.txt`. Las dependencias DIRECTAS sí están
+fijadas con `==`, que es la mayor parte del beneficio.
+
+CI ampliado: `ruff` + `pytest` en el core; `vitest` + `typecheck` + `build` en el frontend.
+
+### Sesión 9 (cont.) — hallazgos 21 a 36 (primera mitad)
+
+**#36 — el fallo del QR NO era el detector de OpenCV.** Llevaba toda la revisión
+atribuido a `cv2.QRCodeDetector`; al depurarlo de verdad resultó que
+`_render_page` devolvía `None` porque `bitmap.to_pil()` importa **Pillow**, que no
+está en `pyproject.toml` (aunque CLAUDE.md lo listaba). El `except Exception` lo
+convertía en `None` y la lectura por QR —única vía en PDFs con fuente ofuscada,
+como Movistar/Claro/Tigo— fallaba en silencio. Cambiado a `to_numpy()`, que no
+necesita Pillow. **149/149 tests verdes por primera vez en la sesión.** Es la
+demostración más clara del hallazgo #26: un `except` mudo escondió durante meses
+un fallo que afecta al producto entregado.
+
+**#21 + #22 (D-084, D-085)** — migraciones numeradas con bloqueo de downgrade y
+salida temprana; migración 2 retira `validation_rule`, `validation_failure.rule_id`
+y `excel_row.deleted_at`. Verificado con una BD v1 poblada: esquema muerto fuera,
+contabilidad intacta.
+
+**#25 + #26 (D-083)** — nuevo `log.py`; los `except: pass` pasan a registrar. La
+traza sale del payload y va al log.
+
+**#29 (D-087)** — retención de 90 días para Excels y dumps de PUC.
+
+**#31 (D-088)** — Electron: `sandbox`, `will-navigate`, filtro de esquemas en
+`openExternal`, permisos denegados, `activate` que ya no levanta un segundo
+servidor, y `uncaughtException` en vez del inútil `process.on('exit')`.
+
+**#32 (D-089)** — credencial local por arranque en todo `/api/**`. Verificado en
+vivo: sin credencial 401, equivocada 401, correcta pasa, `/api/version` abierta.
+El sidecar DIAN pasa a puerto aleatorio (estaba fijo en 8756).
+
+**#33 (D-086)** — `run.sh` y README del sidecar DIAN a `127.0.0.1`.
+
+**#34** — eliminada la librería de iconos duplicada (`@lucide/vue`); 11
+componentes migrados a `lucide-vue-next`.
+
+**#35** — README con setup de Windows primero y conteos reales; estructura del
+repo en CLAUDE.md con los módulos que faltaban; corregido que Pillow era una
+dependencia.
+
+Pendientes del bloque: **#23** (Excel como blobs JSON), **#30** (load.vue) y
+**#24**, que necesita decisión del usuario porque contradice D-046.
+
+### Sesión 9 (cont.) — #23 y #30
+
+**#23 (D-091)** — `excel_row` gana `total_centavos`, `iva_centavos`, `nit_emisor` y
+`fecha_emision`, proyectadas desde `data_json` (migración 3 con backfill).
+`data_json` sigue siendo la fuente de verdad. Importes en centavos como INTEGER
+para que `SUM` sea exacto. Nuevos RPC `resumen_periodos` y `resumen_emisores`, que
+demuestran la capacidad en vez de solo prometerla: verificado que la suma en SQL
+coincide exactamente con la de Python.
+
+La migración destapó una trampa real: poner el `CREATE INDEX` de una columna nueva
+en `SCHEMA_SQL` rompe en BD antiguas, porque `CREATE TABLE IF NOT EXISTS` no añade
+la columna. El test de idempotencia lo cazó.
+
+**#30 (D-092)** — `load.vue` de 934 a 722 líneas. Cuatro composables nuevos:
+`useColumnasTabla`, `useExportarFaltantes`, `useRenombrarSoportes` y
+`useSoportesDelMes`. Las dependencias entre piezas van como parámetros explícitos.
+
+### Sesión 9 (final) — #24, con cambio de decisión inmutable
+
+**#24 (D-093, supersede D-046)** — `Base IVA` pasa a usar la tarifa **detectada**
+(19% o 5%) en vez de dividir siempre por 0,19. Planteado al usuario en opción
+múltiple por contradecir una decisión inmutable; eligió detectar la tarifa.
+
+En una factura al 5% (base 1.000.000, IVA 50.000) la columna exportada pasa de
+`Base IVA = 263.157,89 / Diferencia = 736.842,11` a `1.000.000,00 / 0,00`. Si
+ninguna tarifa cuadra se usa el 19% como referencia, para que la Diferencia siga
+destacando la fila en vez de volverse inútil.
+
+Las cargas ya guardadas muestran los valores nuevos sin re-subir nada, porque
+`_derive_columns` recalcula en cada lectura (D-045 retrofit).
+
+Un test existente afirmaba la regla vieja y **pasaba por casualidad**: la muestra
+no tiene facturas al 5%. Reescrito para comprobar la regla, no el caso.
+
+---
+
+## Estado de la revisión al cerrar la sesión 9
+
+Cerrados los **36 hallazgos**. 158 tests de Python + 33 de frontend, ruff limpio,
+typecheck y build verdes.
+
+Abierto a propósito, documentado en `apps/dian-rut/requirements.txt`: el lockfile
+de dependencias transitivas del sidecar DIAN, que necesita generarse con Python
+3.10 (el del build) y no se pudo verificar en esta máquina.
+
+Pendiente de la revisión, no empezado: un **smoke end-to-end** que arranque la
+aplicación de verdad (parte del #20). Lo que hay cubre lógica pura.
+
+### Sesión 9 (final) — smoke end-to-end (cierra el #20)
+
+`apps/shell/e2e/` con Playwright contra el Electron REAL. 7 tests, ~5 s.
+`npm run e2e` en apps/shell; en CI, job propio en windows-latest.
+
+**Encontró un bug real el primer día**: `utils/sidecar.ts` calculaba la carpeta de
+`apps/core` con un número fijo de `..` desde `process.cwd()`, asumiendo
+`apps/desktop`. Cuando el shell de Electron arranca Nitro el cwd es
+`apps/desktop/.output` y ninguna de las dos rutas candidatas existe: el sidecar
+moría al instante y todo fallaba con "Cannot call write after a stream was
+destroyed". Arreglado en ambos sidecars buscando un marcador hacia arriba (D-094).
+
+También salió que la UI de borrado seguía diciendo **"Eliminar permanentemente"** y
+"Esta acción es irreversible" después de que D-078 la hiciera reversible 30 días.
+Corregido: ahora dice que va a la papelera y cuánto se conserva.
+
+Verificado tras ejecutarlo: el `contab.db` real del usuario conserva el MISMO hash
+md5 que antes, los mtimes de sus empresas no cambiaron, y los temporales se
+borraron solos.
+
+Un detalle de método que conviene recordar: al escribir rutas de Windows en
+`README.md` desde scripts de Python en heredoc, las barras invertidas se comieron
+(`\Scripts\ruff` acabó como `Scripts` + CR + `uff`) y `read_text` convirtió después
+ese CR en un salto de línea. Para rutas con `\`, usar el editor directamente o
+`chr(92)`, no literales dentro de un heredoc.
+
+---
+
+## Sesión 10 — 2026-09-25: Vigía de citas DIAN (D-104)
+
+**Resultado**: nueva página **Consultas DIAN → Citas** con botón *Buscar cita*. Revisa el portal de
+agendamiento cada 1–2 min buscando Devoluciones · Videoatención · Persona natural en **Medellín**; al
+encontrar cupo deja el navegador en esa pantalla y avisa (ventana emergente + pitidos + toast + txt).
+Probado contra el portal real: detecta "sin cupo" (captura verificada).
+
+- Recorrido del portal hecho a mano con el usuario (Chrome guiado): sin login ni CAPTCHA hasta el servicio.
+  Las pantallas posteriores no se vieron porque no había cupo → la reserva automática queda pendiente.
+- Se integra en el sidecar DIAN (`apps/dian-rut/citas.py`), que ya trae Playwright y va en el instalador.
+  Usa el Chrome/Edge del sistema.
+- Dos fallos previos que impedían arrancar el sidecar DIAN: pin `playwright-stealth==1.0.6` incompatible
+  con `scraper.py` (→ 2.0.0) y chequeo de vida vía `/browser-mode-status` demasiado lento en Windows
+  (→ `/health`).
+- En este equipo los toasts de Windows están apagados (`ToastEnabled=0`): por eso el aviso principal es
+  una ventana `MessageBoxW` siempre encima.

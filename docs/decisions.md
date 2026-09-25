@@ -374,7 +374,7 @@ Nombre del archivo: `<slug>_<YYYYMMDD-HHMMSS>.contab.zip`.
 - Filename: `faltantes_soporte_load<id>_<timestamp>.xlsx`.
 - Tests: `test_missing_supports_report_has_5_columns`, `test_missing_supports_export_inverts_nc_totals`, `test_missing_supports_errors_when_no_pdfs_folder`.
 
-## D-046 — Reversión de D-045 + override manual por fila para V3 ✅
+## D-046 — ⚠️ SUPERSEDE por D-093 — Reversión de D-045 + override manual por fila para V3 ✅
 **Fecha**: 2026-05-29
 **Decisión**:
 
@@ -617,6 +617,396 @@ Reglas confirmadas con el usuario: **renombrar IN PLACE** en la misma carpeta (n
 **Fecha**: 2026-08-14 (E5)
 **Decisión**: Cada empresa maneja su **PUC** (catálogo de cuentas contables) a nivel empresa (no por mes). Se sube el **dump Excel** que exporta el software contable (preámbulo con empresa+NIT, encabezado `Código · Nombre · Categoría · Clase · Relación con · Maneja vencimientos · Diferencia fiscal · Activo · Nivel agrupación`, pie `Procesado en:`). Módulo `puc.py` (`load_puc`/`persist_puc`/CRUD/`export_puc`) + tablas `puc_account` y `puc_import`; RPCs `puc_import`/`puc_list`/`puc_save_account`/`puc_archive_account`/`puc_delete_account`/`puc_export`; endpoint `upload-puc`; página **`/puc`** (tabla con indentado por nivel, filtros clase/nivel/estado, buscador) enlazada desde la card "Plan de Cuentas" en `empresa.vue`.
 Reglas confirmadas con el usuario: **subir dump = fusionar por `codigo`** (upsert: actualiza las existentes, agrega las nuevas, **conserva** las cuentas manuales; nada se borra; `fuente` distingue dump/manual). **Bloquear** la subida si el **NIT del encabezado no coincide** con la empresa. El **nivel** se deriva de la longitud del código (1=Clase, 2=Grupo, 4=Cuenta, 6=Subcuenta, 8=Auxiliar → `nivel = 1 + len//2`). Archivar es soft (nunca borra por importar); hay historial de dumps (`puc_import`). Verificado con el dump real (885 cuentas, NIT 900181831). Tests: 12 (parseo, niveles, upsert/merge, dry-run, bloqueo NIT, CRUD, archivar, export).
+
+---
+
+## D-071 — Contrato único de error en la API interna (2026-09-20)
+
+`/api/rpc` y todos los endpoints de subida devuelven **siempre HTTP 200** con `{ok:true, result}` o `{ok:false, error}`. Un error de dominio del sidecar no es un fallo de transporte. Con status 500, `$fetch` lanza antes de que el llamador lea el cuerpo, así que los mensajes cuidados en español (bloqueo por NIT, formato del Excel) nunca llegaban al usuario: veía "FetchError: 500 Internal Server Error". Los 4xx/5xx quedan para fallos reales de transporte. `list-dir.get` conserva sus códigos HTTP por ser un GET con semántica propia.
+
+---
+
+## D-072 — V3 se evalúa en espacio de IVA (2026-09-20)
+
+La comprobación de tarifa compara `|IVA − base × tarifa| ≤ tolerancia`, no `|base − IVA/tarifa| ≤ tolerancia`. Dividir por la tarifa amplifica el redondeo del IVA por 1/tarifa: la tolerancia de ±5 pesos sobre la base equivalía a ±0,95 pesos de IVA al 19% y a solo ±0,25 al 5%, así que casi toda factura del 5% con el IVA redondeado al peso fallaba V3 sin motivo. La tolerancia sigue siendo `V3_TOLERANCE_PESOS = 5.0` y ahora significa literalmente "hasta 5 pesos de diferencia en el IVA".
+
+---
+
+## D-073 — Un importe ilegible es un error, nunca un 0 (2026-09-20)
+
+`_to_number` distingue tres casos: celda **vacía** → `None` → se persiste 0 (ausencia legítima); valor **legible** → número; valor **presente pero ininterpretable** → `ExcelParseError` con fila y columna. Antes los dos últimos colapsaban al mismo 0: un importe mal leído aprobaba V3 en silencio (IVA = 0 se omite) y descuadraba el reporte sin ninguna señal.
+
+Corolario: ante formatos **ambiguos** se para en vez de adivinar. `"10.000"` puede ser diez mil (es-CO) o diez (en-US) y equivocarse son tres órdenes de magnitud. Se aceptan solo formas sin ambigüedad: `1.234,56`, `1234,56`, `1.234.567`, `1234.56`, `1234`, `(1234)`.
+
+---
+
+## D-074 — Los datos de un backup no deciden dónde se escribe (2026-09-20)
+
+El `meta.json` de un `.zip` de backup es entrada externa (los backups se intercambian por correo). `paths.empresa_slug` reduce el `nit` a dígitos y `backup._assert_dentro_de` verifica que el destino quede dentro de la carpeta de empresas. Antes el `nit` se interpolaba crudo en el nombre del archivo, así que un backup con `nit: "../../../evil"` escribía fuera.
+
+---
+
+## D-075 — Los importes son Decimal, no float (2026-09-20)
+
+Todo importe vive como `Decimal` cuantizado a **2 decimales** con `ROUND_HALF_UP` (la convención contable, no el `ROUND_HALF_EVEN` de Python). La conversión a `float` ocurre **solo en los bordes**: `money.to_json` para el JSON hacia la UI y `_coerce_cell` para las celdas de xlsxwriter. La aritmética no pasa nunca por float.
+
+Motivo medido, para que no se repita el mito: a la escala de este aplicativo el float **no** produce deriva acumulada visible — sumar 3.000 facturas en float64 da el mismo resultado que en Decimal. Los dos problemas reales eran otros:
+
+1. **Redondeo**: `round(2.675, 2)` da 2.67 porque 2.675 no existe en binario. En pesos es un centavo mal, en la dirección que decida la representación.
+2. **Falta de cuantización**: `Base IVA = IVA / 0.19` es periódico y se guardaba y **exportaba** como `40463.15789473684`, con `Diferencia = -1.1578947368398076`. El contador recibía esas columnas con 14 decimales de ruido. Ahora son `40463.16` y `-1.16`.
+
+En `data_json` los importes se guardan como **string exacto** (`"12952.83"`), no como número JSON: un float en el archivo reintroduciría la representación binaria. Las cargas anteriores (que sí tienen floats) se leen igual: `money.to_money` pasa el float por `repr()`, así que `12952.83` vuelve como `Decimal('12952.83')` y no como el binario largo.
+
+---
+
+## D-076 — Las operaciones largas son trabajos en segundo plano (2026-09-20)
+
+`run_validations`, `reindex_pdfs` y `list_load_soportes` (con `reindex`) se piden como `<método>_async`: devuelven un `job_id` al instante y el progreso se consulta con `job_status` (`job_cancel` los cancela). El trabajo corre en un hilo con su propia conexión SQLite.
+
+Antes: el bucle IPC es estrictamente serial y Nitro cortaba toda petición a los 30 s. Indexar los soportes de un mes son minutos, así que la petición reventaba mientras Python seguía trabajando, su respuesta llegaba a un id que ya nadie esperaba, y todo lo que el usuario tocara entretanto se encolaba detrás y también reventaba. Medido tras el cambio: arrancar el trabajo responde en ~0 ms y el bucle sigue atendiendo peticiones mientras corre.
+
+Los timeouts de `callSidecar` pasan a ser **por método** (`utils/sidecar.ts`), y el temporizador se limpia al resolver. Lo que no tiene techo no se pide de forma síncrona: se pide como trabajo.
+
+---
+
+## D-077 — El catálogo central se reconcilia en las dos direcciones (2026-09-20)
+
+`program_db.unregister_empresa` saca la fila al borrar, `sync_registry` PURGA las filas cuyo `.db` ya no existe, y `restore_empresa` da de alta la empresa restaurada. Antes `sync_registry` solo añadía y nadie borraba: el catálogo anunciaba empresas inexistentes para siempre, y una restaurada no aparecía hasta el siguiente arranque.
+
+---
+
+## D-078 — Borrar una empresa la manda a la papelera, no al vacío (2026-09-20)
+
+`delete_empresa_file` hace `wal_checkpoint` y **mueve** el `.db` a `<data_dir>/papelera/<sello>_<nombre>.db`; se conserva **30 días** (`PAPELERA_RETENCION_DIAS`) y se purga solo. RPCs `papelera_list` y `papelera_restore` para recuperarlo. Los `-wal`/`-shm` sí se descartan: son estado transitorio y el checkpoint ya volcó su contenido.
+
+Motivo: borrar una empresa es borrar la contabilidad completa de un cliente, con obligación legal de conservación en Colombia. Un `unlink()` irreversible confirmado solo con el NIT es demasiado frágil para eso. La confirmación por NIT se mantiene.
+
+---
+
+## D-079 — Crear una empresa que ya existe es un error, no un éxito (2026-09-20)
+
+`create_empresa` falla si el `.db` ya existe, y también si **el NIT ya está registrado con otra razón social** (que generaría un archivo distinto y dos contabilidades paralelas del mismo contribuyente). Antes `init_empresa_db` era idempotente y el handler devolvía éxito con la razón social ENVIADA aunque la BD conservara la anterior: el usuario creía haber creado una empresa nueva y estaba editando otra.
+
+---
+
+## D-080 — Una dependencia ausente no puede disfrazarse de dato faltante (2026-09-20)
+
+`_pdftotext` lanza `PopplerNoDisponible` cuando falta el binario, en vez de devolver `""` ante cualquier fallo, y `extract_cufes` lo reporta como `status=error` con el motivo real. Nuevo RPC `check_dependencies` para avisar ANTES de procesar.
+
+Antes, 'falta Poppler' y 'este PDF no tiene texto' acababan en el mismo sitio: el usuario veía el mes entero como «sin soporte» y no tenía forma de saber que el problema era una instalación incompleta.
+
+---
+
+## D-081 — El periodo se valida y el mes dominante es determinista (2026-09-20)
+
+`periodo_from_row` comprueba la forma `AAAA-MM` (mes 01–12) antes de devolverla: `_parse_date` deja pasar el texto original cuando no reconoce el formato, así que cortar a ciegas `fe[:7]` producía periodos basura como `'Marzo 2'` — y ese periodo decide contra qué carpeta de soportes se valida el lote.
+
+`_periodo_dominante` usa `Counter` con desempate explícito (gana el mes más antiguo). `max(set(p), key=p.count)` dependía del orden de iteración de un set de strings, que cambia **entre procesos** por el hash aleatorio de Python: verificado que con `PYTHONHASHSEED` 0/1/42/7 daba `2024-03` y con 12345/99999/13 daba `2024-02` para el mismo empate.
+
+---
+
+## D-082 — Linters y tests de frontend en CI (2026-09-20)
+
+- **`ruff`** en `apps/core` con un conjunto acotado (E/W/F/I/B/UP/C4/SIM/RUF) que atrapa errores reales, no estilo discutible. Se ignoran `RUF001/002/003`: el proyecto está escrito en español (D-009) y las tildes y comillas angulares no son «caracteres ambiguos».
+- **`vue-tsc`** contra los dos tsconfig que genera Nuxt (app y servidor). Hacía falta añadir `@types/node`, que no estaba: todo el código de servidor usaba `process`, `Buffer` y `node:*` sin tipos. El primer typecheck encontró 5 errores reales de `possibly undefined`.
+- **`vitest`** para la lógica pura del frontend (composables y utilidades de servidor). Sigue pendiente un smoke end-to-end de la aplicación.
+
+---
+
+## D-083 — Los errores se registran, no se tragan (2026-09-20)
+
+Nuevo `log.py` (a stderr, que el shell recoge en `%APPDATA%/Contab/logs/`). Los `except Exception: pass` repartidos por el código pasan a `log.warn` / `log.exception`: la política no cambia (esas operaciones siguen sin tumbar nada) pero dejan rastro. Solo quedan dos `except` desnudos, al cerrar recursos de pdfium, marcados con `noqa`.
+
+La traza de una excepción deja de viajar en el payload de la respuesta y va al log: la UI recibe el mensaje para el usuario, no rutas internas.
+
+---
+
+## D-084 — Migraciones numeradas y bloqueo de downgrade (2026-09-20)
+
+`MIGRACIONES` es una lista `(número, función)` que corre en orden una sola vez. `ensure_schema` ahora:
+
+1. **Bloquea el downgrade**: si la BD declara un esquema mayor que el de la app, lanza `EsquemaMasNuevoQueLaApp` y no toca nada. Antes `SCHEMA_VERSION` llevaba en 1 desde el primer día pese a los cambios de 0.1.4/0.1.6/0.2.0, y una versión vieja abría y **escribía** en una BD nueva. Con auto-update eso pasa.
+2. **Sale temprano** cuando la versión ya coincide. Antes ejecutaba el `executescript` entero y todos los `PRAGMA table_info` en CADA llamada RPC, o sea en cada clic.
+
+La migración 1 conserva el código antiguo tal cual (ALTER idempotentes): es lo que ya corrió en las BD instaladas y reescribirla cambiaría el resultado para alguien.
+
+---
+
+## D-085 — Fuera el esquema que describía un sistema inexistente (2026-09-20)
+
+Migración 2. Retira `validation_rule` (motor de reglas con `severity` y vigencias que ninguna línea leía ni escribía), la FK `validation_failure.rule_id` que la apuntaba, y `excel_row.deleted_at` (papelera por fila que nunca se implementó; la que funciona es la del LOTE).
+
+`excel_row.deleted_at` no era solo inútil: si algún día se filtrara por ella en `fetch_load_rows`, el `enumerate(rows)` de validations dejaría de coincidir con el `row_index` de los overrides y las aprobaciones manuales se aplicarían a filas equivocadas.
+
+Se borra solo si está vacío. Si alguien tuviera datos ahí, se conserva y se avisa por log.
+
+---
+
+## D-086 — El sidecar DIAN escucha en loopback (2026-09-20)
+
+`run.sh` y el README pasan de `0.0.0.0` a `127.0.0.1`. Era herencia del despliegue web original y dejaba el scraper accesible desde toda la red. El `Dockerfile` mantiene `0.0.0.0` porque dentro de un contenedor es lo correcto, con un comentario que aclara que no se usa en el producto de escritorio.
+
+---
+
+## D-087 — Retención de los archivos subidos (2026-09-20)
+
+Cada Excel importado y cada dump de PUC se guardaban con marca temporal y nadie los borraba nunca. Se conservan **90 días** y se purgan al subir el siguiente. Los backups `.contab.zip` quedan fuera: los guarda el usuario donde quiere y son su copia de seguridad, no un temporal nuestro.
+
+---
+
+## D-088 — Endurecimiento del shell de Electron (2026-09-20)
+
+- `sandbox: true` y `webviewTag: false` en ambas ventanas. El preload seguía funcionando porque solo usa `contextBridge`/`ipcRenderer`; se quitó de él un `version` que además nadie leía (la sirve `/api/version`).
+- `will-navigate` limita la ventana a nuestro propio origen. Sin él, un enlace o un redirect llevaba el renderer a un sitio externo **conservando el puente del preload**.
+- `shell.openExternal` solo acepta `https:`, `http:` y `mailto:`. Antes aceptaba cualquier cosa, incluido `file://`.
+- `setPermissionRequestHandler` deniega todo: la app no usa cámara, micrófono ni geolocalización.
+- `activate` (macOS) reabre la ventana en vez de llamar a `boot()`, que levantaba un SEGUNDO servidor Nitro con sus sidecars.
+- `process.on('exit')` se sustituye por `uncaughtException`: en `exit` ya no se puede programar nada y `treeKill` es asíncrono, así que no servía de nada.
+
+---
+
+## D-089 — Credencial local para la API (2026-09-20)
+
+El shell genera un secreto por arranque, se lo pasa a Nitro por `CONTAB_TOKEN` y llega al renderer por el preload (IPC síncrono; un preload con sandbox no tiene `process.env`). Un middleware lo exige en todo `/api/**` salvo `/api/version`. El cliente lo adjunta reemplazando el `$fetch` global, así que las llamadas futuras quedan cubiertas sin acordarse.
+
+Sin `CONTAB_TOKEN` en el entorno la autenticación **no se activa**: `npm run dev` sigue funcionando con curl y con el navegador suelto.
+
+Motivo: `/api/rpc` es un ejecutor universal que recibe `db_path`, `source_path` y `output_path` sin validar. El puerto aleatorio en 127.0.0.1 descarta la red, pero no a otro proceso de la máquina ni a una página barriendo puertos de localhost. El sidecar DIAN pasa también a puerto aleatorio (estaba fijo en 8756).
+
+Un 401 aquí **sí** lleva código HTTP de error, a diferencia de D-071: esto es un fallo de autorización, no un error de dominio.
+
+---
+
+## D-090 — El renderizado de PDF no usa Pillow (2026-09-20)
+
+`_render_page` va por `bitmap.to_numpy()` y no por `to_pil()`.
+
+`to_pil()` importa Pillow, que **no está en las dependencias del paquete** (aunque CLAUDE.md lo listaba). En un entorno limpio lanzaba `ModuleNotFoundError`, el `except Exception` lo convertía en `None`, y la lectura por QR —única vía en los PDF con la fuente ofuscada, como los de Movistar/Claro/Tigo— fallaba en silencio. Se veía como «sin CUFE», nunca como un fallo de instalación.
+
+Este era el fallo que llevaba toda la revisión atribuido a `cv2.QRCodeDetector`. No era el detector: era que nunca le llegaba una imagen.
+
+---
+
+## D-091 — Los campos consultables salen del blob JSON (2026-09-20)
+
+`excel_row` gana cuatro columnas proyectadas desde `data_json`: `total_centavos`, `iva_centavos`, `nit_emisor` y `fecha_emision` (migración 3, con backfill de lo ya cargado). `data_json` **sigue siendo la fuente de verdad** de la fila completa — D-039 intacto: no se renombra ningún header de la DIAN.
+
+Los importes van en **centavos como INTEGER**, no como REAL ni TEXT: `SUM` en SQL es exacto, un REAL reintroduciría el binario del que salimos en D-075 y un TEXT no suma. `money.a_centavos` / `money.de_centavos` convierten en ambos sentidos sin pérdida.
+
+Motivo: toda la fila vivía como un blob JSON, así que no se podía sumar, agrupar ni filtrar en SQL — cualquier total pasaba por cargar el lote entero a memoria en Python. Eso bloqueaba cualquier reporte agregado o comparación entre meses.
+
+Se añaden `resumen_periodos` y `resumen_emisores` como primeros consumidores, para que la capacidad quede demostrada y no solo prometida.
+
+Nota de implementación: los índices de las columnas nuevas NO van en `SCHEMA_SQL`. En una BD antigua la tabla ya existe sin ellas (`CREATE TABLE IF NOT EXISTS` no las añade) y el `CREATE INDEX` falla — exactamente la trampa que el código ya documentaba para `idx_excel_row_periodo`.
+
+---
+
+## D-092 — `load.vue` se parte en composables (2026-09-20)
+
+La página juntaba seis responsabilidades en 934 líneas y es el archivo que más se toca del repo. Se extraen a `app/composables/`:
+
+- `useColumnasTabla` — visibilidad, grupos y panel de columnas.
+- `useExportarFaltantes` — reporte de faltantes de soporte (D-047).
+- `useRenombrarSoportes` — plan y aplicación del renombrado (D-066).
+- `useSoportesDelMes` — panel de soportes y re-verificación (D-068).
+
+La página queda con lo que es suyo: la tabla, las validaciones y los overrides. Las dependencias entre piezas van como parámetros explícitos (`alAplicar`, `alReverificar`), no como variables compartidas por estar en el mismo archivo.
+
+---
+
+## D-093 — `Base IVA` usa la tarifa detectada (2026-09-20) · **supersede D-046**
+
+> Cambio de una decisión que estaba marcada como inmutable. **Confirmado explícitamente por el usuario** el 2026-09-20, tras plantearle las tres opciones (detectar la tarifa / renombrar la columna / dejarlo).
+
+`Base IVA = IVA / tarifa detectada` (19% o 5%, la que explique ese IVA dentro de la tolerancia de ±5 pesos). Antes era `IVA / 0.19` **siempre**.
+
+Por qué: las columnas `Base IVA` y `Diferencia` se EXPORTAN al contador. En una factura al 5%, dividir por 0,19 daba una base cinco veces menor de lo debido y una `Diferencia` enorme que no era un descuadre sino ruido:
+
+| | D-046 (antes) | D-093 (ahora) |
+|---|---|---|
+| `Base IVA` | 263.157,89 | 1.000.000,00 |
+| `Diferencia` | 736.842,11 | 0,00 |
+
+*(factura al 5%: base 1.000.000, IVA 50.000)*
+
+La `Diferencia` vuelve a significar «aquí hay algo que no cuadra» en las dos tarifas.
+
+Cuando **ninguna** tarifa cuadra —la fila que V3 marcará como no conforme— se usa el 19% como referencia, para que la `Diferencia` muestre cuánto se aparta del caso general, que es lo útil al revisarla a mano. Una tarifa inventada sigue saltando a la vista.
+
+La detección comparte criterio con V3 (D-072): se compara en espacio de IVA, no dividiendo.
+
+**Efecto en datos existentes**: `_derive_columns` recalcula en cada lectura (D-045 retrofit), así que las cargas ya guardadas muestran los valores nuevos sin necesidad de re-subir nada. Las filas al 19% no cambian.
+
+---
+
+## D-094 — Las carpetas de los sidecars se BUSCAN, no se calculan con `..` (2026-09-20)
+
+`resolveCoreDir` y `dianCwd` suben desde el directorio actual buscando un marcador (`contab_core/sidecar.py`, `main.py`). Antes se calculaban con un número fijo de `..` asumiendo que el cwd era `apps/desktop`.
+
+Esa suposición es falsa cuando **el shell de Electron arranca Nitro**: ahí el cwd es `apps/desktop/.output`, y las dos rutas candidatas (`../core` y `../../apps/core`) apuntaban a carpetas inexistentes. El sidecar se lanzaba con un cwd inválido, moría al instante, y toda petición fallaba con *"Cannot call write after a stream was destroyed"* — un mensaje que no dice nada del problema real.
+
+En producción no se notaba porque `CONTAB_SIDECAR_BIN` apunta al ejecutable de PyInstaller, que trae su propio cwd. Pero era un fallo real en el arranque no empaquetado, y lo encontró el smoke end-to-end el primer día que existió.
+
+Si no se encuentra, ahora se lanza un error que **dice qué falta y cómo arreglarlo** (`CONTAB_CORE_DIR` / `DIAN_DIR`), en vez de spawnear a ciegas.
+
+---
+
+## D-095 — Smoke end-to-end contra el Electron real (2026-09-20)
+
+`apps/shell/e2e/` con Playwright. No es una suite de UI: es la comprobación de que la cadena entera arranca y funciona — Electron → Nitro → sidecar Python → preload → credencial — que es justo lo que ni vitest ni pytest pueden ver.
+
+Cubre: el arranque completo, que el preload entrega la credencial **pese a `sandbox: true`** (D-088 + D-089 podrían haberse roto entre sí y la app instalada habría quedado inservible), que la API rechaza con 401 sin ella, que Poppler está, el flujo real (crear empresa → subir el Excel de muestra → validar como trabajo en segundo plano → resumen agregado en SQL), y que borrar manda a la papelera y se puede recuperar.
+
+**Aislamiento**: `APPDATA` y `XDG_DATA_HOME` apuntan a un temporal antes de lanzar Electron, que lo propaga a Nitro y este al sidecar. Hay un test dedicado a comprobar que las empresas creadas viven ahí. No es paranoia: durante esta misma revisión, correr pytest en Windows escribió en el `%APPDATA%\Contab` real del usuario, incluidos los tests que BORRAN empresas.
+
+---
+
+## D-096 — Contab es el puente; Siigo sigue siendo el libro contable ✅ (2026-09-21)
+
+Contab controla, causa y **exporta**; Siigo guarda los libros y produce los reportes oficiales. Decidido por el usuario en opción múltiple, frente a la alternativa de volver a Contab el libro completo.
+
+Por qué: el contador ya paga Siigo y confía en él para lo legal. Competirle con libros oficiales, estados financieros y partida doble es tres o cuatro veces más trabajo y traslada a Contab una responsabilidad legal que hoy no tiene.
+
+**Efecto en el roadmap**: **E6 (asientos contables) y E7 (reportes financieros) quedan aparcadas**. El cumplimiento que sí se hace (Fase 7 del plan de automatización) entrega **cifras para revisar, no documentos para presentar**: prellenado del 300 y el 350, y los formatos de exógena sobre la base de la causación.
+
+Costo asumido: se depende del formato y la disponibilidad de otro producto. Se mitiga diseñando el envío como **capa de adaptador** (el modelo interno de asiento es nuestro; Siigo es el primer destino, no el único), para que World Office, Helisa o Contapyme entren después sin rehacer el motor.
+
+Ver [`plans/dian-siigo-automation-plan.md`](../plans/dian-siigo-automation-plan.md).
+
+---
+
+## D-097 — Tres caminos de ingesta desde la DIAN ✅ (2026-09-21)
+
+La información de la DIAN entra por tres caminos hacia **una sola interfaz interna**:
+
+1. `token` — autenticación contra el portal y llamadas HTTP directas. El rápido: las N empresas en minutos.
+2. `robot` — Playwright sobre el portal, reusando el contexto persistente y el modo CDP que ya funciona en `apps/dian-rut`. El que sobrevive a Cloudflare y al segundo factor.
+3. `manual` — la subida del Excel que existe hoy. **No se retira nunca**: es el piso cuando los otros dos fallen.
+
+Por qué tres y no el mejor: el portal es un contrato que nadie firmó con nosotros y cambia sin avisar. Un solo camino convierte un cambio de la DIAN en un mes perdido.
+
+**Descartada por ahora**: la ingesta por correo (IMAP) del buzón de facturación del cliente. Es la vía más robusta y la única que trae el XML sin depender del portal, pero exige acceso al correo de cada empresa. Se revisa si los caminos del portal se caen.
+
+Antes de escribir el módulo hay una **sesión de reconocimiento** contra el portal real, documentada en `docs/dian-portal.md`. No se diseña sobre endpoints recordados de memoria.
+
+---
+
+## D-098 — Las credenciales de la DIAN se guardan cifradas en la máquina ✅ (2026-09-21)
+
+Una entrada por empresa en el **llavero del sistema operativo** (Windows Credential Manager). Nunca en la `.db`, nunca en el log, nunca en el payload de un error — con un test que lo comprueba.
+
+Por qué: la alternativa (pedirlas en cada corrida) mata justo lo que se venía a automatizar cuando son veinte empresas. La otra (heredar la sesión que el contador abrió a mano) no permite corridas desatendidas.
+
+Costo asumido y explícito: **Contab pasa a custodiar credenciales fiscales de terceros.** De ahí se siguen tres cosas que dejan de ser opcionales: el llavero del SO en vez de cifrado propio, la auditoría de quién disparó cada corrida, y la **firma Authenticode** del instalador que D-059 dejó pendiente — a un usuario que está por entregar las claves de la DIAN de sus clientes no se le recibe con una advertencia de SmartScreen.
+
+Queda abierto si las corridas pueden ser **desatendidas** (programadas de noche) o siempre las dispara el contador: es una decisión de política, no técnica.
+
+---
+
+## D-099 — El puente a Siigo va por la API de Siigo Nube ✅ (2026-09-21)
+
+Se envía por API con credenciales de integración, no por la plantilla de importación de archivo plano.
+
+Por qué la API y no el archivo: **un archivo se escribe pero no se lee de vuelta.** La API permite la **reconciliación inversa** — leer de Siigo lo que quedó contabilizado en el periodo y cruzarlo contra el reporte de la DIAN, en tres columnas: en la DIAN y en Siigo · solo en la DIAN (falta causar) · solo en Siigo (causado sin documento electrónico). Ese reporte responde la pregunta que hoy el contador no puede responder, y es la razón principal de la decisión.
+
+Dos cosas se confirman **antes** de diseñar: el contrato vigente de la API y el tipo de credencial. Un agente no inventa endpoints de memoria.
+
+Idempotencia por **CUFE**: un documento no sale dos veces, ni al repetir la corrida ni al reabrir el mes.
+
+A favor: el PUC que ya importa `puc.py` tiene la forma del catálogo de cuentas que exporta Siigo, así que buena parte del mapeo de cuentas es un join, no digitación.
+
+---
+
+## D-100 — El catálogo de terceros vive por empresa ✅ (2026-09-21)
+
+Los terceros enriquecidos con el RUT (responsabilidades, CIIU, municipio, estado) se guardan **en la `.db` de cada empresa**, no en un catálogo central.
+
+Se evaluó el caché central en `contab.db`: una consulta al RUT serviría a las veinte empresas en vez de repetirse veinte veces. Se descartó porque **habría necesitado una excepción explícita a D-003** («una DB por empresa, nunca mezclar»), y esa regla vale más que las consultas ahorradas. Una excepción escrita hoy es una excepción que alguien amplía en seis meses.
+
+Dos consecuencias para la implementación:
+
+- Cada fila de tercero guarda `consultado_at`, para distinguir una lectura fresca de una vieja.
+- Al **causar** un documento se copia el estado del tercero dentro del documento. Refrescar el catálogo después no puede reescribir lo que justificó una retención hace seis meses: la tarifa dependía de lo que el RUT decía **ese día**.
+
+---
+
+## D-101 — Toda corrida de ingesta la dispara el contador ✅ (2026-09-21)
+
+Sin programador y sin ejecución nocturna. Nada toca la cuenta DIAN de un cliente sin que haya un humano presente.
+
+D-098 (credenciales guardadas y cifradas) hacía *posible* la corrida desatendida; se decidió no quererla. Las credenciales guardadas siguen justificándose solas: son para **no teclear veinte claves por corrida**, no para correr sin nadie.
+
+Costo aceptado: arrancar y vigilar la corrida es trabajo manual que se repite cada mes. A cambio, un cambio del portal o un segundo factor nuevo fallan **delante de alguien**, no en silencio a las 3 de la mañana.
+
+---
+
+## D-102 — Las tarifas se importan de un Excel del contador ✅ (2026-09-21)
+
+La UVT del año, los conceptos de retención con su tarifa y su base mínima, y las tarifas de ICA por municipio **se cargan importando el Excel que el contador ya maneja**, con el mismo patrón de `puc.py`: alias de encabezado, upsert por clave, y las filas manuales se conservan.
+
+Por qué: es su fuente, la que ya usa y en la que confía. Un agente **no** siembra tarifas de impuestos de memoria ni de una búsqueda web — son ley, cambian por decreto, y un error citado con fuente convence más de lo que debería.
+
+Actualizar cada año es volver a subir el archivo. **Si un decreto obliga a publicar una versión de la aplicación, el diseño está mal.**
+
+Primer paso al implementar la Fase 4: pedir una muestra real de ese Excel y escribir `docs/tarifas-structure.md` contra ella, como se hizo con `docs/excel-structure.md` para el reporte DIAN.
+
+---
+
+## D-103 — El contrato de Siigo, verificado; el envío va por tipo de documento ✅ (2026-09-21)
+
+Verificado contra la documentación vigente de Siigo el 2026-09-21 (no de memoria):
+
+- **Autenticación**: `POST https://api.siigo.com/auth` con `username` + `access_key` → JWT con `expires_in: 86400` (24 horas). El header **`Partner-Id`** va en todas las llamadas. Las credenciales salen de Siigo Nube → *Alianzas → Mi Credencial API*; las de prueba se piden a `soporteapi@siigo.com` con el NIT. **No hay sandbox público.**
+- **Enrutamiento por tipo de documento**: factura recibida → `/purchases`; documento soporte con no obligados → `/purchase-support-documents`; `/journals` solo para lo que no encaje en ninguno de los dos.
+
+Por qué por tipo y no todo por `/journals`: el mundo del contador son documentos, no asientos sueltos, y **Siigo aplica la configuración de cada empresa** (proveedor, impuestos, retenciones) al contabilizar una compra. Eso evita que Contab tenga que replicar esa configuración empresa por empresa. El documento soporte, además, tiene recurso propio: forzarlo al molde de factura de compra ensuciaría justo el tipo que más se revisa.
+
+Costo aceptado: la configuración de cada empresa en Siigo tiene que estar bien, y el **ensayo en seco** obligatorio antes del primer envío real es donde se descubre que no lo está.
+
+Dos hallazgos del sondeo que cambian el diseño:
+
+1. **Las cuentas viajan por código.** Una línea referencia la cuenta por `code` (`"11050501"`) y `movement`, no por un id interno — el PUC que `puc.py` ya importa pasa directo. La tabla de mapeo se reduce a centros de costo, impuestos y tipos de comprobante.
+2. **No hay campo de referencia externa.** Lo más cercano es `observations` (cabecera) y `description` (línea). Por eso la idempotencia **no** puede apoyarse en Siigo: la tabla `siigo_envio` es la única autoridad sobre lo que ya salió, el CUFE se estampa además en `observations` para que un humano pueda rastrearlo dentro de Siigo, y la verificación posterior se hace **listando el periodo** (`date_start`/`date_end`, `page`/`page_size`, `total_results`), nunca preguntando por un CUFE.
+
+Ese mismo listado por rango de fechas es lo que hace viable la **reconciliación inversa**, que fue la razón de elegir la API sobre el archivo plano (D-099).
+
+---
+
+## D-104 — Vigía de citas DIAN: vigilar y dejar lista, no reservar a ciegas (2026-09-25)
+
+Página **Consultas DIAN → Citas** (`/consulta-citas`): botón *Buscar cita* / *Detener*, estado en vivo,
+registro y captura. Busca **Devoluciones · Videoatención · Persona natural** y solo sirve **Medellín**
+(requisito del usuario).
+
+- **Vive en el sidecar DIAN** (`apps/dian-rut/citas.py`, endpoints `/citas/{status,start,stop,captura}`,
+  proxys en `server/api/dian/citas/`), no en un sidecar nuevo: ese servicio ya trae Playwright y ya va en
+  el instalador. Corre en un hilo con Playwright síncrono (el loop de uvicorn está en otro hilo).
+- **Navegador del sistema** (Chrome → Edge) con perfil propio en `<DIAN_WORKDIR>/citas/`: el instalador
+  no trae Chromium (D-058). Sin stealth ni evasión de CAPTCHA: si aparece uno, es "detenerse y avisar".
+- **Navegador real, no HTTP plano**: el portal pasa todo por `Player.aspx/ValidadorValidar` con varios
+  iframes y estado de sesión; imitar esas llamadas sería frágil.
+- **Señal de "sin cupo"**: el modal *"No se encontraron especialidades relacionadas según los filtros
+  seleccionados."* Cualquier otra pantalla → se detiene con la ventana abierta, guarda captura, ventana
+  emergente siempre-encima + pitidos + toast (la ventana va primero: el usuario tiene los toasts de Windows
+  apagados) y `CITA_DIAN.txt`.
+- **Flujo tras Devoluciones, según el manual del usuario** (capturas del 2026-08-28, cuando sí había
+  trámites): aparece un desplegable **Trámite** con opciones por ciudad (p. ej. *Bucaramanga "Solicitud de
+  devolución y/o compensación persona natural"*); sus opciones no salen en el texto de la página hasta
+  abrirlo, así que "¿hay Medellín?" se decide leyendo las opciones. Solo sirve la que dice Medellín **y**
+  persona natural; si no está → sigue buscando. Si está → la elige, Siguiente, pantalla *Ciudad o
+  municipio, sede, fecha y hora*: elige el **primer día** que pinta el calendario (solo pinta los
+  disponibles), Siguiente, y se detiene ahí a avisar. Sin días → sigue buscando.
+- **Lo que viene después del día** (datos del solicitante, confirmación) aún no se ha visto: ahí para y el
+  usuario termina. Cualquier paso que no salga como en el manual también es "parar y avisar", nunca "error
+  y reintentar", para no perder un cupo real por un selector.
+- **Cada 1–2 min (al azar)**, con backoff si el portal falla. Empezó en 3 min; el usuario lo pidió más corto.
+
+Arreglos previos que salieron al integrarlo:
+- `playwright-stealth==1.0.6` no exporta `Stealth`, que es lo que importa `scraper.py`: con los pines del
+  repo el sidecar DIAN **no arrancaba**. Pin subido a 2.0.0.
+- El chequeo de vida del sidecar usaba `/browser-mode-status`, que sondea :9222; en Windows una conexión
+  rechazada tarda ~2 s, más que el timeout de 1,2 s, así que el servicio nunca se daba por vivo. Nuevo
+  `/health`, y 90 s de margen para el arranque en frío.
 
 ---
 

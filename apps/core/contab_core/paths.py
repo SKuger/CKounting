@@ -25,6 +25,16 @@ def empresas_dir() -> Path:
     return p
 
 
+def papelera_dir() -> Path:
+    """Donde van las empresas borradas antes de desaparecer de verdad (D-078).
+
+    Borrar una empresa es borrar la contabilidad completa de un cliente, con
+    obligación legal de conservación. No puede depender de un clic bien dado."""
+    p = data_dir() / "papelera"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 def program_db_path() -> Path:
     """The program-level DB (contab.db): user, settings, empresa registry.
     Complements D-003 (per-empresa DBs stay isolated); this only holds
@@ -38,9 +48,16 @@ _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 
 def empresa_slug(nit: str, razon_social: str) -> str:
-    """<nit>_<razon-social-slug> for human-recognisable filenames."""
+    """<nit>_<razon-social-slug> for human-recognisable filenames.
+
+    El NIT se reduce a dígitos: llega desde el meta.json de un backup, que es un
+    archivo que el usuario recibe de fuera. Interpolarlo crudo permitía que un
+    `nit` con '..' o separadores escribiera el .db fuera de la carpeta de empresas."""
+    digits = "".join(c for c in str(nit or "") if c.isdigit())
+    if not digits:
+        raise ValueError(f"NIT inválido para nombre de archivo: {nit!r}")
     slug = _SLUG_RE.sub("-", razon_social.lower()).strip("-") or "empresa"
-    return f"{nit}_{slug}"
+    return f"{digits}_{slug}"
 
 
 def empresa_db_path(nit: str, razon_social: str) -> Path:

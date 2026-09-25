@@ -28,4 +28,8 @@ RUN playwright install chromium
 COPY . .
 
 # Run uvicorn on port 8000
+# Dentro de un contenedor hay que escuchar en 0.0.0.0 para que el puerto publicado
+# funcione — pero entonces la exposición la decide QUIEN publique el puerto. Este
+# Dockerfile es herencia del despliegue web y NO se usa en el producto de
+# escritorio, que arranca el sidecar en 127.0.0.1 (run_server.py).
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

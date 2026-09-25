@@ -126,3 +126,34 @@ def test_delete_empresa_requires_matching_nit(empresa_setup):
     result = backup.delete_empresa_file(empresa_setup["db_path"], "900181831")
     assert empresa_setup["db_path"].name in result["deleted"]
     assert not empresa_setup["db_path"].exists()
+
+
+def test_restore_rechaza_nit_con_travesia_de_rutas(tmp_path):
+    """El meta.json de un backup viene de fuera: no puede decidir dónde se escribe.
+
+    Antes, `nit` se interpolaba crudo en el nombre del archivo, así que un backup
+    con nit='../../../evil' escribía el .db fuera de la carpeta de empresas."""
+    import json as _json
+    import zipfile
+
+    from contab_core import backup, paths
+
+    zip_path = tmp_path / "malicioso.zip"
+    with zipfile.ZipFile(zip_path, "w") as z:
+        z.writestr(backup.ZIP_META_NAME, _json.dumps({
+            "nit": "../../../../evil",
+            "razon_social": "Empresa",
+        }))
+        z.writestr(backup.ZIP_DB_NAME, b"no importa")
+
+    with pytest.raises(ValueError):
+        backup.restore_empresa(zip_path)
+
+    empresas = paths.empresas_dir()
+    assert not list(empresas.parent.parent.glob("evil*")), "no debe escribir fuera"
+
+
+def test_slug_normaliza_nit_con_puntos_y_guion():
+    from contab_core import paths
+
+    assert paths.empresa_slug("900.181.831-4", "Real Seguros") == "9001818314_real-seguros"

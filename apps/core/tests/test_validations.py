@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from contab_core import excel, validations
 
 
@@ -37,6 +39,35 @@ def test_v3_skips_iva_zero():
     # D-E1-13 default: skip when IVA = 0.
     row = {"Tipo de documento": "Factura electrónica", "IVA": 0, "Total": 10000.0}
     assert validations.evaluate_v3(row) is None
+
+
+def test_v3_tolera_redondeo_al_peso_en_tarifa_5pct():
+    """La tolerancia se aplica sobre el IVA, no sobre la base.
+
+    Base 1.000.000 al 5% → IVA exacto 50.000. Si el emisor reporta 49.999 (un peso
+    de redondeo), comparar en espacio de base daba |999.980 - 1.000.000| = 20 > 5 y
+    marcaba la fila como no conforme. En espacio de IVA la diferencia es 1 peso."""
+    total, iva = 1_049_999.0, 49_999.0
+    assert validations.evaluate_v3({"Tipo de documento": "Factura electrónica",
+                                    "IVA": iva, "Total": total}) is None
+
+
+def test_v3_tolerancia_simetrica_entre_tarifas():
+    """Un mismo desvío de IVA se juzga igual al 19% y al 5% (antes, 5,26x vs 20x)."""
+    desvio = Decimal("4")  # dentro de la tolerancia de ±5 pesos
+    base = Decimal("1000000")
+    for rate in (validations.IVA_RATE_GENERAL, validations.IVA_RATE_REDUCED):
+        iva = base * rate + desvio
+        row = {"Tipo de documento": "Factura electrónica", "IVA": iva, "Total": base + iva}
+        assert validations.evaluate_v3(row) is None, f"tarifa {rate} debería pasar"
+
+
+def test_v3_sigue_marcando_tarifa_que_no_existe():
+    """El arreglo no puede volver V3 permisiva: 10% sigue siendo no conforme."""
+    base = 1_000_000.0
+    iva = base * 0.10
+    row = {"Tipo de documento": "Factura electrónica", "IVA": iva, "Total": base + iva}
+    assert validations.evaluate_v3(row) is not None
 
 
 def test_v1_real_passes_when_cufe_in_set():

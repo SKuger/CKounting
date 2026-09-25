@@ -139,14 +139,16 @@ def test_header_en_columna_no_cero(tmp_path):
     """Un export con una columna vacía a la izquierda igual se parsea (el 'Código'
     puede estar en cualquier columna)."""
     from openpyxl import Workbook
-    wb = Workbook(); ws = wb.active
+    wb = Workbook()
+    ws = wb.active
     ws.append([None, "Cuentas contables"])
     ws.append([None, "EMPRESA X"])
     ws.append([None, "900123456-7"])
-    ws.append([None] + HEADER)                       # encabezado corrido una columna
+    ws.append([None, *HEADER])                       # encabezado corrido una columna
     ws.append([None, "1", "Activo", None, None, None, None, None, None])
     ws.append([None, "1105", "Caja", None, None, None, None, None, None])
-    path = tmp_path / "corrido.xlsx"; wb.save(path)
+    path = tmp_path / "corrido.xlsx"
+    wb.save(path)
     loaded = puc.load_puc(path)
     assert loaded.empresa_nit == "900123456"
     assert [a["codigo"] for a in loaded.accounts] == ["1", "1105"]

@@ -1,7 +1,13 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile, unlink } from 'node:fs/promises'
 import { basename, resolve as joinPath } from 'node:path'
-import { homedir } from 'node:os'
 import { callSidecar } from '../utils/sidecar'
+import {
+  safeFilename,
+  uniquePrefix,
+  fallbackUploadsDir,
+  checkUploadSize,
+  purgarSubidasAntiguas,
+} from '../utils/uploads'
 
 type EmpresaInfo = {
   db_path: string
@@ -10,61 +16,27 @@ type EmpresaInfo = {
   default_folder?: string | null
 }
 
-function safeFilename(name: string | undefined): string {
-  if (!name) return 'import.xlsx'
-  return name.replace(/[\\/:*?"<>|]/g, '_')
-}
-
-function timestamp(): string {
-  const d = new Date()
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return [
-    d.getFullYear(),
-    pad(d.getMonth() + 1),
-    pad(d.getDate()),
-  ].join('') + '-' + [
-    pad(d.getHours()),
-    pad(d.getMinutes()),
-    pad(d.getSeconds()),
-  ].join('')
-}
-
-function fallbackUploadsDir(): string {
-  return joinPath(homedir(), '.local', 'share', 'Contab', 'uploads')
-}
-
+// Contrato único de la API (ver rpc.post.ts): SIEMPRE 200 con {ok:true|false}.
 export default defineEventHandler(async (event) => {
   const parts = await readMultipartFormData(event)
-  if (!parts) {
-    setResponseStatus(event, 400)
-    return { ok: false, error: 'no form data' }
-  }
+  if (!parts) return { ok: false, error: 'No llegaron datos del formulario.' }
 
   const dbPathPart = parts.find((p) => p.name === 'db_path')
   const filePart = parts.find((p) => p.name === 'file')
 
-  if (!dbPathPart?.data) {
-    setResponseStatus(event, 400)
-    return { ok: false, error: 'missing db_path' }
-  }
-  if (!filePart?.data) {
-    setResponseStatus(event, 400)
-    return { ok: false, error: 'missing file' }
-  }
+  if (!dbPathPart?.data) return { ok: false, error: 'Falta la empresa destino.' }
+  if (!filePart?.data) return { ok: false, error: 'Falta el archivo Excel.' }
 
   const dbPath = dbPathPart.data.toString('utf-8').trim()
-  if (!dbPath) {
-    setResponseStatus(event, 400)
-    return { ok: false, error: 'empty db_path' }
-  }
+  if (!dbPath) return { ok: false, error: 'La empresa destino está vacía.' }
+
+  const tooBig = checkUploadSize(filePart.data.length)
+  if (tooBig) return { ok: false, error: tooBig }
 
   // El modelo por meses exige el periodo destino: el Excel se carga DENTRO de un mes.
   const periodoPart = parts.find((p) => p.name === 'periodo')
   const periodo = periodoPart?.data ? periodoPart.data.toString('utf-8').trim() : ''
-  if (!periodo) {
-    setResponseStatus(event, 400)
-    return { ok: false, error: 'falta el mes (periodo) destino' }
-  }
+  if (!periodo) return { ok: false, error: 'Falta el mes (periodo) destino.' }
 
   // Look up the empresa's default_folder to decide where to save the upload.
   let targetDir: string
@@ -75,22 +47,20 @@ export default defineEventHandler(async (event) => {
       ? joinPath(folder, 'imports')
       : joinPath(fallbackUploadsDir(), basename(dbPath, '.db'))
   } catch (err) {
-    setResponseStatus(event, 500)
-    return { ok: false, error: `open_empresa failed: ${String(err)}` }
+    const msg = (err instanceof Error ? err.message : String(err)).replace(/^Error:\s*/, '')
+    return { ok: false, error: `No se pudo abrir la empresa: ${msg}` }
   }
 
-  const fileName = `${timestamp()}_${safeFilename(filePart.filename)}`
+  const fileName = `${uniquePrefix()}_${safeFilename(filePart.filename, 'import.xlsx')}`
   const savedPath = joinPath(targetDir, fileName)
 
   try {
     await mkdir(targetDir, { recursive: true })
     await writeFile(savedPath, filePart.data)
+    // Retención (D-087): los imports se acumulaban para siempre.
+    void purgarSubidasAntiguas(targetDir)
   } catch (err) {
-    setResponseStatus(event, 500)
-    return {
-      ok: false,
-      error: `No se pudo guardar el archivo en ${savedPath}: ${String(err)}`,
-    }
+    return { ok: false, error: `No se pudo guardar el archivo en ${savedPath}: ${String(err)}` }
   }
 
   try {
@@ -101,7 +71,9 @@ export default defineEventHandler(async (event) => {
     })
     return { ok: true, result, saved_to: savedPath }
   } catch (err) {
-    setResponseStatus(event, 500)
-    return { ok: false, error: String(err) }
+    // La importación falló → el archivo guardado es basura: no dejarlo acumulándose.
+    await unlink(savedPath).catch(() => {})
+    const msg = (err instanceof Error ? err.message : String(err)).replace(/^Error:\s*/, '')
+    return { ok: false, error: msg }
   }
 })

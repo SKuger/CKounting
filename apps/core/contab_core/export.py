@@ -6,6 +6,7 @@ from typing import Any
 
 import xlsxwriter
 
+from . import money
 from .excel import DERIVED_COLUMNS, DIAN_COLUMNS
 from .validations import apply_v2_inversion
 
@@ -24,10 +25,14 @@ MISSING_SUPPORTS_COLUMNS: list[str] = [
 
 
 def _coerce_cell(value: Any) -> Any:
-    """xlsxwriter writes numbers as numbers and strings as strings, but None breaks."""
+    """xlsxwriter writes numbers as numbers and strings as strings, but None breaks.
+
+    Borde de salida de los importes (D-075): xlsxwriter no entiende Decimal, así
+    que aquí —y solo aquí— se convierte a float. El valor ya viene cuantizado a
+    centavos, de modo que la celda queda con el importe exacto que se calculó."""
     if value is None:
         return ""
-    return value
+    return money.to_json(value)
 
 
 def export_no_conformes(
@@ -54,7 +59,7 @@ def export_no_conformes(
         sheet.write(0, col_idx, header, header_format)
 
     written = 0
-    for row, reasons in zip(rows, reasons_per_row):
+    for row, reasons in zip(rows, reasons_per_row, strict=False):
         if not reasons:
             continue
         transformed = apply_v2_inversion(row)
@@ -111,9 +116,9 @@ def export_missing_supports(
             value = transformed.get(header)
             if value is None:
                 value = ""
-            if header == "Total" and isinstance(value, (int, float)):
+            if header == "Total" and money.is_money(value):
                 sheet.write_number(
-                    excel_row, col_idx, value,
+                    excel_row, col_idx, money.to_json(value),
                     nc_number_format if is_nc else number_format,
                 )
             else:

@@ -1,13 +1,14 @@
 {
   "name": "contab-shell",
   "productName": "Contab",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Contab — shell de escritorio (Electron) que arranca el servidor Nitro + sidecars.",
   "private": true,
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win nsis --publish never"
+    "dist": "electron-builder --win nsis --publish never",
+    "e2e": "playwright test -c e2e/playwright.config.ts"
   },
   "dependencies": {
     "electron-log": "^5.2.4",
@@ -15,6 +16,7 @@
     "tree-kill": "^1.2.2"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "electron": "^33.2.0",
     "electron-builder": "^25.1.8"
   }

@@ -3,11 +3,16 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
-SCHEMA_VERSION = 1
+from . import log
+
+SCHEMA_VERSION = 5
+
+# Cuánto espera una escritura a que se libere el lock antes de rendirse (ms).
+BUSY_TIMEOUT_MS = 5_000
 
 # Single source of truth for the empresa.db schema in E1.
 SCHEMA_SQL = """
@@ -46,12 +51,24 @@ CREATE TABLE IF NOT EXISTS excel_row (
   cufe_cude    TEXT,
   grupo        TEXT,
   tipo_doc     TEXT,
-  data_json    TEXT NOT NULL,
-  periodo      TEXT,          -- 'YYYY-MM' de la fila; movible entre meses (0.1.4)
-  deleted_at   TEXT           -- papelera (soft-delete) de la fila (0.1.4)
+  data_json    TEXT NOT NULL,   -- fila COMPLETA, fuente de verdad (D-039)
+  periodo      TEXT,          -- 'YYYY-MM' de la fila (0.1.4)
+  -- D-091: proyección de los campos consultables, para poder sumar, agrupar y
+  -- filtrar en SQL sin cargar el lote entero a memoria. Los importes van en
+  -- CENTAVOS como INTEGER: suman exacto (un REAL reintroduciría el binario que
+  -- evitamos en D-075; un TEXT no suma).
+  total_centavos INTEGER,
+  iva_centavos   INTEGER,
+  nit_emisor     TEXT,
+  fecha_emision  TEXT
+  -- D-085: no hay papelera POR FILA. La que existe es la del LOTE
+  -- (excel_load.deleted_at). La columna `deleted_at` de aquí nunca se escribió.
 );
 CREATE INDEX IF NOT EXISTS idx_excel_row_load ON excel_row(load_id);
 CREATE INDEX IF NOT EXISTS idx_excel_row_cufe ON excel_row(cufe_cude);
+-- Los índices de las columnas nuevas NO van aquí: en una BD antigua la tabla ya
+-- existe sin ellas (CREATE TABLE IF NOT EXISTS no las añade) y el índice falla.
+-- Se crean en la migración que añade las columnas, igual que idx_excel_row_periodo.
 
 -- 0.1.4: carpeta de soportes (PDFs) por periodo (mes). La validación V1 de un lote
 -- cruza sus CUFE contra la carpeta del periodo del lote (fallback: empresa_info.pdfs_folder).
@@ -60,21 +77,10 @@ CREATE TABLE IF NOT EXISTS periodo_folder (
   pdfs_folder TEXT
 );
 
-CREATE TABLE IF NOT EXISTS validation_rule (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  name            TEXT NOT NULL,
-  description     TEXT,
-  type            TEXT NOT NULL,
-  scope_json      TEXT,
-  params_json     TEXT NOT NULL,
-  failure_message TEXT NOT NULL,
-  severity        TEXT NOT NULL DEFAULT 'error',
-  enabled         INTEGER NOT NULL DEFAULT 1,
-  vigencia_desde  TEXT,
-  vigencia_hasta  TEXT,
-  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
-);
+-- D-085: aquí vivía `validation_rule`, un motor de reglas con vigencias que
+-- NUNCA se implementó (ninguna línea la leía ni la escribía). Las validaciones
+-- V1/V2/V3 están en validations.py. Si algún día se hace el motor de verdad,
+-- esta tabla vuelve con una migración numerada.
 
 CREATE TABLE IF NOT EXISTS validation_run (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,7 +95,6 @@ CREATE TABLE IF NOT EXISTS validation_run (
 CREATE TABLE IF NOT EXISTS validation_failure (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   run_id         INTEGER NOT NULL REFERENCES validation_run(id) ON DELETE CASCADE,
-  rule_id        INTEGER REFERENCES validation_rule(id) ON DELETE SET NULL,
   row_index      INTEGER NOT NULL,
   cufe_cude      TEXT,
   column_name    TEXT,
@@ -171,6 +176,67 @@ CREATE TABLE IF NOT EXISTS puc_import (
   updated     INTEGER NOT NULL DEFAULT 0,
   imported_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Perfil fiscal de la empresa (Fase 1.1 del plan de automatización).
+-- Es una LISTA de versiones fechadas, no una fila: las responsabilidades cambian
+-- (a alguien lo nombran autorretenedor en agosto) y la contabilidad de marzo no
+-- puede recalcularse con lo que la empresa es hoy. Se lee la vigente a una fecha.
+CREATE TABLE IF NOT EXISTS empresa_perfil_fiscal (
+  id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+  vigencia_desde       TEXT NOT NULL,                      -- 'AAAA-MM-DD'
+  regimen              TEXT NOT NULL DEFAULT 'ordinario',  -- 'ordinario' | 'simple'
+  responsable_iva      INTEGER NOT NULL DEFAULT 0,
+  periodicidad_iva     TEXT,                               -- 'bimestral' | 'cuatrimestral' | NULL
+  agente_retefuente    INTEGER NOT NULL DEFAULT 0,
+  agente_reteiva       INTEGER NOT NULL DEFAULT 0,
+  agente_reteica       INTEGER NOT NULL DEFAULT 0,
+  autorretenedor_renta INTEGER NOT NULL DEFAULT 0,
+  gran_contribuyente   INTEGER NOT NULL DEFAULT 0,
+  ciiu                 TEXT,
+  notas                TEXT,
+  created_at           TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(vigencia_desde)
+);
+
+-- Municipios donde la empresa declara ICA, con su tarifa. El ICA es municipal:
+-- la misma empresa retiene a tarifas distintas en municipios distintos.
+-- La tarifa va como TEXT y se lee con Decimal (D-075: nada de float en importes).
+-- Catálogo de terceros de la empresa (Fase 1.3). Vive DENTRO de la .db de cada
+-- empresa y no en un catálogo central: D-100 descartó el caché compartido porque
+-- habría necesitado una excepción escrita a D-003, y esa regla vale más que las
+-- consultas ahorradas.
+--
+-- `responsabilidades` va como JSON (lista de códigos del RUT) igual que `data_json`
+-- en excel_row: es una lista corta y variable, y una tabla aparte solo añadiría
+-- dos joins sin darnos nada que consultar por separado.
+CREATE TABLE IF NOT EXISTS tercero (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  nit               TEXT NOT NULL,
+  dv                TEXT,
+  razon_social      TEXT NOT NULL DEFAULT '',
+  tipo              TEXT,                -- 'empresa' | 'persona' | NULL
+  responsabilidades TEXT,                -- JSON: ["O-13", "O-15", ...]
+  ciiu              TEXT,
+  municipio         TEXT,
+  estado_rut        TEXT,
+  consultado_at     TEXT,                -- cuándo se leyó el RUT; distingue dato fresco de viejo
+  origen            TEXT NOT NULL DEFAULT 'excel',   -- 'excel' | 'rut' | 'manual'
+  notas             TEXT,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(nit)
+);
+
+CREATE TABLE IF NOT EXISTS empresa_municipio_ica (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  municipio      TEXT NOT NULL,
+  codigo_dane    TEXT,
+  actividad      TEXT,
+  tarifa_por_mil TEXT NOT NULL,
+  vigencia_desde TEXT NOT NULL,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(municipio, actividad, vigencia_desde)
+);
 """
 
 
@@ -179,6 +245,10 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path, isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # Sin esto, cualquier escritura que coincida con otra en curso falla al instante
+    # con "database is locked" en vez de esperar su turno. Con WAL y varias
+    # conexiones (indexado + consulta) es un choque normal, no un error.
+    conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
     return conn
 
 
@@ -202,6 +272,7 @@ def _backfill_row_periodo(conn: sqlite3.Connection) -> None:
         try:
             d = _json.loads(r["data_json"])
         except Exception:
+            log.warn("data_json ilegible en excel_row id=%s; se omite del backfill", r["id"])
             continue
         fe = d.get("Fecha Emisión")
         if isinstance(fe, str) and len(fe) >= 7:
@@ -210,8 +281,12 @@ def _backfill_row_periodo(conn: sqlite3.Connection) -> None:
         conn.executemany("UPDATE excel_row SET periodo = ? WHERE id = ?", updates)
 
 
-def _run_migrations(conn: sqlite3.Connection) -> None:
-    """Idempotent migrations for older empresa.db files."""
+def _m001_columnas_anteriores(conn: sqlite3.Connection) -> None:
+    """Migración 1 — columnas añadidas entre 0.1.0 y 0.2.1, sin versionar.
+
+    Se conserva tal cual (a base de `PRAGMA table_info` + ALTER idempotentes)
+    porque es lo que ya corrió en las BD instaladas: reescribirla cambiaría el
+    resultado para alguien. Las migraciones NUEVAS van numeradas (D-084)."""
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(empresa_info)").fetchall()}
     if "default_folder" not in cols:
         conn.execute("ALTER TABLE empresa_info ADD COLUMN default_folder TEXT")
@@ -254,14 +329,217 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         )
 
 
+def _m002_esquema_muerto(conn: sqlite3.Connection) -> None:
+    """Migración 2 — retira el esquema que describía un sistema inexistente (D-085).
+
+    - `validation_rule`: tabla completa con `severity`, `vigencia_desde/hasta` y
+      `params_json` que NADA leía ni escribía. Las reglas están en Python con dos
+      tarifas fijas. Prometía un motor de reglas con vigencias que no existe.
+    - `validation_failure.rule_id`: la clave foránea que la apuntaba.
+    - `excel_row.deleted_at`: papelera por fila que nunca se implementó (la que sí
+      funciona es la del LOTE, `excel_load.deleted_at`). Peor que inútil: si algún
+      día se filtrara por ella en `fetch_load_rows`, el `enumerate(rows)` de
+      validations dejaría de coincidir con el `row_index` de los overrides y las
+      aprobaciones manuales se aplicarían a filas equivocadas.
+
+    Solo se borra si están VACÍAS/sin usar: si alguien tuviera datos ahí, se deja
+    y se avisa, en vez de destruirlos.
+    """
+    tablas = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+
+    if "validation_rule" in tablas:
+        n = conn.execute("SELECT COUNT(*) FROM validation_rule").fetchone()[0]
+        if n:
+            log.warn("validation_rule tiene %s filas: no se borra (esquema muerto D-085)", n)
+        else:
+            # Hay que soltar primero la FK, que vive en validation_failure.
+            _rebuild_validation_failure_sin_rule_id(conn)
+            conn.execute("DROP TABLE validation_rule")
+
+    row_cols = {r["name"] for r in conn.execute("PRAGMA table_info(excel_row)").fetchall()}
+    if "deleted_at" in row_cols:
+        usados = conn.execute(
+            "SELECT COUNT(*) FROM excel_row WHERE deleted_at IS NOT NULL"
+        ).fetchone()[0]
+        if usados:
+            log.warn("excel_row.deleted_at tiene %s filas marcadas: no se borra", usados)
+        else:
+            conn.execute("ALTER TABLE excel_row DROP COLUMN deleted_at")
+
+
+def _rebuild_validation_failure_sin_rule_id(conn: sqlite3.Connection) -> None:
+    """Recrea validation_failure sin la columna `rule_id`.
+
+    SQLite no permite quitar una columna con clave foránea mediante ALTER, así que
+    toca el ciclo tabla nueva → copiar → renombrar."""
+    conn.executescript(
+        """
+        CREATE TABLE validation_failure_nueva (
+          id             INTEGER PRIMARY KEY AUTOINCREMENT,
+          run_id         INTEGER NOT NULL REFERENCES validation_run(id) ON DELETE CASCADE,
+          row_index      INTEGER NOT NULL,
+          cufe_cude      TEXT,
+          column_name    TEXT,
+          value_snapshot TEXT,
+          rule_severity  TEXT,
+          reason         TEXT NOT NULL
+        );
+        INSERT INTO validation_failure_nueva
+          (id, run_id, row_index, cufe_cude, column_name, value_snapshot, rule_severity, reason)
+          SELECT id, run_id, row_index, cufe_cude, column_name, value_snapshot, rule_severity, reason
+          FROM validation_failure;
+        DROP TABLE validation_failure;
+        ALTER TABLE validation_failure_nueva RENAME TO validation_failure;
+        CREATE INDEX IF NOT EXISTS idx_failure_run_row ON validation_failure(run_id, row_index);
+        """
+    )
+
+
+COLUMNAS_CONSULTABLES = """
+ALTER TABLE excel_row ADD COLUMN total_centavos  INTEGER;
+ALTER TABLE excel_row ADD COLUMN iva_centavos    INTEGER;
+ALTER TABLE excel_row ADD COLUMN nit_emisor      TEXT;
+ALTER TABLE excel_row ADD COLUMN fecha_emision   TEXT;
+CREATE INDEX IF NOT EXISTS idx_excel_row_nit_emisor ON excel_row(nit_emisor);
+CREATE INDEX IF NOT EXISTS idx_excel_row_fecha ON excel_row(fecha_emision);
+"""
+
+
+def _m005_terceros(conn: sqlite3.Connection) -> None:
+    """Migración 5 — catálogo de terceros por empresa (Fase 1.3).
+
+    La tabla se declara en SCHEMA_SQL con `IF NOT EXISTS`, igual que las de la
+    migración 4. La siembra desde las filas del Excel NO se hace aquí: es una
+    operación que el contador dispara y cuyo resultado quiere ver (cuántos
+    terceros aparecieron, cuántos ya estaban), no un efecto silencioso de abrir
+    la empresa. Vive en `terceros.sembrar_desde_excel`.
+    """
+    return None
+
+
+def _m004_perfil_fiscal(conn: sqlite3.Connection) -> None:
+    """Migración 4 — perfil fiscal de la empresa y sus municipios de ICA.
+
+    Las dos tablas se declaran en SCHEMA_SQL con `IF NOT EXISTS`, así que el
+    `executescript` de `ensure_schema` ya las crea tanto en una BD nueva como en
+    una que venía de la 3. Esta entrada existe porque la versión del esquema solo
+    avanza DENTRO del bucle de MIGRACIONES: sin ella, `SCHEMA_VERSION = 4` no se
+    escribiría nunca y `ensure_schema` volvería a ejecutar el esquema entero en
+    cada llamada RPC — justo la regresión que D-084 arregló.
+
+    No hay backfill: el perfil fiscal es información que solo tiene el contador.
+    Una empresa sin perfil se comporta exactamente como antes de esta migración.
+    """
+    return None
+
+
+def _m003_columnas_consultables(conn: sqlite3.Connection) -> None:
+    """Migración 3 — saca de `data_json` los campos que hay que consultar (D-091).
+
+    Toda la fila del Excel vivía como un blob JSON, así que no se podía sumar,
+    agrupar ni filtrar en SQL: cualquier total pasaba por cargar el lote entero a
+    memoria en Python. Eso bloquea cualquier reporte agregado, comparar meses o
+    prácticamente lo que un contador pida de verdad.
+
+    `data_json` sigue siendo la fuente de verdad de la fila completa (D-039: no se
+    renombran los headers de la DIAN). Estas columnas son una proyección de los
+    campos consultables, que se rellena al persistir.
+
+    Los importes van en **centavos como INTEGER**: suman exacto en SQL. Un REAL
+    reintroduciría el binario del que salimos en D-075 y un TEXT no suma.
+    """
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(excel_row)").fetchall()}
+    if "total_centavos" not in cols:
+        conn.executescript(COLUMNAS_CONSULTABLES)
+
+    # Backfill desde data_json de lo ya cargado.
+    import json as _json
+
+    from . import money as _money
+
+    updates: list[tuple] = []
+    for r in conn.execute(
+        "SELECT id, data_json FROM excel_row WHERE total_centavos IS NULL"
+    ).fetchall():
+        try:
+            d = _json.loads(r["data_json"])
+        except Exception:
+            log.warn("data_json ilegible en excel_row id=%s; sin columnas consultables", r["id"])
+            continue
+        try:
+            total = _money.a_centavos(_money.to_money(d.get("Total") or 0))
+            iva = _money.a_centavos(_money.to_money(d.get("IVA") or 0))
+        except ValueError:
+            total = iva = None
+        updates.append((total, iva, d.get("NIT Emisor"), d.get("Fecha Emisión"), r["id"]))
+
+    if updates:
+        conn.executemany(
+            "UPDATE excel_row SET total_centavos = ?, iva_centavos = ?, nit_emisor = ?,"
+            " fecha_emision = ? WHERE id = ?",
+            updates,
+        )
+        log.info("columnas consultables rellenadas en %s filas", len(updates))
+
+
+# Migraciones NUMERADAS. Cada una lleva su número y corre una sola vez, en orden.
+# Añadir una: escribir la función, ponerla aquí y subir SCHEMA_VERSION.
+MIGRACIONES: list[tuple[int, object]] = [
+    (1, _m001_columnas_anteriores),
+    (2, _m002_esquema_muerto),
+    (3, _m003_columnas_consultables),
+    (4, _m004_perfil_fiscal),
+    (5, _m005_terceros),
+]
+
+
+class EsquemaMasNuevoQueLaApp(RuntimeError):
+    """La BD la escribió una versión posterior de Contab."""
+
+
+def _leer_version(conn: sqlite3.Connection) -> int:
+    try:
+        row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
+    except sqlite3.OperationalError:
+        return 0  # BD nueva: la tabla aún no existe
+    return int(row[0]) if row and row[0] is not None else 0
+
+
 def ensure_schema(conn: sqlite3.Connection) -> None:
-    """Apply CREATE-IF-NOT-EXISTS schema + migrations. Safe on existing DBs.
-    Caller MUST NOT be inside a transaction — executescript commits."""
+    """Crea el esquema y aplica las migraciones pendientes (D-084).
+
+    Caller MUST NOT be inside a transaction — executescript commits.
+
+    Dos cosas que antes no hacía:
+
+    1. **Bloquea el downgrade.** `SCHEMA_VERSION` llevaba en 1 desde el primer día
+       pese a los cambios de 0.1.4, 0.1.6 y 0.2.0, y una versión vieja de la app
+       abría una BD nueva y escribía tan tranquila. Con auto-update activo eso pasa.
+    2. **Sale temprano si no hay nada que hacer.** Antes ejecutaba el `executescript`
+       entero (decenas de DDL y PRAGMAs) y todos los `PRAGMA table_info` en CADA
+       llamada RPC, o sea en cada clic.
+    """
+    version = _leer_version(conn)
+
+    if version > SCHEMA_VERSION:
+        raise EsquemaMasNuevoQueLaApp(
+            f"Esta empresa fue abierta con una versión más reciente de Contab "
+            f"(esquema {version}; esta versión entiende hasta {SCHEMA_VERSION}). "
+            "Actualiza Contab para abrirla. No se modificó nada."
+        )
+
+    if version == SCHEMA_VERSION:
+        return  # nada que hacer: el camino habitual
+
     conn.executescript(SCHEMA_SQL)
-    _run_migrations(conn)
-    existing = conn.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0]
-    if existing == 0:
-        conn.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
+    for numero, migracion in MIGRACIONES:
+        if numero > version:
+            migracion(conn)  # type: ignore[operator]
+            conn.execute("DELETE FROM schema_version")
+            conn.execute("INSERT INTO schema_version(version) VALUES (?)", (numero,))
+            log.info("empresa.db migrada al esquema %s", numero)
 
 
 def init_empresa_db(db_path: str | Path, nit: str, dv: str | None, razon_social: str) -> None:

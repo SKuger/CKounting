@@ -1,0 +1,145 @@
+name: Tests
+
+# Corre en cada push y cada PR sobre main/develop. Es la red de seguridad que faltaba:
+# hasta ahora los tests de Python solo corrían si alguien se acordaba localmente.
+on:
+  push:
+    branches: ['main', 'develop', 'fix/**', 'feat/**']
+  pull_request:
+    branches: ['main', 'develop']
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: Sidecar Python (apps/core)
+    runs-on: windows-latest   # el producto es Windows: los tests corren donde corre el usuario
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      # Mismo binario y mismo hash que el instalador (release-windows.yml): los tests
+      # de extracción de CUFE corren contra el pdftotext que se le entrega al usuario.
+      - name: Instalar Poppler (pdftotext)
+        shell: pwsh
+        run: |
+          $ver = '24.08.0-0'
+          $sha = '58a6f9ae269756231d2f9aa6cba39d75fec6deacaf3c4a50683383b5f3d5a527'
+          curl.exe -L -o poppler.zip "https://github.com/oschwartz10612/poppler-windows/releases/download/v$ver/Release-$ver.zip"
+          $got = (Get-FileHash poppler.zip -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $sha) { throw "Poppler $ver no coincide con el hash fijado.`nEsperado: $sha`nObtenido: $got" }
+          Expand-Archive poppler.zip -DestinationPath poppler-tmp -Force
+          $bin = (Get-ChildItem poppler-tmp -Recurse -Filter pdftotext.exe | Select-Object -First 1).Directory.FullName
+          echo $bin | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Instalar dependencias
+        working-directory: apps/core
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: ruff
+        working-directory: apps/core
+        run: python -m ruff check .
+
+      - name: pytest
+        working-directory: apps/core
+        run: python -m pytest tests/ -q
+
+  frontend:
+    name: Tests + typecheck + build (apps/desktop)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: npm ci
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Tests unitarios (vitest)
+        working-directory: apps/desktop
+        run: npm test
+
+      # vue-tsc con los tsconfig que genera Nuxt: uno para la app (Vue/DOM) y otro
+      # para el servidor (Node). Con el tsconfig genérico el código de servidor
+      # aparecía lleno de falsos "Cannot find name 'process'".
+      - name: Typecheck
+        working-directory: apps/desktop
+        run: npm run typecheck
+
+      - name: Build
+        working-directory: apps/desktop
+        run: npm run build
+
+  e2e:
+    name: Smoke end-to-end (Electron real)
+    # Windows porque es donde corre el producto, y porque el arranque del sidecar
+    # es justo lo que más se ha roto ahí (rutas del venv, #8 y D-094).
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Instalar Poppler (pdftotext)
+        shell: pwsh
+        run: |
+          $ver = '24.08.0-0'
+          $sha = '58a6f9ae269756231d2f9aa6cba39d75fec6deacaf3c4a50683383b5f3d5a527'
+          curl.exe -L -o poppler.zip "https://github.com/oschwartz10612/poppler-windows/releases/download/v$ver/Release-$ver.zip"
+          $got = (Get-FileHash poppler.zip -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $sha) { throw "Poppler $ver no coincide con el hash fijado." }
+          Expand-Archive poppler.zip -DestinationPath poppler-tmp -Force
+          $bin = (Get-ChildItem poppler-tmp -Recurse -Filter pdftotext.exe | Select-Object -First 1).Directory.FullName
+          echo $bin | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      # El smoke arranca el sidecar con el venv de apps/core, igual que en local.
+      - name: venv del core
+        shell: pwsh
+        working-directory: apps/core
+        run: |
+          python -m venv .venv
+          .venv\Scripts\python.exe -m pip install --upgrade pip
+          .venv\Scripts\python.exe -m pip install -e "."
+
+      - name: Build de Nuxt (lo que sirve el shell)
+        working-directory: apps/desktop
+        run: |
+          npm ci
+          npm run build
+
+      - name: Dependencias del shell
+        working-directory: apps/shell
+        run: npm ci
+
+      - name: Smoke
+        working-directory: apps/shell
+        run: npm run e2e
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: e2e-resultados
+          path: apps/shell/test-results/
+          if-no-files-found: ignore

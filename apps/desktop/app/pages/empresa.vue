@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowLeft, Pencil, FolderOpen, FileSpreadsheet, Trash2, Archive, Download, ChevronRight, EllipsisVertical, CalendarPlus, RotateCcw, UploadCloud, BookText } from 'lucide-vue-next'
+import { ArrowLeft, Pencil, FolderOpen, FileSpreadsheet, Trash2, Archive, Download, ChevronRight, EllipsisVertical, CalendarPlus, RotateCcw, UploadCloud, BookText, Landmark, Plus, X, Users, Search, Sparkles } from 'lucide-vue-next'
 import { Popover, PopoverContent, PopoverTrigger } from '~/components/ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '~/components/ui/select'
 
@@ -7,6 +7,17 @@ type EmpresaInfo = { db_path: string; nit: string; dv: string | null; razon_soci
 type Periodo = { periodo: string; load_count: number; row_count: number; pdfs_folder: string | null; indexed_cufe_count: number }
 type Carga = { id: number; source_name: string; loaded_at: string; total_rows: number; periodo?: string | null; deleted?: boolean }
 type BackupResult = { path: string; size_bytes: number; excels_included: number; pdfs_included: number }
+type PerfilFiscal = {
+  vigencia_desde: string; regimen: string; responsable_iva: boolean; periodicidad_iva: string | null
+  agente_retefuente: boolean; agente_reteiva: boolean; agente_reteica: boolean
+  autorretenedor_renta: boolean; gran_contribuyente: boolean; ciiu: string | null; notas: string | null
+}
+type Tercero = {
+  nit: string; dv: string | null; razon_social: string; tipo: string | null
+  responsabilidades: string[]; ciiu: string | null; municipio: string | null
+  estado_rut: string | null; consultado_at: string | null; origen: string; notas: string | null
+}
+type MunicipioIca = { id: number; municipio: string; codigo_dane: string | null; actividad: string | null; tarifa_por_mil: string; vigencia_desde: string }
 
 const route = useRoute()
 const dbPath = computed(() => (route.query.db as string) || '')
@@ -51,6 +62,45 @@ const moveTarget = ref<Carga | null>(null)
 const moveDestino = ref('')
 const showTrash = ref(false)
 
+// ── perfil fiscal ──
+function hoyISO(): string { return new Date().toISOString().slice(0, 10) }
+const perfil = ref<PerfilFiscal | null>(null)
+const perfiles = ref<PerfilFiscal[]>([])
+const municipiosIca = ref<MunicipioIca[]>([])
+const perfilOpen = ref(false)
+const savingPerfil = ref(false)
+const perfilHistorial = ref(false)
+const icaOpen = ref(false)
+const savingIca = ref(false)
+const perfilDraft = reactive({
+  vigencia_desde: hoyISO(), regimen: 'ordinario', responsable_iva: false,
+  periodicidad_iva: 'bimestral', agente_retefuente: false, agente_reteiva: false,
+  agente_reteica: false, autorretenedor_renta: false, gran_contribuyente: false,
+  ciiu: '', notas: '',
+})
+const icaDraft = reactive({ municipio: '', codigo_dane: '', actividad: '', tarifa_por_mil: '', vigencia_desde: hoyISO() })
+// ── terceros ──
+const terceros = ref<Tercero[]>([])
+const tercerosCounts = ref({ total: 0, con_rut: 0, sin_rut: 0 })
+const tercerosBuscar = ref('')
+const tercerosAbierto = ref(false)
+const sembrando = ref(false)
+const consultandoNit = ref<string | null>(null)
+const terceroOpen = ref(false)
+const savingTercero = ref(false)
+const terceroDraft = reactive({ nit: '', razon_social: '', ciiu: '', municipio: '', responsabilidades: '', notas: '' })
+
+const BANDERAS_PERFIL = [
+  { key: 'agente_retefuente', label: 'Agente de retefuente' },
+  { key: 'agente_reteiva', label: 'Agente de ReteIVA' },
+  { key: 'agente_reteica', label: 'Agente de ReteICA' },
+  { key: 'autorretenedor_renta', label: 'Autorretenedor de renta' },
+  { key: 'gran_contribuyente', label: 'Gran contribuyente' },
+] as const
+const banderasActivas = computed(() =>
+  perfil.value ? BANDERAS_PERFIL.filter((b) => perfil.value?.[b.key]) : [],
+)
+
 const activeLoadsByPeriodo = computed(() => {
   const m = new Map<string, Carga[]>()
   for (const l of loads.value) {
@@ -81,7 +131,7 @@ async function refresh() {
   loading.value = true
   try {
     info.value = await rpc<EmpresaInfo>('open_empresa', { db_path: dbPath.value })
-    await Promise.all([reloadPeriodos(), reloadLoads()])
+    await Promise.all([reloadPeriodos(), reloadLoads(), reloadPerfil(), reloadTerceros()])
   } catch (exc) {
     toast.error('No se pudo abrir la empresa', humanError(exc))
   } finally {
@@ -93,6 +143,154 @@ async function reloadPeriodos() {
 }
 async function reloadLoads() {
   loads.value = await rpc<Carga[]>('list_loads', { db_path: dbPath.value, include_deleted: true })
+}
+
+// ── perfil fiscal ──
+// Lo que la empresa es ante la DIAN decide cada retención de la causación. Va
+// fechado: si en agosto la nombran autorretenedora, marzo se sigue calculando
+// con lo que era en marzo.
+async function reloadPerfil() {
+  const r = await rpc<{ perfil: PerfilFiscal | null; perfiles: PerfilFiscal[]; municipios_ica: MunicipioIca[] }>(
+    'get_perfil_fiscal', { db_path: dbPath.value },
+  )
+  perfil.value = r.perfil
+  perfiles.value = r.perfiles
+  municipiosIca.value = r.municipios_ica
+}
+
+function openPerfil(base?: PerfilFiscal) {
+  const src = base ?? perfil.value
+  Object.assign(perfilDraft, {
+    vigencia_desde: base?.vigencia_desde ?? hoyISO(),
+    regimen: src?.regimen ?? 'ordinario',
+    responsable_iva: src?.responsable_iva ?? false,
+    periodicidad_iva: src?.periodicidad_iva ?? 'bimestral',
+    agente_retefuente: src?.agente_retefuente ?? false,
+    agente_reteiva: src?.agente_reteiva ?? false,
+    agente_reteica: src?.agente_reteica ?? false,
+    autorretenedor_renta: src?.autorretenedor_renta ?? false,
+    gran_contribuyente: src?.gran_contribuyente ?? false,
+    ciiu: src?.ciiu ?? '',
+    notas: src?.notas ?? '',
+  })
+  perfilOpen.value = true
+}
+
+async function savePerfil() {
+  savingPerfil.value = true
+  try {
+    await rpc('save_perfil_fiscal', { db_path: dbPath.value, perfil: { ...perfilDraft } })
+    await reloadPerfil()
+    perfilOpen.value = false
+    toast.success('Perfil fiscal guardado', `Vigente desde ${perfilDraft.vigencia_desde}`)
+  } catch (exc) {
+    toast.error('No se pudo guardar el perfil fiscal', humanError(exc))
+  } finally {
+    savingPerfil.value = false
+  }
+}
+
+async function deletePerfilVersion(vigencia: string) {
+  try {
+    await rpc('delete_perfil_fiscal', { db_path: dbPath.value, vigencia_desde: vigencia })
+    await reloadPerfil()
+  } catch (exc) {
+    toast.error('No se pudo borrar esa versión', humanError(exc))
+  }
+}
+
+async function saveMunicipio() {
+  savingIca.value = true
+  try {
+    await rpc('save_municipio_ica', { db_path: dbPath.value, municipio: { ...icaDraft } })
+    await reloadPerfil()
+    icaOpen.value = false
+    Object.assign(icaDraft, { municipio: '', codigo_dane: '', actividad: '', tarifa_por_mil: '', vigencia_desde: hoyISO() })
+  } catch (exc) {
+    toast.error('No se pudo guardar el municipio', humanError(exc))
+  } finally {
+    savingIca.value = false
+  }
+}
+
+// ── terceros ──
+// El tercero es la contraparte: el proveedor en una compra, el cliente en una
+// venta. Hasta ahora existían solo implícitos, repetidos en cada fila del Excel.
+async function reloadTerceros() {
+  const r = await rpc<{ terceros: Tercero[]; counts: { total: number; con_rut: number; sin_rut: number } }>(
+    'terceros_list', { db_path: dbPath.value, buscar: tercerosBuscar.value || undefined },
+  )
+  terceros.value = r.terceros
+  tercerosCounts.value = r.counts
+}
+
+async function sembrarTerceros() {
+  sembrando.value = true
+  try {
+    const r = await rpc<{ encontrados: number; nuevos: number; completados: number }>(
+      'terceros_sembrar', { db_path: dbPath.value },
+    )
+    await reloadTerceros()
+    tercerosAbierto.value = true
+    toast.success(
+      `${r.nuevos} terceros nuevos`,
+      `${r.encontrados} encontrados en el Excel · ${r.completados} completados`,
+    )
+  } catch (exc) {
+    toast.error('No se pudo derivar el catálogo', humanError(exc))
+  } finally {
+    sembrando.value = false
+  }
+}
+
+async function consultarRut(t: Tercero) {
+  consultandoNit.value = t.nit
+  try {
+    const r = await rpc<{ consulta: { found: boolean; razon_social: string } }>(
+      'tercero_consultar_rut', { db_path: dbPath.value, nit: t.nit, dv: t.dv },
+    )
+    await reloadTerceros()
+    if (r.consulta.found) toast.success('RUT consultado', r.consulta.razon_social)
+    else toast.error('Sin resultado en la DIAN', `El NIT ${t.nit} no devolvió datos`)
+  } catch (exc) {
+    toast.error('No se pudo consultar el RUT', humanError(exc))
+  } finally {
+    consultandoNit.value = null
+  }
+}
+
+function openTercero(t?: Tercero) {
+  Object.assign(terceroDraft, {
+    nit: t?.nit ?? '',
+    razon_social: t?.razon_social ?? '',
+    ciiu: t?.ciiu ?? '',
+    municipio: t?.municipio ?? '',
+    responsabilidades: (t?.responsabilidades ?? []).join(', '),
+    notas: t?.notas ?? '',
+  })
+  terceroOpen.value = true
+}
+
+async function saveTercero() {
+  savingTercero.value = true
+  try {
+    await rpc('tercero_save', { db_path: dbPath.value, tercero: { ...terceroDraft } })
+    await reloadTerceros()
+    terceroOpen.value = false
+  } catch (exc) {
+    toast.error('No se pudo guardar el tercero', humanError(exc))
+  } finally {
+    savingTercero.value = false
+  }
+}
+
+async function deleteMunicipio(id: number) {
+  try {
+    await rpc('delete_municipio_ica', { db_path: dbPath.value, municipio_id: id })
+    await reloadPerfil()
+  } catch (exc) {
+    toast.error('No se pudo quitar el municipio', humanError(exc))
+  }
 }
 
 // ── meses ──
@@ -250,8 +448,13 @@ async function confirmDelete() {
   if (!info.value || deleteConfirmNit.value.trim() !== info.value.nit) return
   deleting.value = true
   try {
-    await rpc('delete_empresa', { db_path: dbPath.value, confirm_nit: deleteConfirmNit.value.trim() })
-    toast.success('Empresa eliminada permanentemente')
+    const res = await rpc<{ dias_retencion: number }>('delete_empresa', {
+      db_path: dbPath.value, confirm_nit: deleteConfirmNit.value.trim(),
+    })
+    toast.success(
+      'Empresa eliminada',
+      `Se conserva en la papelera ${res.dias_retencion} días por si hace falta recuperarla.`,
+    )
     await navigateTo('/')
   } catch (exc) {
     toast.error('No se pudo eliminar', humanError(exc))
@@ -387,6 +590,313 @@ watch(dbPath, refresh)
       </CardContent>
     </Card>
 
+    <!-- Perfil fiscal — qué es la empresa ante la DIAN (Fase 1.1) -->
+    <Card v-if="info">
+      <CardHeader>
+        <CardTitle class="flex items-center gap-2"><Landmark class="size-4 text-muted-foreground" /> Perfil fiscal</CardTitle>
+        <CardDescription>
+          Qué es esta empresa ante la DIAN: régimen, responsabilidades y municipios de ICA.
+          De aquí salen las retenciones al causar, así que cada dato vale <strong>desde una fecha</strong>:
+          si en agosto la nombran autorretenedora, marzo se sigue calculando con lo que era en marzo.
+        </CardDescription>
+        <CardAction>
+          <Button size="sm" :variant="perfil ? 'outline' : 'default'" @click="openPerfil()">
+            <Pencil v-if="perfil" class="size-3.5" /><Plus v-else class="size-4" />
+            {{ perfil ? 'Actualizar' : 'Configurar' }}
+          </Button>
+        </CardAction>
+      </CardHeader>
+      <CardContent class="space-y-4">
+        <p v-if="!perfil" class="text-sm text-muted-foreground">
+          Sin configurar. Mientras no esté, no se puede calcular ninguna retención —
+          y calcularla sobre un supuesto sería peor que no calcularla.
+        </p>
+
+        <template v-else>
+          <div class="grid gap-3 sm:grid-cols-3">
+            <div>
+              <div class="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">Régimen</div>
+              <div class="text-sm capitalize">{{ perfil.regimen }}</div>
+            </div>
+            <div>
+              <div class="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">IVA</div>
+              <div class="text-sm">
+                <template v-if="perfil.responsable_iva">Responsable · {{ perfil.periodicidad_iva }}</template>
+                <template v-else>No responsable</template>
+              </div>
+            </div>
+            <div>
+              <div class="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">CIIU</div>
+              <div class="text-sm">{{ perfil.ciiu || '—' }}</div>
+            </div>
+          </div>
+
+          <div class="flex flex-wrap gap-1.5">
+            <Badge v-for="b in banderasActivas" :key="b.key" variant="secondary">{{ b.label }}</Badge>
+            <span v-if="!banderasActivas.length" class="text-sm text-muted-foreground">Sin responsabilidades de retención marcadas.</span>
+          </div>
+
+          <p class="font-mono text-[11px] text-muted-foreground">Vigente desde {{ perfil.vigencia_desde }}</p>
+          <p v-if="perfil.notas" class="text-sm text-muted-foreground">{{ perfil.notas }}</p>
+        </template>
+
+        <Separator />
+
+        <!-- Municipios de ICA -->
+        <div>
+          <div class="mb-2 flex items-center justify-between">
+            <div class="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">Municipios de ICA</div>
+            <Button variant="ghost" size="sm" @click="icaOpen = true"><Plus class="size-3.5" /> Agregar</Button>
+          </div>
+          <p v-if="!municipiosIca.length" class="text-sm text-muted-foreground">
+            Ninguno. El ICA es municipal: la misma empresa retiene a tarifas distintas en municipios distintos.
+          </p>
+          <div v-for="m in municipiosIca" :key="m.id" class="flex items-center gap-2 py-1">
+            <span class="min-w-0 flex-1 truncate text-sm">
+              {{ m.municipio }}
+              <span v-if="m.actividad" class="text-muted-foreground">· {{ m.actividad }}</span>
+              <span class="font-mono text-muted-foreground"> · {{ m.tarifa_por_mil }} por mil · desde {{ m.vigencia_desde }}</span>
+            </span>
+            <Button variant="ghost" size="sm" @click="deleteMunicipio(m.id)"><X class="size-3.5" /></Button>
+          </div>
+        </div>
+
+        <!-- Historial de versiones -->
+        <div v-if="perfiles.length > 1">
+          <Button variant="ghost" size="sm" @click="perfilHistorial = !perfilHistorial">
+            {{ perfilHistorial ? 'Ocultar' : 'Ver' }} historial ({{ perfiles.length }} versiones)
+          </Button>
+          <div v-if="perfilHistorial" class="mt-1 border-t border-border pt-2">
+            <div v-for="v in perfiles" :key="v.vigencia_desde" class="flex items-center gap-2 py-1">
+              <span class="min-w-0 flex-1 truncate text-sm text-muted-foreground">
+                <span class="font-mono">{{ v.vigencia_desde }}</span> · {{ v.regimen }}
+                <span v-if="v.responsable_iva">· IVA {{ v.periodicidad_iva }}</span>
+              </span>
+              <Button variant="ghost" size="sm" @click="openPerfil(v)"><Pencil class="size-3.5" /></Button>
+              <Button variant="ghost" size="sm" @click="deletePerfilVersion(v.vigencia_desde)"><Trash2 class="size-3.5" /></Button>
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+
+    <!-- Editar el perfil fiscal -->
+    <Dialog :open="perfilOpen" @update:open="perfilOpen = $event">
+      <DialogContent class="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Perfil fiscal</DialogTitle>
+          <DialogDescription>
+            Guardar con una fecha nueva crea otra versión y deja intacta la anterior;
+            guardar con una fecha que ya existe actualiza esa versión.
+          </DialogDescription>
+        </DialogHeader>
+        <div class="grid gap-4 py-2">
+          <div class="grid gap-2 sm:grid-cols-2">
+            <div class="grid gap-1.5">
+              <Label>Vigente desde</Label>
+              <Input v-model="perfilDraft.vigencia_desde" type="date" />
+            </div>
+            <div class="grid gap-1.5">
+              <Label>Régimen</Label>
+              <Select v-model="perfilDraft.regimen">
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ordinario">Ordinario</SelectItem>
+                  <SelectItem value="simple">SIMPLE</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <Checkbox id="resp-iva" v-model="perfilDraft.responsable_iva" />
+            <Label for="resp-iva">Responsable de IVA</Label>
+          </div>
+          <div v-if="perfilDraft.responsable_iva" class="grid gap-1.5">
+            <Label>Periodicidad de IVA</Label>
+            <Select v-model="perfilDraft.periodicidad_iva">
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="bimestral">Bimestral</SelectItem>
+                <SelectItem value="cuatrimestral">Cuatrimestral</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div class="grid gap-2">
+            <div v-for="b in BANDERAS_PERFIL" :key="b.key" class="flex items-center gap-2">
+              <Checkbox :id="b.key" v-model="perfilDraft[b.key]" />
+              <Label :for="b.key">{{ b.label }}</Label>
+            </div>
+          </div>
+
+          <div class="grid gap-2 sm:grid-cols-2">
+            <div class="grid gap-1.5">
+              <Label>Actividad CIIU</Label>
+              <Input v-model="perfilDraft.ciiu" placeholder="6201" maxlength="4" />
+            </div>
+            <div class="grid gap-1.5">
+              <Label>Notas</Label>
+              <Input v-model="perfilDraft.notas" placeholder="Opcional" />
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" :disabled="savingPerfil" @click="perfilOpen = false">Cancelar</Button>
+          <Button :disabled="savingPerfil" @click="savePerfil">Guardar</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <!-- Agregar municipio de ICA -->
+    <Dialog :open="icaOpen" @update:open="icaOpen = $event">
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Municipio de ICA</DialogTitle>
+          <DialogDescription>La tarifa va por mil y también tiene fecha de vigencia.</DialogDescription>
+        </DialogHeader>
+        <div class="grid gap-3 py-2">
+          <div class="grid gap-1.5">
+            <Label>Municipio</Label>
+            <Input v-model="icaDraft.municipio" placeholder="Medellín" />
+          </div>
+          <div class="grid gap-2 sm:grid-cols-2">
+            <div class="grid gap-1.5">
+              <Label>Código DANE</Label>
+              <Input v-model="icaDraft.codigo_dane" placeholder="05001" maxlength="5" />
+            </div>
+            <div class="grid gap-1.5">
+              <Label>Tarifa por mil</Label>
+              <Input v-model="icaDraft.tarifa_por_mil" placeholder="6,9" />
+            </div>
+          </div>
+          <div class="grid gap-2 sm:grid-cols-2">
+            <div class="grid gap-1.5">
+              <Label>Actividad</Label>
+              <Input v-model="icaDraft.actividad" placeholder="Opcional" />
+            </div>
+            <div class="grid gap-1.5">
+              <Label>Vigente desde</Label>
+              <Input v-model="icaDraft.vigencia_desde" type="date" />
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" :disabled="savingIca" @click="icaOpen = false">Cancelar</Button>
+          <Button :disabled="savingIca" @click="saveMunicipio">Guardar</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <!-- Terceros — la contraparte de cada fila (Fase 1.3) -->
+    <Card v-if="info">
+      <CardHeader>
+        <CardTitle class="flex items-center gap-2"><Users class="size-4 text-muted-foreground" /> Terceros</CardTitle>
+        <CardDescription>
+          Proveedores y clientes de esta empresa. Se derivan del Excel de la DIAN —el emisor en una
+          compra, el receptor en una venta— y de ahí colgarán las reglas de causación y las
+          retenciones, que dependen de lo que cada tercero sea ante la DIAN.
+        </CardDescription>
+        <CardAction>
+          <Button size="sm" variant="outline" :disabled="sembrando" @click="sembrarTerceros">
+            <Sparkles class="size-3.5" /> Derivar del Excel
+          </Button>
+        </CardAction>
+      </CardHeader>
+      <CardContent class="space-y-3">
+        <div class="flex flex-wrap items-center gap-x-6 gap-y-1">
+          <span class="font-mono text-sm tabular-nums text-foreground">{{ tercerosCounts.total }} terceros</span>
+          <span class="font-mono text-sm tabular-nums text-muted-foreground">{{ tercerosCounts.con_rut }} con RUT consultado</span>
+          <span v-if="tercerosCounts.sin_rut" class="font-mono text-sm tabular-nums text-muted-foreground">{{ tercerosCounts.sin_rut }} sin consultar</span>
+          <Button variant="ghost" size="sm" class="ml-auto" @click="tercerosAbierto = !tercerosAbierto">
+            {{ tercerosAbierto ? 'Ocultar' : 'Ver' }} listado
+          </Button>
+        </div>
+
+        <p v-if="!tercerosCounts.total" class="text-sm text-muted-foreground">
+          El catálogo está vacío. <strong>Derivar del Excel</strong> lo llena con las contrapartes de
+          las filas ya importadas; no duplica nada si lo corres dos veces.
+        </p>
+
+        <template v-if="tercerosAbierto">
+          <div class="flex items-center gap-2">
+            <Search class="size-4 shrink-0 text-muted-foreground" />
+            <Input v-model="tercerosBuscar" placeholder="Buscar por NIT o razón social" class="h-9 max-w-sm" @keyup.enter="reloadTerceros" />
+            <Button variant="ghost" size="sm" @click="reloadTerceros">Buscar</Button>
+            <Button variant="ghost" size="sm" class="ml-auto" @click="openTercero()"><Plus class="size-3.5" /> Agregar</Button>
+          </div>
+
+          <div class="max-h-96 overflow-y-auto rounded-md border border-border">
+            <div v-for="t in terceros" :key="t.nit" class="flex items-center gap-3 border-b border-border px-3 py-2 last:border-b-0">
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-sm text-foreground">{{ t.razon_social || '(sin razón social)' }}</p>
+                <p class="font-mono text-[11px] text-muted-foreground">
+                  {{ t.nit }}<template v-if="t.dv">-{{ t.dv }}</template>
+                  <template v-if="t.ciiu"> · CIIU {{ t.ciiu }}</template>
+                  <template v-if="t.municipio"> · {{ t.municipio }}</template>
+                </p>
+              </div>
+              <Badge v-for="r in t.responsabilidades" :key="r" variant="secondary" class="font-mono text-[10px]">{{ r }}</Badge>
+              <Badge v-if="t.consultado_at" variant="outline" class="font-mono text-[10px]">RUT</Badge>
+              <Button variant="ghost" size="sm" :disabled="consultandoNit === t.nit" @click="consultarRut(t)">
+                {{ consultandoNit === t.nit ? 'Consultando…' : 'Consultar RUT' }}
+              </Button>
+              <Button variant="ghost" size="sm" @click="openTercero(t)"><Pencil class="size-3.5" /></Button>
+            </div>
+            <p v-if="!terceros.length" class="px-3 py-4 text-sm text-muted-foreground">Ningún tercero coincide.</p>
+          </div>
+
+          <p class="text-xs text-muted-foreground">
+            <strong>Consultar RUT</strong> trae hoy la razón social y el tipo desde la DIAN. Las
+            responsabilidades, el CIIU y el municipio se escriben a mano hasta que una sesión contra
+            el portal real confirme de dónde leerlos: no se diseña contra una página que nadie ha visto.
+          </p>
+        </template>
+      </CardContent>
+    </Card>
+
+    <!-- Editar un tercero -->
+    <Dialog :open="terceroOpen" @update:open="terceroOpen = $event">
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Tercero</DialogTitle>
+          <DialogDescription>El NIT identifica al tercero; guardar con uno que ya existe lo actualiza.</DialogDescription>
+        </DialogHeader>
+        <div class="grid gap-3 py-2">
+          <div class="grid gap-1.5">
+            <Label>NIT</Label>
+            <Input v-model="terceroDraft.nit" placeholder="830008686" />
+          </div>
+          <div class="grid gap-1.5">
+            <Label>Razón social</Label>
+            <Input v-model="terceroDraft.razon_social" />
+          </div>
+          <div class="grid gap-2 sm:grid-cols-2">
+            <div class="grid gap-1.5">
+              <Label>Actividad CIIU</Label>
+              <Input v-model="terceroDraft.ciiu" placeholder="4711" maxlength="4" />
+            </div>
+            <div class="grid gap-1.5">
+              <Label>Municipio</Label>
+              <Input v-model="terceroDraft.municipio" placeholder="Medellín" />
+            </div>
+          </div>
+          <div class="grid gap-1.5">
+            <Label>Responsabilidades</Label>
+            <Input v-model="terceroDraft.responsabilidades" placeholder="O-13, O-15, O-23" />
+          </div>
+          <div class="grid gap-1.5">
+            <Label>Notas</Label>
+            <Input v-model="terceroDraft.notas" placeholder="Opcional" />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" :disabled="savingTercero" @click="terceroOpen = false">Cancelar</Button>
+          <Button :disabled="savingTercero" @click="saveTercero">Guardar</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
     <!-- Plan de Cuentas (PUC) — a nivel empresa -->
     <Card v-if="info">
       <CardHeader>
@@ -488,11 +998,13 @@ watch(dbPath, refresh)
       <DialogContent class="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Eliminar empresa</DialogTitle>
-          <DialogDescription>Confirma la eliminación permanente de esta empresa.</DialogDescription>
+          <DialogDescription>La empresa sale del listado y se guarda en la papelera.</DialogDescription>
         </DialogHeader>
         <div class="flex flex-col gap-3">
-          <div class="rounded-md border border-status-error/30 bg-status-error-bg px-3 py-2 text-sm text-status-error">
-            Esta acción es <strong>irreversible</strong>. Si quieres conservar la información, archiva la empresa o haz backup primero.
+          <!-- D-078: ya NO es irreversible. Decir que lo es era mentir al usuario. -->
+          <div class="rounded-md border border-status-warning/30 bg-status-warning-bg px-3 py-2 text-sm text-status-warning">
+            La empresa se guarda en la <strong>papelera durante 30 días</strong> y después se borra
+            definitivamente. Si quieres conservarla más tiempo, archívala o haz un backup.
           </div>
           <div class="flex flex-col gap-1.5">
             <Label for="del-nit">Escribe el NIT <strong class="text-foreground">{{ info?.nit }}</strong> para confirmar:</Label>
@@ -501,7 +1013,7 @@ watch(dbPath, refresh)
         </div>
         <DialogFooter>
           <Button variant="secondary" @click="deleteModalOpen = false">Cancelar</Button>
-          <Button variant="destructive" :disabled="deleting || deleteConfirmNit.trim() !== info?.nit" @click="confirmDelete">{{ deleting ? 'Eliminando…' : 'Eliminar permanentemente' }}</Button>
+          <Button variant="destructive" :disabled="deleting || deleteConfirmNit.trim() !== info?.nit" @click="confirmDelete">{{ deleting ? 'Eliminando…' : 'Enviar a la papelera' }}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

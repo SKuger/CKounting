@@ -75,8 +75,8 @@ function rewriteDownload(url: string): string {
 }
 
 function pickFile(files: FileList | null) {
-  if (!files || !files.length) return
-  const f = files[0]
+  const f = files?.[0]
+  if (!f) return
   if (!f.name.toLowerCase().endsWith('.xlsx')) {
     appendLog('error', 'Solo se permiten archivos Excel (.xlsx).')
     return

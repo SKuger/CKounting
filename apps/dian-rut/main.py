@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 import httpx
 from processor import process_excel
 from dian_paths import UPLOADS_DIR, RESULTS_DIR, STATIC_DIR
+from citas import vigia
 
 app = FastAPI(title="DIAN RUT Automator")
 
@@ -76,6 +77,12 @@ async def download_current_file(file_id: str):
         )
     return JSONResponse(status_code=404, content={"error": "Archivo no encontrado o aún no se ha generado la primera versión."})
 
+@app.get("/health")
+async def health():
+    # Chequeo de vida para el shell. No usar /browser-mode-status para esto: sondea :9222, y en
+    # Windows una conexión rechazada tarda ~2 s, más que el timeout del chequeo.
+    return {"ok": True}
+
 @app.get("/browser-mode-status")
 async def get_browser_mode_status():
     try:
@@ -97,3 +104,26 @@ async def download_file(filename: str):
             media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
     return JSONResponse(status_code=404, content={"error": "File not found"})
+
+
+# ─── Vigía de citas DIAN (D-104) ───────────────────────────────────────────────────────────────
+
+@app.get("/citas/status")
+async def citas_status():
+    return vigia.snapshot()
+
+@app.post("/citas/start")
+async def citas_start():
+    return {"started": vigia.iniciar(), **vigia.snapshot()}
+
+@app.post("/citas/stop")
+async def citas_stop():
+    vigia.detener()
+    return vigia.snapshot()
+
+@app.get("/citas/captura")
+async def citas_captura():
+    ruta = vigia.ruta_captura()
+    if not ruta:
+        return JSONResponse(status_code=404, content={"error": "Todavía no hay captura."})
+    return FileResponse(path=str(ruta), media_type="image/png")

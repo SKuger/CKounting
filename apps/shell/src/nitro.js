@@ -40,7 +40,7 @@ async function waitForServer(port, timeoutMs = 30000) {
   throw new Error(`El servidor no respondió en ${timeoutMs / 1000}s (puerto ${port}).`)
 }
 
-async function startNitro() {
+async function startNitro(tokenLocal) {
   const p = paths.compute()
   if (!fs.existsSync(p.serverEntry)) {
     throw new Error(`No se encontró el servidor en ${p.serverEntry}. ¿Falta 'nuxt build'?`)
@@ -49,6 +49,11 @@ async function startNitro() {
   fs.mkdirSync(p.dianWorkdir, { recursive: true })
 
   const port = await findFreePort()
+  // D-089: el sidecar DIAN también en un puerto aleatorio. Estaba fijo en 8756,
+  // o sea adivinable por cualquier proceso local, y el servicio no pide
+  // credencial. Un puerto aleatorio por arranque no es autenticación, pero sube
+  // bastante el listón frente a un barrido de puertos conocidos.
+  const dianPort = await findFreePort()
   const env = {
     ...process.env,
     ELECTRON_RUN_AS_NODE: '1',
@@ -57,14 +62,18 @@ async function startNitro() {
     PORT: String(port),
     NITRO_PORT: String(port),
     CONTAB_VERSION: require('electron').app.getVersion(),
+    // D-089: su presencia ACTIVA la autenticación de la API. En `npm run dev` no
+    // se define, así que el modo desarrollo sigue funcionando sin credencial.
+    CONTAB_TOKEN: tokenLocal,
     DIAN_WORKDIR: p.dianWorkdir,
+    DIAN_PORT: String(dianPort),
     PLAYWRIGHT_BROWSERS_PATH: p.playwrightBrowsers,
   }
   if (p.coreSidecarBin) env.CONTAB_SIDECAR_BIN = p.coreSidecarBin
   if (p.dianSidecarBin) env.DIAN_SIDECAR_BIN = p.dianSidecarBin
   if (p.pdftotext) env.CONTAB_PDFTOTEXT = p.pdftotext
 
-  log.info('[nitro] starting', p.serverEntry, 'port', port, 'coreBin', p.coreSidecarBin || '(dev python)')
+  log.info('[nitro] starting', p.serverEntry, 'port', port, 'dianPort', dianPort, 'coreBin', p.coreSidecarBin || '(dev python)')
   const proc = spawn(process.execPath, [p.serverEntry], {
     cwd: p.serverRoot,
     env,

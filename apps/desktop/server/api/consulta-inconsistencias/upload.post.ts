@@ -5,38 +5,26 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { resolve as joinPath } from 'node:path'
 import { tmpdir } from 'node:os'
 import { callSidecar } from '../../utils/sidecar'
+import { safeFilename, uniquePrefix, checkUploadSize } from '../../utils/uploads'
 
-function safeFilename(name: string | undefined): string {
-  if (!name) return 'inconsistencias.xlsx'
-  return name.replace(/[\\/:*?"<>|]/g, '_')
-}
-
-function stamp(): string {
-  const d = new Date()
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
-}
-
+// Contrato único de la API (ver rpc.post.ts): SIEMPRE 200 con {ok:true|false}.
 export default defineEventHandler(async (event) => {
   const parts = await readMultipartFormData(event)
-  if (!parts) {
-    setResponseStatus(event, 400)
-    return { ok: false, error: 'no form data' }
-  }
+  if (!parts) return { ok: false, error: 'No llegaron datos del formulario.' }
   const filePart = parts.find((p) => p.name === 'file')
-  if (!filePart?.data) {
-    setResponseStatus(event, 400)
-    return { ok: false, error: 'Falta el archivo.' }
-  }
-  const name = safeFilename(filePart.filename)
+  if (!filePart?.data) return { ok: false, error: 'Falta el archivo.' }
+
+  const tooBig = checkUploadSize(filePart.data.length)
+  if (tooBig) return { ok: false, error: tooBig }
+
+  const name = safeFilename(filePart.filename, 'inconsistencias.xlsx')
   if (!name.toLowerCase().endsWith('.xlsx')) {
-    setResponseStatus(event, 400)
     return { ok: false, error: 'Solo se permiten archivos Excel (.xlsx).' }
   }
 
   const dir = joinPath(tmpdir(), 'contab-inconsistencias')
   await mkdir(dir, { recursive: true })
-  const path = joinPath(dir, `${stamp()}-${name}`)
+  const path = joinPath(dir, `${uniquePrefix()}-${name}`)
   await writeFile(path, filePart.data)
 
   try {
@@ -46,7 +34,7 @@ export default defineEventHandler(async (event) => {
     )
     return { ok: true, path, ...parsed }
   } catch (err) {
-    setResponseStatus(event, 500)
-    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    const msg = (err instanceof Error ? err.message : String(err)).replace(/^Error:\s*/, '')
+    return { ok: false, error: msg }
   }
 })
