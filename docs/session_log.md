@@ -461,3 +461,11 @@ Probado contra el portal real: detecta "sin cupo" (captura verificada).
   (→ `/health`).
 - En este equipo los toasts de Windows están apagados (`ToastEnabled=0`): por eso el aviso principal es
   una ventana `MessageBoxW` siempre encima.
+
+- **Tarde**: release **0.3.0** publicado (PR #6 → main → tag; el CI lo deja en borrador y se publicó a mano).
+  Con el portal activo (Cali, Bogotá…) y el manual del usuario: cola de personas en `contab.db`, flujo hasta la
+  pantalla de datos (fecha más cercana, primera hora, cédula si hay autorización), filtro del trámite general,
+  corrección del falso CAPTCHA (reCAPTCHA invisible siempre presente) y modo estudio.
+- Aprendido: el servidor de desarrollo usa el mismo `%APPDATA%\Contab` que la app instalada y migró las BD
+  reales al esquema 5. Para probar sin tocar datos reales: `contab-dev-aislado` en `.claude/launch.json`
+  (APPDATA temporal + `DIAN_PORT=8757`).

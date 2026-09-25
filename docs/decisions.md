@@ -1008,6 +1008,29 @@ Arreglos previos que salieron al integrarlo:
   rechazada tarda ~2 s, más que el timeout de 1,2 s, así que el servicio nunca se daba por vivo. Nuevo
   `/health`, y 90 s de margen para el arranque en frío.
 
+
+**Ampliación del 2026-09-25 (tarde), con el portal activo y el manual del usuario:**
+
+- **Cola de personas** en `contab.db` (tabla `cita_persona`, módulo `apps/core/contab_core/cita_personas.py`,
+  RPCs `citas_list` / `citas_save_persona` / `citas_delete_persona` / `citas_set_estado`). El contador carga
+  cédula (obligatoria) + nombre, correo y celular; el bot toma la primera `pendiente`, la lleva hasta donde sabe
+  y la deja `en_curso` con el detalle (trámite · día · hora). Cuando el contador la marca `agendada` (o la
+  devuelve a `pendiente`) en Contab, el bot sigue solo con la siguiente. El sidecar DIAN lee/escribe esa tabla
+  directamente (`CONTAB_PROGRAM_DB`, que pasa Nuxt); el esquema es del núcleo.
+- **Tratamiento de datos, por persona**: solo si la casilla "esta persona autorizó…" está marcada, el bot elige
+  cédula de ciudadanía, llena el número y acepta el tratamiento. Sin ella, se detiene en esa pantalla.
+- **Flujo completo conocido**: trámite → Siguiente → fecha más cercana → primera hora → Siguiente → datos.
+  El calendario no es una `<table>`: se buscan los días por el contenedor con la fila DO LU MA MI JU VI SA.
+- **Trámite válido = el general**: `Medellín "Solicitud de devolución y/o compensación persona natural"`. Hay
+  variantes "Vehículos eléctricos o Híbridos persona natural" y "gran contribuyente" que no sirven aunque digan
+  Medellín o persona natural.
+- **Falso CAPTCHA**: el portal carga SIEMPRE un reCAPTCHA invisible (iframe `anchor` con `scale(0)`). La 0.3.0
+  lo tomaba por un CAPTCHA y se detenía al ver trámites de otra ciudad (pasó con Cali). Ahora solo cuenta la
+  ventana del desafío (`bframe`) visible.
+- **Modo estudio**: la primera vez que aparece un trámite de otra ciudad, el bot lo sigue hasta la pantalla de
+  datos (sin llenarla) y guarda capturas `estudio_*`, para conocer las pantallas sin esperar a Medellín. Una
+  sola vez: con la captura `estudio_3_siguiente` ya no repite.
+
 ---
 
 ## Decisiones pendientes (a tomar más adelante)

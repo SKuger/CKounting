@@ -7,6 +7,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { resolve, dirname, join } from 'node:path'
+import { contabDataDir } from './uploads'
 
 export const DIAN_PORT = Number(process.env.DIAN_PORT) || 8756
 
@@ -101,7 +102,9 @@ export async function ensureDianService(): Promise<void> {
       args = ['-u', '-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', String(DIAN_PORT), '--log-level', 'warning']
       cwd = dianDir
     }
-    const proc = spawn(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PYTHONUNBUFFERED: '1' } })
+    // CONTAB_PROGRAM_DB: la cola de personas del vigía de citas vive en contab.db (D-104).
+    const env = { ...process.env, PYTHONUNBUFFERED: '1', CONTAB_PROGRAM_DB: join(contabDataDir(), 'contab.db') }
+    const proc = spawn(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], env })
     state.proc = proc
     proc.stdout?.on('data', (c: Buffer) => process.stderr.write(`[dian-rut] ${c}`))
     proc.stderr?.on('data', (c: Buffer) => process.stderr.write(`[dian-rut] ${c}`))
