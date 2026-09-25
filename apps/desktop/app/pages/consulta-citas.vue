@@ -12,6 +12,7 @@ type Status = {
   proxima_revision: string | null
   espera_s: [number, number]
   pantalla: string | null
+  detalle: string | null
   hay_captura: boolean
   log: LogLine[]
 }
@@ -142,8 +143,8 @@ onBeforeUnmount(() => {
       <h1 class="font-heading text-2xl font-medium tracking-tight">Consulta DIAN · Citas</h1>
       <p class="text-sm text-muted-foreground">
         Busca cita en el portal de agendamiento de la DIAN cada 1–2 minutos, hasta encontrar cupo.
-        Cuando lo encuentra, deja el navegador abierto en esa pantalla, suena y te avisa para que
-        termines la reserva. No resuelve CAPTCHAs: si aparece uno, te avisa.
+        Cuando aparece el trámite de Medellín, lo elige, toma el primer día disponible, se detiene en la
+        pantalla siguiente y te avisa para que termines la reserva. No resuelve CAPTCHAs: si aparece uno, te avisa.
       </p>
     </div>
 
@@ -185,6 +186,7 @@ onBeforeUnmount(() => {
         <p class="text-sm text-muted-foreground">
           La ventana del navegador quedó abierta en esta pantalla: termina la reserva ahí y luego pulsa <strong>Detener</strong>.
         </p>
+        <p v-if="status?.detalle" class="text-sm font-medium">{{ status.detalle }}</p>
         <pre v-if="status?.pantalla" class="max-h-60 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-xs">{{ status.pantalla }}</pre>
         <img v-if="capturaUrl" :src="capturaUrl" alt="Captura del portal de la DIAN" class="rounded-md border border-border">
       </CardContent>

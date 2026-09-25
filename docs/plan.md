@@ -411,7 +411,7 @@ Segunda consulta DIAN, servida por el **sidecar de `apps/core`** (HTTP plano, si
 
 ## Backlog libre (sin entrega asignada aún)
 
-- **Vigía de citas DIAN** (Consultas DIAN → Citas, D-104): integrado. Pendiente: automatizar la reserva con las capturas del primer cupo real.
+- **Vigía de citas DIAN** (Consultas DIAN → Citas, D-104): integrado; ya elige el trámite de Medellín y el primer día (manual del usuario). Pendiente: los pasos tras el día (datos + confirmación).
 - Recordatorios de vencimientos tributarios.
 - Conciliación bancaria.
 - Integración lectura de extractos bancarios.

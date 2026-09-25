@@ -989,9 +989,16 @@ registro y captura. Busca **Devoluciones · Videoatención · Persona natural** 
   seleccionados."* Cualquier otra pantalla → se detiene con la ventana abierta, guarda captura, ventana
   emergente siempre-encima + pitidos + toast (la ventana va primero: el usuario tiene los toasts de Windows
   apagados) y `CITA_DIAN.txt`.
-- **No reserva solo todavía**: las pantallas de ciudad/fecha/datos/confirmación no se han visto (no había
-  cupo). El usuario eligió "vigilar + dejar lista"; la reserva automática llega con las capturas del primer
-  cupo real.
+- **Flujo tras Devoluciones, según el manual del usuario** (capturas del 2026-08-28, cuando sí había
+  trámites): aparece un desplegable **Trámite** con opciones por ciudad (p. ej. *Bucaramanga "Solicitud de
+  devolución y/o compensación persona natural"*); sus opciones no salen en el texto de la página hasta
+  abrirlo, así que "¿hay Medellín?" se decide leyendo las opciones. Solo sirve la que dice Medellín **y**
+  persona natural; si no está → sigue buscando. Si está → la elige, Siguiente, pantalla *Ciudad o
+  municipio, sede, fecha y hora*: elige el **primer día** que pinta el calendario (solo pinta los
+  disponibles), Siguiente, y se detiene ahí a avisar. Sin días → sigue buscando.
+- **Lo que viene después del día** (datos del solicitante, confirmación) aún no se ha visto: ahí para y el
+  usuario termina. Cualquier paso que no salga como en el manual también es "parar y avisar", nunca "error
+  y reintentar", para no perder un cupo real por un selector.
 - **Cada 1–2 min (al azar)**, con backoff si el portal falla. Empezó en 3 min; el usuario lo pidió más corto.
 
 Arreglos previos que salieron al integrarlo:
