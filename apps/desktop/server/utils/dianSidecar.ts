@@ -65,7 +65,7 @@ async function isHealthy(timeoutMs = 1200): Promise<boolean> {
   try {
     const ctrl = new AbortController()
     const t = setTimeout(() => ctrl.abort(), timeoutMs)
-    const res = await fetch(`${dianBaseUrl()}/browser-mode-status`, { signal: ctrl.signal })
+    const res = await fetch(`${dianBaseUrl()}/health`, { signal: ctrl.signal })
     clearTimeout(t)
     return res.ok
   } catch {
@@ -110,7 +110,8 @@ export async function ensureDianService(): Promise<void> {
       state.proc = null
     })
 
-    const deadline = Date.now() + 30_000
+    // Arranque en frío (pandas + playwright) pasa de 30 s en Windows.
+    const deadline = Date.now() + 90_000
     while (Date.now() < deadline) {
       if (await isHealthy(1000)) return
       await new Promise((r) => setTimeout(r, 500))

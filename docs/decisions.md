@@ -972,6 +972,37 @@ Ese mismo listado por rango de fechas es lo que hace viable la **reconciliación
 
 ---
 
+## D-104 — Vigía de citas DIAN: vigilar y dejar lista, no reservar a ciegas (2026-09-25)
+
+Página **Consultas DIAN → Citas** (`/consulta-citas`): botón *Buscar cita* / *Detener*, estado en vivo,
+registro y captura. Busca **Devoluciones · Videoatención · Persona natural** y solo sirve **Medellín**
+(requisito del usuario).
+
+- **Vive en el sidecar DIAN** (`apps/dian-rut/citas.py`, endpoints `/citas/{status,start,stop,captura}`,
+  proxys en `server/api/dian/citas/`), no en un sidecar nuevo: ese servicio ya trae Playwright y ya va en
+  el instalador. Corre en un hilo con Playwright síncrono (el loop de uvicorn está en otro hilo).
+- **Navegador del sistema** (Chrome → Edge) con perfil propio en `<DIAN_WORKDIR>/citas/`: el instalador
+  no trae Chromium (D-058). Sin stealth ni evasión de CAPTCHA: si aparece uno, es "detenerse y avisar".
+- **Navegador real, no HTTP plano**: el portal pasa todo por `Player.aspx/ValidadorValidar` con varios
+  iframes y estado de sesión; imitar esas llamadas sería frágil.
+- **Señal de "sin cupo"**: el modal *"No se encontraron especialidades relacionadas según los filtros
+  seleccionados."* Cualquier otra pantalla → se detiene con la ventana abierta, guarda captura, ventana
+  emergente siempre-encima + pitidos + toast (la ventana va primero: el usuario tiene los toasts de Windows
+  apagados) y `CITA_DIAN.txt`.
+- **No reserva solo todavía**: las pantallas de ciudad/fecha/datos/confirmación no se han visto (no había
+  cupo). El usuario eligió "vigilar + dejar lista"; la reserva automática llega con las capturas del primer
+  cupo real.
+- **Cada 1–2 min (al azar)**, con backoff si el portal falla. Empezó en 3 min; el usuario lo pidió más corto.
+
+Arreglos previos que salieron al integrarlo:
+- `playwright-stealth==1.0.6` no exporta `Stealth`, que es lo que importa `scraper.py`: con los pines del
+  repo el sidecar DIAN **no arrancaba**. Pin subido a 2.0.0.
+- El chequeo de vida del sidecar usaba `/browser-mode-status`, que sondea :9222; en Windows una conexión
+  rechazada tarda ~2 s, más que el timeout de 1,2 s, así que el servicio nunca se daba por vivo. Nuevo
+  `/health`, y 90 s de margen para el arranque en frío.
+
+---
+
 ## Decisiones pendientes (a tomar más adelante)
 
 - **D-E1-13** ⏸ Behavior de R-V3 cuando IVA = 0 (default actual: skip). Confirmar si lo cambiamos a "marcar excluido" o "tarifa 0%".

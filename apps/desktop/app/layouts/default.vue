@@ -27,7 +27,7 @@ type NavGroup = { label: string; icon: unknown; children: NavLeaf[] }
 type NavItem = (NavLeaf & { icon: unknown }) | NavGroup
 
 // Real Contab nav. Empresas owns the company sub-routes (detail + carga); las Consultas DIAN son
-// un grupo desplegable (Terceros + Inconsistencias), cada una con su página. `flatNav` aplana los
+// un grupo desplegable (Terceros, Inconsistencias, Citas), cada una con su página. `flatNav` aplana los
 // hijos para que ⌘K y el breadcrumb sigan funcionando con una lista de hojas.
 const nav: NavItem[] = [
   { label: 'Inicio', to: '/', icon: Home, match: p => p === '/' },
@@ -36,6 +36,7 @@ const nav: NavItem[] = [
     label: 'Consultas DIAN', icon: FileSearch, children: [
       { label: 'Terceros', to: '/consulta-dian' },
       { label: 'Inconsistencias', to: '/consulta-inconsistencias' },
+      { label: 'Citas', to: '/consulta-citas' },
     ],
   },
   { label: 'Ayuda', to: '/ayuda', icon: LifeBuoy },

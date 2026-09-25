@@ -442,3 +442,22 @@ Un detalle de método que conviene recordar: al escribir rutas de Windows en
 (`\Scripts\ruff` acabó como `Scripts` + CR + `uff`) y `read_text` convirtió después
 ese CR en un salto de línea. Para rutas con `\`, usar el editor directamente o
 `chr(92)`, no literales dentro de un heredoc.
+
+---
+
+## Sesión 10 — 2026-09-25: Vigía de citas DIAN (D-104)
+
+**Resultado**: nueva página **Consultas DIAN → Citas** con botón *Buscar cita*. Revisa el portal de
+agendamiento cada 1–2 min buscando Devoluciones · Videoatención · Persona natural en **Medellín**; al
+encontrar cupo deja el navegador en esa pantalla y avisa (ventana emergente + pitidos + toast + txt).
+Probado contra el portal real: detecta "sin cupo" (captura verificada).
+
+- Recorrido del portal hecho a mano con el usuario (Chrome guiado): sin login ni CAPTCHA hasta el servicio.
+  Las pantallas posteriores no se vieron porque no había cupo → la reserva automática queda pendiente.
+- Se integra en el sidecar DIAN (`apps/dian-rut/citas.py`), que ya trae Playwright y va en el instalador.
+  Usa el Chrome/Edge del sistema.
+- Dos fallos previos que impedían arrancar el sidecar DIAN: pin `playwright-stealth==1.0.6` incompatible
+  con `scraper.py` (→ 2.0.0) y chequeo de vida vía `/browser-mode-status` demasiado lento en Windows
+  (→ `/health`).
+- En este equipo los toasts de Windows están apagados (`ToastEnabled=0`): por eso el aviso principal es
+  una ventana `MessageBoxW` siempre encima.
