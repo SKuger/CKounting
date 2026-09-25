@@ -48,6 +48,24 @@ CREATE TABLE IF NOT EXISTS empresa_registry (
   last_opened_at TEXT,
   meta_json      TEXT
 );
+
+-- Cola del vigía de citas DIAN (D-104): personas a las que hay que sacar cita de devoluciones.
+-- La llena el contador en Contab; el sidecar DIAN la recorre 1 a 1 y anota el resultado.
+-- estado: pendiente | en_curso (el bot llegó hasta donde sabe y espera al usuario) | agendada.
+CREATE TABLE IF NOT EXISTS cita_persona (
+  id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+  cedula               TEXT NOT NULL UNIQUE,
+  nombre               TEXT,
+  correo               TEXT,
+  celular              TEXT,
+  autoriza_tratamiento INTEGER NOT NULL DEFAULT 0,
+  estado               TEXT NOT NULL DEFAULT 'pendiente'
+                       CHECK (estado IN ('pendiente', 'en_curso', 'agendada')),
+  detalle              TEXT,
+  agendada_at          TEXT,
+  created_at           TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at           TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 

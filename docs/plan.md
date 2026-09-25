@@ -411,7 +411,7 @@ Segunda consulta DIAN, servida por el **sidecar de `apps/core`** (HTTP plano, si
 
 ## Backlog libre (sin entrega asignada aún)
 
-- **Vigía de citas DIAN** (Consultas DIAN → Citas, D-104): integrado; ya elige el trámite de Medellín y el primer día (manual del usuario). Pendiente: los pasos tras el día (datos + confirmación).
+- **Vigía de citas DIAN** (Consultas DIAN → Citas, D-104): integrado con cola de personas en contab.db; llega hasta la pantalla de datos y llena la cédula si la persona autorizó. Pendiente: las pantallas tras la cédula (confirmación).
 - Recordatorios de vencimientos tributarios.
 - Conciliación bancaria.
 - Integración lectura de extractos bancarios.

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from . import backup as backup_module
+from . import cita_personas as citas_module
 from . import dian_inconsistencias as dian_inc_module
 from . import excel as excel_module
 from . import export as export_module
@@ -864,6 +865,35 @@ def _h_program_list_empresas(params: dict) -> list[dict]:
     return program_db_module.list_registry(include_archived=include_archived)
 
 
+def _h_citas_list(_params: dict) -> list[dict]:
+    return citas_module.list_personas()
+
+
+def _h_citas_save_persona(params: dict) -> dict:
+    persona = params.get("persona")
+    if not isinstance(persona, dict):
+        raise ValueError("persona debe ser un objeto")
+    return citas_module.save_persona(persona)
+
+
+def _h_citas_delete_persona(params: dict) -> dict:
+    return {"deleted": citas_module.delete_persona(_id_param(params))}
+
+
+def _h_citas_set_estado(params: dict) -> dict:
+    estado = params.get("estado")
+    if not isinstance(estado, str):
+        raise ValueError("estado requerido (string)")
+    return citas_module.set_estado(_id_param(params), estado)
+
+
+def _id_param(params: dict) -> int:
+    pid = params.get("id")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        raise ValueError("id requerido (entero positivo)")
+    return pid
+
+
 def _h_program_touch_empresa(params: dict) -> dict:
     db_path = params.get("db_path")
     if not isinstance(db_path, str) or not db_path.strip():
@@ -1235,6 +1265,10 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "program_get_settings": _h_program_get_settings,
     "program_save_settings": _h_program_save_settings,
     "program_list_empresas": _h_program_list_empresas,
+    "citas_list": _h_citas_list,
+    "citas_save_persona": _h_citas_save_persona,
+    "citas_delete_persona": _h_citas_delete_persona,
+    "citas_set_estado": _h_citas_set_estado,
     "program_touch_empresa": _h_program_touch_empresa,
     # Consulta de Inconsistencias DIAN (razón social por NIT+DV)
     "consulta_inconsistencias": _h_consulta_inconsistencias,
