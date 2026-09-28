@@ -74,6 +74,43 @@ const municipiosIca = ref<MunicipioIca[]>([])
 const perfilOpen = ref(false)
 const savingPerfil = ref(false)
 const perfilHistorial = ref(false)
+
+// ── paneles ──
+const panelActivo = computed(() => {
+  if (terceroOpen.value) return 'tercero'
+  if (tercerosVerOpen.value) return 'terceros'
+  if (dianOpen.value) return 'dian'
+  if (newMonthOpen.value) return 'mes'
+  if (moveTarget.value) return 'mover'
+  if (deleteMonthTarget.value) return 'borrarMes'
+  if (archiveModalOpen.value) return 'archivar'
+  if (deleteModalOpen.value) return 'borrarEmpresa'
+  return null
+})
+const TITULOS_PANEL: Record<string, string> = {
+  tercero: 'Tercero', terceros: 'Terceros', dian: 'Traer de la DIAN',
+  mes: 'Crear mes', mover: 'Mover el Excel de mes', borrarMes: 'Borrar mes',
+  archivar: 'Archivar empresa', borrarEmpresa: 'Enviar la empresa a la papelera',
+}
+function cerrarPaneles() {
+  dianOpen.value = false; tercerosVerOpen.value = false; terceroOpen.value = false
+  newMonthOpen.value = false; moveTarget.value = null; deleteMonthTarget.value = null
+  archiveModalOpen.value = false; deleteModalOpen.value = false
+}
+function alternarPanel(cual: 'dian' | 'terceros' | 'mes') {
+  const abierto = panelActivo.value === cual
+  cerrarPaneles()
+  if (abierto) return
+  if (cual === 'dian') dianOpen.value = true
+  else if (cual === 'terceros') tercerosVerOpen.value = true
+  else newMonthOpen.value = true
+}
+
+// El mes vigente es el que se trabaja; el resto es historial. Darles el mismo peso
+// visual hacía que buscar el de este mes costara lo mismo que buscar uno de hace
+// un año, y no es lo mismo que se hace cada día.
+const mesVigente = computed(() => periodos.value[0] ?? null)
+const historialMeses = computed(() => periodos.value.slice(1))
 const icaOpen = ref(false)
 const savingIca = ref(false)
 const perfilDraft = reactive({
@@ -95,6 +132,10 @@ const dianMensaje = ref('')
 const dianResultado = ref<{ archivo: string; empresa: string | null } | null>(null)
 const dianImportando = ref(false)
 const ingestas = ref<Ingesta[]>([])
+// Paneles expansibles, nunca modales (norma 2026-09-28): uno abierto a la vez, y
+// el mismo botón que lo abre lo cierra. Un modal tapa el contexto justo cuando se
+// necesita — configurar el perfil mientras miras el mes, pegar el enlace mientras
+// ves qué mes falta.
 const dianOpen = ref(false)
 const tercerosVerOpen = ref(false)
 const soportesEstado = ref<'inactivo' | 'corriendo' | 'listo'>('inactivo')
@@ -638,12 +679,9 @@ watch(dbPath, refresh)
 </script>
 
 <template>
-  <!-- Un espacio de trabajo, no un documento: el alto lo pone la ventana y solo
-       rueda la lista de meses. Lo que se usa todos los días ocupa el ancho; lo que
-       se configura una vez vive en el panel de la derecha o detrás de un diálogo. -->
   <div class="flex h-full min-h-0 w-full flex-col gap-3 p-4">
 
-    <!-- ── identidad y acciones, en una línea ── -->
+    <!-- ── identidad y acciones ── -->
     <header v-if="info" class="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2">
       <NuxtLink to="/" class="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground">
         <ArrowLeft class="size-4" />
@@ -662,10 +700,10 @@ watch(dbPath, refresh)
       </div>
 
       <div class="ml-auto flex shrink-0 items-center gap-2">
-        <Button size="sm" data-tour="empresa-crear-mes" variant="outline" @click="newMonthOpen = true">
+        <Button size="sm" data-tour="empresa-crear-mes" :variant="panelActivo === 'mes' ? 'secondary' : 'outline'" @click="alternarPanel('mes')">
           <CalendarPlus class="size-4" /> Crear mes
         </Button>
-        <Button size="sm" @click="dianOpen = true">
+        <Button size="sm" :variant="panelActivo === 'dian' ? 'secondary' : 'default'" @click="alternarPanel('dian')">
           <CloudDownload class="size-4" /> Traer de la DIAN
         </Button>
         <Popover>
@@ -676,11 +714,11 @@ watch(dbPath, refresh)
             <button type="button" class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-accent disabled:opacity-50" :disabled="backingUp" @click="backupPickerOpen = true">
               <Download class="size-4" /> {{ backingUp ? 'Generando…' : 'Hacer backup' }}
             </button>
-            <button type="button" class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-accent disabled:opacity-50" :disabled="archiving" @click="archiveModalOpen = true">
+            <button type="button" class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-accent disabled:opacity-50" :disabled="archiving" @click="cerrarPaneles(); archiveModalOpen = true">
               <Archive class="size-4" /> Archivar
             </button>
             <div class="my-1 h-px bg-border" />
-            <button type="button" class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-destructive transition-colors hover:bg-accent" @click="openDeleteModal">
+            <button type="button" class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-destructive transition-colors hover:bg-accent" @click="cerrarPaneles(); openDeleteModal()">
               <Trash2 class="size-4" /> Enviar a la papelera
             </button>
           </PopoverContent>
@@ -691,67 +729,321 @@ watch(dbPath, refresh)
     <Card v-else-if="loading" class="shrink-0"><CardContent class="py-10 text-center text-muted-foreground">Cargando empresa…</CardContent></Card>
     <Card v-else class="shrink-0"><CardContent class="py-6"><div class="rounded-md border border-status-error/30 bg-status-error-bg px-3 py-2 text-sm text-status-error">Empresa no encontrada. <NuxtLink to="/" class="underline">Volver</NuxtLink></div></CardContent></Card>
 
-    <!-- ── el espacio de trabajo ── -->
+    <!-- ══════════ el panel expansible: nunca un modal ══════════ -->
+    <section v-if="panelActivo" class="max-h-[62vh] shrink-0 overflow-y-auto rounded-lg border border-primary/40 bg-card">
+      <div class="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-border bg-card px-4 py-2.5">
+        <h2 class="text-sm font-semibold">{{ TITULOS_PANEL[panelActivo] }}</h2>
+        <Button variant="ghost" size="icon-sm" aria-label="Cerrar" @click="cerrarPaneles"><X class="size-4" /></Button>
+      </div>
+
+      <div class="p-4">
+        <!-- ───────── traer de la DIAN ───────── -->
+        <template v-if="panelActivo === 'dian'">
+          <p class="mb-3 max-w-prose text-sm text-muted-foreground">
+            Pega el enlace que la DIAN manda al correo y elige el mes. Contab entra al portal, pide
+            el listado, espera a que lo generen y lo baja. Nada entra a la contabilidad hasta que lo apruebes.
+          </p>
+          <div class="grid gap-4 lg:grid-cols-2">
+            <div class="flex flex-col gap-3">
+              <template v-if="dianEstado === 'inactivo'">
+                <div class="grid gap-1.5">
+                  <Label for="dian-enlace">Enlace de acceso</Label>
+                  <Input id="dian-enlace" v-model="dianEnlace" type="password" autocomplete="off" placeholder="https://catalogo-vpfe.dian.gov.co/User/AuthToken?…" />
+                  <p class="text-xs text-muted-foreground">No se guarda en ningún lado: se usa para esta descarga y se descarta.</p>
+                </div>
+                <div class="flex flex-wrap items-end gap-2">
+                  <div class="grid gap-1.5">
+                    <Label>Mes</Label>
+                    <Select v-model="dianMes">
+                      <SelectTrigger class="w-36"><SelectValue /></SelectTrigger>
+                      <SelectContent><SelectItem v-for="m in MESES" :key="m.v" :value="m.v">{{ m.l }}</SelectItem></SelectContent>
+                    </Select>
+                  </div>
+                  <div class="grid gap-1.5">
+                    <Label>Año</Label>
+                    <Select v-model="dianAnio">
+                      <SelectTrigger class="w-28"><SelectValue /></SelectTrigger>
+                      <SelectContent><SelectItem v-for="a in ANIOS" :key="a" :value="a">{{ a }}</SelectItem></SelectContent>
+                    </Select>
+                  </div>
+                  <Button :disabled="!dianEnlace || !dianPeriodo" @click="bajarDeLaDian"><CloudDownload class="size-4" /> Bajar</Button>
+                </div>
+              </template>
+
+              <template v-else-if="dianEstado === 'corriendo'">
+                <div class="flex items-center gap-3 text-sm text-muted-foreground">
+                  <Loader2 class="size-4 shrink-0 animate-spin" /><span>{{ dianMensaje }}</span>
+                </div>
+                <p class="text-xs text-muted-foreground">Se abrió una ventana del navegador: el portal no acepta conexiones sin ventana. Se cierra sola al terminar.</p>
+              </template>
+
+              <template v-else-if="dianEstado === 'listo'">
+                <div class="rounded-md border border-primary/40 bg-primary/5 p-3">
+                  <p class="text-sm">
+                    Listo<template v-if="dianResultado?.empresa">, como <strong>{{ dianResultado.empresa }}</strong></template>.
+                    El listado de <strong>{{ dianPeriodo }}</strong> está descargado y <strong>todavía no se importó</strong>.
+                  </p>
+                  <div class="mt-3 flex flex-wrap gap-2">
+                    <Button :disabled="dianImportando" @click="importarDescarga">{{ dianImportando ? 'Importando…' : `Importar a ${dianPeriodo}` }}</Button>
+                    <Button variant="ghost" :disabled="dianImportando" @click="dianEstado = 'inactivo'; dianResultado = null">Descartar</Button>
+                  </div>
+                </div>
+              </template>
+
+              <template v-else>
+                <div class="rounded-md border border-destructive/40 bg-destructive/5 p-3">
+                  <p class="text-sm">{{ dianMensaje }}</p>
+                  <Button variant="outline" size="sm" class="mt-2" @click="dianEstado = 'inactivo'">Volver a intentar</Button>
+                </div>
+              </template>
+            </div>
+
+            <div class="rounded-md border border-border p-3">
+              <div class="text-sm font-medium">Soportes oficiales</div>
+              <p class="mt-1 text-xs text-muted-foreground">
+                La DIAN entrega el soporte de cualquier documento con solo el CUFE y el NIT, sin
+                credenciales. En vez de esperar a que el cliente los mande, los bajamos nosotros.
+              </p>
+              <Button variant="outline" size="sm" class="mt-2" :disabled="soportesEstado === 'corriendo' || !dianPeriodo" @click="bajarSoportes(dianPeriodo)">
+                <CloudDownload class="size-3.5" /> Bajar los de {{ dianPeriodo }}
+              </Button>
+              <p v-if="soportesEstado === 'corriendo'" class="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 class="size-3.5 shrink-0 animate-spin" /> {{ soportesMensaje }}
+              </p>
+              <p v-else-if="soportesEstado === 'listo' && soportesResumen" class="mt-2 text-sm">
+                {{ soportesResumen.bajados }} bajados<template v-if="soportesResumen.sin_encontrar"> · {{ soportesResumen.sin_encontrar }} que la DIAN no tiene</template><template v-if="soportesResumen.fallidos"> · {{ soportesResumen.fallidos }} fallidos</template>.
+              </p>
+            </div>
+          </div>
+        </template>
+
+        <!-- ───────── listado de terceros ───────── -->
+        <template v-else-if="panelActivo === 'terceros'">
+          <div class="flex items-center gap-2">
+            <Search class="size-4 shrink-0 text-muted-foreground" />
+            <Input v-model="tercerosBuscar" placeholder="Buscar por NIT o razón social" class="h-9 max-w-sm" @keyup.enter="reloadTerceros" />
+            <Button variant="ghost" size="sm" @click="reloadTerceros">Buscar</Button>
+            <Button variant="ghost" size="sm" class="ml-auto" @click="openTercero()"><Plus class="size-3.5" /> Agregar</Button>
+          </div>
+          <div class="mt-2 rounded-md border border-border">
+            <div v-for="t in terceros" :key="t.nit" class="flex items-center gap-3 border-b border-border px-3 py-2 last:border-b-0">
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-sm">{{ t.razon_social || '(sin razón social)' }}</p>
+                <p class="font-mono text-[11px] text-muted-foreground">
+                  {{ t.nit }}<template v-if="t.dv">-{{ t.dv }}</template>
+                  <template v-if="t.ciiu"> · CIIU {{ t.ciiu }}</template>
+                  <template v-if="t.municipio"> · {{ t.municipio }}</template>
+                </p>
+              </div>
+              <Badge v-for="r in t.responsabilidades" :key="r" variant="secondary" class="font-mono text-[10px]">{{ r }}</Badge>
+              <Badge v-if="t.consultado_at" variant="outline" class="font-mono text-[10px]">RUT</Badge>
+              <Button variant="ghost" size="sm" :disabled="consultandoNit === t.nit" @click="consultarRut(t)">
+                {{ consultandoNit === t.nit ? 'Consultando…' : 'Consultar RUT' }}
+              </Button>
+              <Button variant="ghost" size="icon-sm" @click="openTercero(t)"><Pencil class="size-3.5" /></Button>
+            </div>
+            <p v-if="!terceros.length" class="px-3 py-4 text-sm text-muted-foreground">Ningún tercero coincide.</p>
+          </div>
+          <p class="mt-2 text-xs text-muted-foreground">
+            <strong>Consultar RUT</strong> trae hoy la razón social y el tipo. Las responsabilidades y
+            el CIIU se escriben a mano hasta que se confirme de dónde leerlos en el portal.
+          </p>
+        </template>
+
+        <!-- ───────── ficha de un tercero ───────── -->
+        <template v-else-if="panelActivo === 'tercero'">
+          <div class="grid max-w-3xl gap-3 sm:grid-cols-2">
+            <div class="grid gap-1.5"><Label>NIT</Label><Input v-model="terceroDraft.nit" placeholder="830008686" /></div>
+            <div class="grid gap-1.5"><Label>Razón social</Label><Input v-model="terceroDraft.razon_social" /></div>
+            <div class="grid gap-1.5"><Label>Actividad CIIU</Label><Input v-model="terceroDraft.ciiu" placeholder="4711" maxlength="4" /></div>
+            <div class="grid gap-1.5"><Label>Municipio</Label><Input v-model="terceroDraft.municipio" placeholder="Medellín" /></div>
+            <div class="grid gap-1.5"><Label>Responsabilidades</Label><Input v-model="terceroDraft.responsabilidades" placeholder="O-13, O-15, O-23" /></div>
+            <div class="grid gap-1.5"><Label>Notas</Label><Input v-model="terceroDraft.notas" placeholder="Opcional" /></div>
+          </div>
+          <div class="mt-3 flex gap-2">
+            <Button :disabled="savingTercero" @click="saveTercero">Guardar</Button>
+            <Button variant="ghost" :disabled="savingTercero" @click="terceroOpen = false">Cancelar</Button>
+          </div>
+        </template>
+
+        <!-- ───────── crear mes ───────── -->
+        <template v-else-if="panelActivo === 'mes'">
+          <p class="mb-3 text-sm text-muted-foreground">Elige el mes que vas a trabajar. Luego subes su Excel y eliges su carpeta de soportes.</p>
+          <div class="flex flex-wrap items-end gap-2">
+            <div class="grid gap-1.5">
+              <Label>Mes</Label>
+              <Select :model-value="newMonthMes" @update:model-value="newMonthMes = String($event ?? '')">
+                <SelectTrigger class="w-40"><SelectValue placeholder="Mes" /></SelectTrigger>
+                <SelectContent><SelectItem v-for="m in MESES" :key="m.v" :value="m.v">{{ m.l }}</SelectItem></SelectContent>
+              </Select>
+            </div>
+            <div class="grid gap-1.5">
+              <Label>Año</Label>
+              <Select :model-value="newMonthAnio" @update:model-value="newMonthAnio = String($event ?? '')">
+                <SelectTrigger class="w-28"><SelectValue placeholder="Año" /></SelectTrigger>
+                <SelectContent><SelectItem v-for="y in ANIOS" :key="y" :value="y">{{ y }}</SelectItem></SelectContent>
+              </Select>
+            </div>
+            <Button :disabled="!newMonthValue || creatingMonth" @click="createMonth">{{ creatingMonth ? 'Creando…' : 'Crear mes' }}</Button>
+          </div>
+        </template>
+
+        <!-- ───────── mover el Excel ───────── -->
+        <template v-else-if="panelActivo === 'mover'">
+          <p class="mb-3 text-sm text-muted-foreground">Elige el mes destino para «{{ moveTarget?.source_name }}».</p>
+          <div class="flex flex-wrap items-end gap-2">
+            <div class="grid gap-1.5">
+              <Label>Mes destino</Label>
+              <Select :model-value="moveDestino" @update:model-value="moveDestino = String($event ?? '')">
+                <SelectTrigger class="w-64"><SelectValue placeholder="Elegir mes…" /></SelectTrigger>
+                <SelectContent><SelectItem v-for="p in periodos" :key="p.periodo" :value="p.periodo">{{ monthLabel(p.periodo) }} ({{ p.periodo }})</SelectItem></SelectContent>
+              </Select>
+            </div>
+            <Button :disabled="!moveDestino || busy" @click="confirmMove">Mover</Button>
+            <Button variant="ghost" @click="moveTarget = null">Cancelar</Button>
+          </div>
+        </template>
+
+        <!-- ───────── borrar mes ───────── -->
+        <template v-else-if="panelActivo === 'borrarMes'">
+          <p class="mb-3 max-w-prose text-sm text-muted-foreground">
+            Se elimina el mes <strong class="text-foreground">{{ deleteMonthTarget }}</strong> y el Excel que tenga cargado.
+            Los soportes en disco no se tocan. Esta acción no se puede deshacer.
+          </p>
+          <div class="flex gap-2">
+            <Button variant="destructive" :disabled="busy" @click="confirmDeleteMonth">Borrar mes</Button>
+            <Button variant="ghost" @click="deleteMonthTarget = null">Cancelar</Button>
+          </div>
+        </template>
+
+        <!-- ───────── archivar ───────── -->
+        <template v-else-if="panelActivo === 'archivar'">
+          <p class="mb-3 max-w-prose text-sm text-muted-foreground">
+            Quedará oculta de la lista principal, pero sus datos se conservan y puedes desarchivarla cuando quieras.
+          </p>
+          <div class="flex gap-2">
+            <Button :disabled="archiving" @click="confirmArchive">{{ archiving ? 'Archivando…' : 'Archivar' }}</Button>
+            <Button variant="ghost" @click="archiveModalOpen = false">Cancelar</Button>
+          </div>
+        </template>
+
+        <!-- ───────── enviar la empresa a la papelera ───────── -->
+        <template v-else-if="panelActivo === 'borrarEmpresa'">
+          <div class="max-w-prose">
+            <!-- D-078: ya NO es irreversible. Decir que lo es era mentir al usuario. -->
+            <div class="rounded-md border border-status-warning/30 bg-status-warning-bg px-3 py-2 text-sm text-status-warning">
+              La empresa se guarda en la <strong>papelera durante 30 días</strong> y después se borra
+              definitivamente. Si quieres conservarla más tiempo, archívala o haz un backup.
+            </div>
+            <div class="mt-3 grid gap-1.5">
+              <Label for="del-nit">Escribe el NIT <strong class="text-foreground">{{ info?.nit }}</strong> para confirmar:</Label>
+              <Input id="del-nit" v-model="deleteConfirmNit" :placeholder="info?.nit" inputmode="numeric" class="max-w-xs" />
+            </div>
+            <div class="mt-3 flex gap-2">
+              <Button variant="destructive" :disabled="deleting || deleteConfirmNit.trim() !== info?.nit" @click="confirmDelete">{{ deleting ? 'Eliminando…' : 'Enviar a la papelera' }}</Button>
+              <Button variant="ghost" @click="deleteModalOpen = false">Cancelar</Button>
+            </div>
+          </div>
+        </template>
+      </div>
+    </section>
+
+    <!-- ══════════ el espacio de trabajo ══════════ -->
     <div v-if="info" class="grid min-h-0 flex-1 gap-3 lg:grid-cols-[minmax(0,1fr)_340px]">
 
-      <!-- los meses: lo que se mira todos los días -->
-      <section data-tour="empresa-periodos" class="flex min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card">
-        <div class="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-2.5">
-          <div>
-            <h2 class="text-sm font-semibold">Meses</h2>
-            <p class="text-xs text-muted-foreground">Cada mes es un ambiente: su Excel, su carpeta de soportes, su validación.</p>
+      <div class="flex min-h-0 flex-col gap-3">
+        <!-- EL MES VIGENTE: lo que se trabaja hoy -->
+        <section v-if="mesVigente" data-tour="empresa-periodos" class="shrink-0 rounded-lg border border-border bg-card p-4">
+          <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <span class="font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground">El mes</span>
+            <h2 class="font-heading text-2xl font-medium first-letter:uppercase">{{ monthLabel(mesVigente.periodo) }}</h2>
+            <span class="font-mono text-xs text-muted-foreground">{{ mesVigente.periodo }}</span>
           </div>
-          <Button v-if="trashedLoads.length" variant="ghost" size="sm" :class="showTrash ? 'text-foreground' : ''" @click="showTrash = !showTrash">
-            <RotateCcw class="size-4" /> Papelera ({{ trashedLoads.length }})
-          </Button>
-        </div>
 
-        <div class="min-h-0 flex-1 overflow-y-auto p-3">
-          <p v-if="!periodos.length" class="py-10 text-center text-sm text-muted-foreground">
-            Aún no hay meses. Crea el primero con <strong class="text-foreground">«Crear mes»</strong>, o tráelo de la DIAN.
-          </p>
-
-          <div class="flex flex-col gap-2">
-            <div v-for="p in periodos" :key="p.periodo" class="rounded-lg border border-border p-3 transition-colors hover:border-primary/30">
-              <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-                <span class="font-medium first-letter:uppercase">{{ monthLabel(p.periodo) }}</span>
-                <span class="font-mono text-[11px] text-muted-foreground">{{ p.periodo }}</span>
-                <span class="text-xs text-muted-foreground">
-                  {{ p.row_count }} filas ·
-                  <span :class="p.indexed_cufe_count ? '' : 'text-amber-600 dark:text-amber-400'">{{ p.indexed_cufe_count }} CUFE</span>
-                  · <span :title="p.pdfs_folder || 'sin carpeta de soportes'">{{ p.pdfs_folder ? folderName(p.pdfs_folder) : 'sin carpeta' }}</span>
-                </span>
-                <div class="ml-auto flex items-center gap-1">
-                  <Button variant="ghost" size="sm" :disabled="busy" @click="openPeriodoPicker(p.periodo)">
-                    <FolderOpen class="size-3.5" /> {{ p.pdfs_folder ? 'Carpeta' : 'Elegir carpeta' }}
-                  </Button>
-                  <Button variant="ghost" size="icon-sm" title="Borrar mes" :disabled="busy" @click="deleteMonthTarget = p.periodo"><Trash2 class="size-3.5" /></Button>
-                </div>
+          <div class="mt-3 flex flex-wrap gap-x-8 gap-y-2">
+            <div>
+              <div class="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">Filas</div>
+              <div class="font-mono text-lg tabular-nums">{{ mesVigente.row_count }}</div>
+            </div>
+            <div>
+              <div class="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">CUFE indexados</div>
+              <div class="font-mono text-lg tabular-nums" :class="mesVigente.indexed_cufe_count ? '' : 'text-muted-foreground'">{{ mesVigente.indexed_cufe_count }}</div>
+            </div>
+            <div class="min-w-0">
+              <div class="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">Soportes</div>
+              <div class="truncate text-sm" :title="mesVigente.pdfs_folder || ''">
+                <span v-if="mesVigente.pdfs_folder">{{ folderName(mesVigente.pdfs_folder) }}</span>
+                <span v-else class="text-amber-600 dark:text-amber-400">sin carpeta</span>
               </div>
+            </div>
+          </div>
 
-              <div class="mt-2 border-t border-dashed border-border pt-2">
-                <template v-if="activeLoadsByPeriodo.get(p.periodo)?.length">
-                  <div v-for="c in activeLoadsByPeriodo.get(p.periodo)" :key="c.id" class="flex flex-wrap items-center gap-2 py-0.5">
-                    <FileSpreadsheet class="size-4 shrink-0 text-muted-foreground" />
-                    <span class="min-w-0 flex-1 truncate text-sm">{{ c.source_name }}</span>
-                    <Button size="sm" @click="navigateTo({ path: '/load', query: { db: dbPath, id: c.id } })">Abrir y validar <ChevronRight class="size-3.5" /></Button>
-                    <Button variant="ghost" size="sm" :disabled="busy" @click="moveTarget = c">Mover</Button>
-                    <Button variant="ghost" size="icon-sm" title="Enviar a papelera" :disabled="busy" @click="trashLoad(c)"><Trash2 class="size-3.5" /></Button>
-                  </div>
-                </template>
-                <div v-else class="flex items-center justify-between gap-2">
-                  <span class="text-sm text-muted-foreground">Sin Excel en este mes.</span>
-                  <Button as-child variant="outline" size="sm" :disabled="busy">
-                    <label class="cursor-pointer">
-                      <UploadCloud class="size-4" /> Cargar Excel
-                      <input type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" hidden @change="onExcelPicked($event, p.periodo)">
-                    </label>
-                  </Button>
-                </div>
+          <div class="mt-3 flex flex-wrap items-center gap-2 border-t border-dashed border-border pt-3">
+            <template v-if="activeLoadsByPeriodo.get(mesVigente.periodo)?.length">
+              <div v-for="c in activeLoadsByPeriodo.get(mesVigente.periodo)" :key="c.id" class="flex w-full flex-wrap items-center gap-2">
+                <FileSpreadsheet class="size-4 shrink-0 text-muted-foreground" />
+                <span class="min-w-0 flex-1 truncate text-sm">{{ c.source_name }}</span>
+                <Button size="sm" @click="navigateTo({ path: '/load', query: { db: dbPath, id: c.id } })">Abrir y validar <ChevronRight class="size-3.5" /></Button>
+                <Button variant="ghost" size="sm" :disabled="busy" @click="cerrarPaneles(); moveTarget = c">Mover</Button>
+                <Button variant="ghost" size="icon-sm" title="Enviar a papelera" :disabled="busy" @click="trashLoad(c)"><Trash2 class="size-3.5" /></Button>
+              </div>
+            </template>
+            <template v-else>
+              <span class="text-sm text-muted-foreground">Sin Excel en este mes.</span>
+              <Button as-child variant="outline" size="sm" :disabled="busy">
+                <label class="cursor-pointer">
+                  <UploadCloud class="size-4" /> Cargar Excel
+                  <input type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" hidden @change="onExcelPicked($event, mesVigente.periodo)">
+                </label>
+              </Button>
+              <Button variant="outline" size="sm" @click="alternarPanel('dian')"><CloudDownload class="size-4" /> Traerlo de la DIAN</Button>
+            </template>
+            <div class="ml-auto flex items-center gap-1">
+              <Button variant="ghost" size="sm" :disabled="busy" @click="openPeriodoPicker(mesVigente.periodo)">
+                <FolderOpen class="size-3.5" /> {{ mesVigente.pdfs_folder ? 'Cambiar carpeta' : 'Elegir carpeta' }}
+              </Button>
+              <Button variant="ghost" size="icon-sm" title="Borrar mes" :disabled="busy" @click="cerrarPaneles(); deleteMonthTarget = mesVigente.periodo"><Trash2 class="size-3.5" /></Button>
+            </div>
+          </div>
+        </section>
+
+        <p v-else class="rounded-lg border border-dashed border-border py-10 text-center text-sm text-muted-foreground">
+          Aún no hay meses. Crea el primero con <strong class="text-foreground">«Crear mes»</strong>, o tráelo de la DIAN.
+        </p>
+
+        <!-- HISTORIAL -->
+        <section class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-card">
+          <div class="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-2">
+            <h2 class="text-sm font-semibold">Historial</h2>
+            <Button v-if="trashedLoads.length" variant="ghost" size="sm" :class="showTrash ? 'text-foreground' : ''" @click="showTrash = !showTrash">
+              <RotateCcw class="size-3.5" /> Papelera ({{ trashedLoads.length }})
+            </Button>
+          </div>
+          <div class="min-h-0 flex-1 overflow-y-auto">
+            <p v-if="!historialMeses.length" class="px-4 py-6 text-sm text-muted-foreground">
+              Todavía no hay meses anteriores.
+            </p>
+            <div
+              v-for="p in historialMeses" :key="p.periodo"
+              class="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-4 py-2 last:border-b-0 hover:bg-muted/40"
+            >
+              <span class="w-36 shrink-0 text-sm first-letter:uppercase">{{ monthLabel(p.periodo) }}</span>
+              <span class="font-mono text-[11px] text-muted-foreground">{{ p.row_count }} filas · {{ p.indexed_cufe_count }} CUFE</span>
+              <span class="truncate text-xs text-muted-foreground" :title="p.pdfs_folder || ''">
+                {{ p.pdfs_folder ? folderName(p.pdfs_folder) : 'sin carpeta' }}
+              </span>
+              <div class="ml-auto flex items-center gap-1">
+                <Button
+                  v-for="c in activeLoadsByPeriodo.get(p.periodo) || []" :key="c.id"
+                  variant="ghost" size="sm"
+                  @click="navigateTo({ path: '/load', query: { db: dbPath, id: c.id } })"
+                >Abrir <ChevronRight class="size-3.5" /></Button>
+                <Button variant="ghost" size="sm" :disabled="busy" @click="openPeriodoPicker(p.periodo)"><FolderOpen class="size-3.5" /></Button>
+                <Button variant="ghost" size="icon-sm" title="Borrar mes" :disabled="busy" @click="cerrarPaneles(); deleteMonthTarget = p.periodo"><Trash2 class="size-3.5" /></Button>
               </div>
             </div>
 
-            <div v-if="showTrash && trashedLoads.length" class="rounded-lg border border-dashed border-border bg-muted/30 p-3">
+            <div v-if="showTrash && trashedLoads.length" class="border-t border-dashed border-border bg-muted/30 px-4 py-2">
               <div class="mb-1 font-mono text-[11px] uppercase tracking-wide text-muted-foreground">Papelera</div>
               <div v-for="c in trashedLoads" :key="c.id" class="flex items-center gap-2 py-1">
                 <FileSpreadsheet class="size-4 shrink-0 text-muted-foreground opacity-70" />
@@ -760,37 +1052,123 @@ watch(dbPath, refresh)
               </div>
             </div>
           </div>
-        </div>
-      </section>
+        </section>
+      </div>
 
-      <!-- lo que se configura una vez -->
+      <!-- panel lateral: lo que se configura una vez -->
       <aside class="flex min-h-0 flex-col gap-3 overflow-y-auto">
 
-        <!-- perfil fiscal -->
+        <!-- perfil fiscal, con su formulario expandible EN SITIO -->
         <div class="rounded-lg border border-border bg-card p-3">
           <div class="mb-2 flex items-center justify-between gap-2">
             <h3 class="flex items-center gap-1.5 text-sm font-semibold"><Landmark class="size-3.5 text-muted-foreground" /> Perfil fiscal</h3>
-            <Button size="sm" :variant="perfil ? 'ghost' : 'default'" @click="openPerfil()">
-              {{ perfil ? 'Editar' : 'Configurar' }}
+            <Button size="sm" :variant="perfilOpen ? 'secondary' : (perfil ? 'ghost' : 'default')" @click="perfilOpen ? (perfilOpen = false) : openPerfil()">
+              {{ perfilOpen ? 'Cerrar' : (perfil ? 'Editar' : 'Configurar') }}
             </Button>
           </div>
-          <p v-if="!perfil" class="text-xs text-muted-foreground">
-            Sin configurar. Hasta que esté, no se puede calcular ninguna retención.
-          </p>
-          <template v-else>
-            <p class="text-sm capitalize">
-              {{ perfil.regimen }}
-              <span class="text-muted-foreground">
-                · IVA <template v-if="perfil.responsable_iva">{{ perfil.periodicidad_iva }}</template><template v-else>no responsable</template>
-              </span>
+
+          <template v-if="!perfilOpen">
+            <p v-if="!perfil" class="text-xs text-muted-foreground">
+              Sin configurar. Hasta que esté, no se puede calcular ninguna retención.
             </p>
-            <div class="mt-1.5 flex flex-wrap gap-1">
-              <Badge v-for="b in banderasActivas" :key="b.key" variant="secondary" class="text-[10px]">{{ b.label }}</Badge>
-              <Badge v-for="m in municipiosIca" :key="m.id" variant="outline" class="font-mono text-[10px]">{{ m.municipio }} {{ m.tarifa_por_mil }}‰</Badge>
-            </div>
-            <p class="mt-1.5 font-mono text-[10px] text-muted-foreground">desde {{ perfil.vigencia_desde }}</p>
+            <template v-else>
+              <p class="text-sm first-letter:uppercase">
+                {{ perfil.regimen }}
+                <span class="text-muted-foreground">
+                  · IVA <template v-if="perfil.responsable_iva">{{ perfil.periodicidad_iva }}</template><template v-else>no responsable</template>
+                </span>
+              </p>
+              <div class="mt-1.5 flex flex-wrap gap-1">
+                <Badge v-for="b in banderasActivas" :key="b.key" variant="secondary" class="text-[10px]">{{ b.label }}</Badge>
+                <Badge v-for="m in municipiosIca" :key="m.id" variant="outline" class="font-mono text-[10px]">{{ m.municipio }} {{ m.tarifa_por_mil }}‰</Badge>
+              </div>
+              <p class="mt-1.5 font-mono text-[10px] text-muted-foreground">desde {{ perfil.vigencia_desde }}</p>
+            </template>
+            <Button variant="ghost" size="sm" class="mt-1 h-7 px-1 text-xs" @click="icaOpen = !icaOpen">
+              <Plus class="size-3" /> Municipio de ICA
+            </Button>
           </template>
-          <Button variant="ghost" size="sm" class="mt-1 h-7 px-1 text-xs" @click="icaOpen = true"><Plus class="size-3" /> Municipio de ICA</Button>
+
+          <!-- formulario del perfil -->
+          <div v-if="perfilOpen" class="grid gap-3 border-t border-border pt-3">
+            <div class="grid gap-1.5">
+              <Label>Vigente desde</Label>
+              <Input v-model="perfilDraft.vigencia_desde" type="date" />
+              <p class="text-[11px] text-muted-foreground">
+                Una fecha nueva crea otra versión y deja intacta la anterior.
+              </p>
+            </div>
+            <div class="grid gap-1.5">
+              <Label>Régimen</Label>
+              <Select v-model="perfilDraft.regimen">
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ordinario">Ordinario</SelectItem>
+                  <SelectItem value="simple">SIMPLE</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div class="flex items-center gap-2">
+              <Checkbox id="resp-iva" v-model="perfilDraft.responsable_iva" />
+              <Label for="resp-iva">Responsable de IVA</Label>
+            </div>
+            <div v-if="perfilDraft.responsable_iva" class="grid gap-1.5">
+              <Label>Periodicidad de IVA</Label>
+              <Select v-model="perfilDraft.periodicidad_iva">
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="bimestral">Bimestral</SelectItem>
+                  <SelectItem value="cuatrimestral">Cuatrimestral</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div class="grid gap-1.5">
+              <div v-for="b in BANDERAS_PERFIL" :key="b.key" class="flex items-center gap-2">
+                <Checkbox :id="b.key" v-model="perfilDraft[b.key]" />
+                <Label :for="b.key" class="text-sm font-normal">{{ b.label }}</Label>
+              </div>
+            </div>
+            <div class="grid gap-1.5"><Label>Actividad CIIU</Label><Input v-model="perfilDraft.ciiu" placeholder="6201" maxlength="4" /></div>
+            <div class="grid gap-1.5"><Label>Notas</Label><Input v-model="perfilDraft.notas" placeholder="Opcional" /></div>
+            <div class="flex gap-2">
+              <Button size="sm" :disabled="savingPerfil" @click="savePerfil">Guardar</Button>
+              <Button size="sm" variant="ghost" :disabled="savingPerfil" @click="perfilOpen = false">Cancelar</Button>
+            </div>
+
+            <div v-if="perfiles.length > 1" class="border-t border-border pt-2">
+              <Button variant="ghost" size="sm" class="h-7 px-1 text-xs" @click="perfilHistorial = !perfilHistorial">
+                {{ perfilHistorial ? 'Ocultar' : 'Ver' }} historial ({{ perfiles.length }})
+              </Button>
+              <div v-if="perfilHistorial" class="mt-1">
+                <div v-for="v in perfiles" :key="v.vigencia_desde" class="flex items-center gap-1 py-0.5 text-xs text-muted-foreground">
+                  <span class="min-w-0 flex-1 truncate"><span class="font-mono">{{ v.vigencia_desde }}</span> · {{ v.regimen }}</span>
+                  <Button variant="ghost" size="icon-sm" @click="openPerfil(v)"><Pencil class="size-3" /></Button>
+                  <Button variant="ghost" size="icon-sm" @click="deletePerfilVersion(v.vigencia_desde)"><Trash2 class="size-3" /></Button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- municipio de ICA, también en sitio -->
+          <div v-if="icaOpen" class="mt-3 grid gap-2 border-t border-border pt-3">
+            <div class="grid gap-1.5"><Label>Municipio</Label><Input v-model="icaDraft.municipio" placeholder="Medellín" /></div>
+            <div class="grid grid-cols-2 gap-2">
+              <div class="grid gap-1.5"><Label>DANE</Label><Input v-model="icaDraft.codigo_dane" placeholder="05001" maxlength="5" /></div>
+              <div class="grid gap-1.5"><Label>Por mil</Label><Input v-model="icaDraft.tarifa_por_mil" placeholder="6,9" /></div>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <div class="grid gap-1.5"><Label>Actividad</Label><Input v-model="icaDraft.actividad" placeholder="Opcional" /></div>
+              <div class="grid gap-1.5"><Label>Desde</Label><Input v-model="icaDraft.vigencia_desde" type="date" /></div>
+            </div>
+            <div class="flex gap-2">
+              <Button size="sm" :disabled="savingIca" @click="saveMunicipio">Guardar</Button>
+              <Button size="sm" variant="ghost" :disabled="savingIca" @click="icaOpen = false">Cancelar</Button>
+            </div>
+            <div v-for="m in municipiosIca" :key="m.id" class="flex items-center gap-1 text-xs text-muted-foreground">
+              <span class="min-w-0 flex-1 truncate">{{ m.municipio }} · {{ m.tarifa_por_mil }}‰ · desde {{ m.vigencia_desde }}</span>
+              <Button variant="ghost" size="icon-sm" @click="deleteMunicipio(m.id)"><X class="size-3" /></Button>
+            </div>
+          </div>
         </div>
 
         <!-- terceros -->
@@ -800,18 +1178,20 @@ watch(dbPath, refresh)
             <span class="font-mono text-sm tabular-nums">{{ tercerosCounts.total }}</span>
           </div>
           <p class="text-xs text-muted-foreground">
-            <template v-if="tercerosCounts.total">{{ tercerosCounts.con_rut }} con RUT consultado · {{ tercerosCounts.sin_rut }} sin consultar</template>
+            <template v-if="tercerosCounts.total">{{ tercerosCounts.con_rut }} con RUT · {{ tercerosCounts.sin_rut }} sin consultar</template>
             <template v-else>Vacío. «Derivar» los saca de las filas del Excel ya importadas.</template>
           </p>
           <div class="mt-2 flex flex-wrap gap-1.5">
             <Button variant="outline" size="sm" :disabled="sembrando" @click="sembrarTerceros"><Sparkles class="size-3.5" /> Derivar</Button>
-            <Button v-if="tercerosCounts.total" variant="ghost" size="sm" @click="tercerosVerOpen = true">Ver listado</Button>
+            <Button v-if="tercerosCounts.total" size="sm" :variant="panelActivo === 'terceros' ? 'secondary' : 'ghost'" @click="alternarPanel('terceros')">
+              {{ panelActivo === 'terceros' ? 'Cerrar listado' : 'Ver listado' }}
+            </Button>
           </div>
         </div>
 
         <!-- plan de cuentas -->
         <div class="flex items-center justify-between gap-2 rounded-lg border border-border bg-card p-3">
-          <div>
+          <div class="min-w-0">
             <h3 class="flex items-center gap-1.5 text-sm font-semibold"><BookText class="size-3.5 text-muted-foreground" /> Plan de cuentas</h3>
             <p class="text-xs text-muted-foreground">El catálogo contable de esta empresa.</p>
           </div>
@@ -833,397 +1213,7 @@ watch(dbPath, refresh)
       </aside>
     </div>
 
-    <!-- ══════════ Traer de la DIAN: una acción, no un panel permanente ══════════ -->
-    <Dialog :open="dianOpen" @update:open="dianOpen = $event">
-      <DialogContent class="sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle class="flex items-center gap-2"><CloudDownload class="size-4" /> Traer de la DIAN</DialogTitle>
-          <DialogDescription>
-            Pega el enlace que la DIAN manda al correo y elige el mes. Contab entra al portal, pide
-            el listado, espera a que lo generen y lo baja. Nada entra a la contabilidad hasta que lo apruebes.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div class="grid gap-4 py-1">
-          <template v-if="dianEstado === 'inactivo'">
-            <div class="grid gap-1.5">
-              <Label for="dian-enlace">Enlace de acceso</Label>
-              <Input id="dian-enlace" v-model="dianEnlace" type="password" autocomplete="off" placeholder="https://catalogo-vpfe.dian.gov.co/User/AuthToken?…" />
-              <p class="text-xs text-muted-foreground">No se guarda en ningún lado: se usa para esta descarga y se descarta.</p>
-            </div>
-            <div class="flex flex-wrap items-end gap-3">
-              <div class="grid gap-1.5">
-                <Label>Mes</Label>
-                <Select v-model="dianMes">
-                  <SelectTrigger class="w-40"><SelectValue /></SelectTrigger>
-                  <SelectContent><SelectItem v-for="m in MESES" :key="m.v" :value="m.v">{{ m.l }}</SelectItem></SelectContent>
-                </Select>
-              </div>
-              <div class="grid gap-1.5">
-                <Label>Año</Label>
-                <Select v-model="dianAnio">
-                  <SelectTrigger class="w-28"><SelectValue /></SelectTrigger>
-                  <SelectContent><SelectItem v-for="a in ANIOS" :key="a" :value="a">{{ a }}</SelectItem></SelectContent>
-                </Select>
-              </div>
-              <Button :disabled="!dianEnlace || !dianPeriodo" @click="bajarDeLaDian">
-                <CloudDownload class="size-4" /> Bajar el listado
-              </Button>
-            </div>
-          </template>
-
-          <template v-else-if="dianEstado === 'corriendo'">
-            <div class="flex items-center gap-3 text-sm text-muted-foreground">
-              <Loader2 class="size-4 shrink-0 animate-spin" /><span>{{ dianMensaje }}</span>
-            </div>
-            <p class="text-xs text-muted-foreground">
-              Se abrió una ventana del navegador: el portal no acepta conexiones sin ventana. Se cierra sola al terminar.
-            </p>
-          </template>
-
-          <template v-else-if="dianEstado === 'listo'">
-            <div class="rounded-md border border-primary/40 bg-primary/5 p-3">
-              <p class="text-sm">
-                Listo<template v-if="dianResultado?.empresa">, como <strong>{{ dianResultado.empresa }}</strong></template>.
-                El listado de <strong>{{ dianPeriodo }}</strong> está descargado y <strong>todavía no se importó</strong>.
-              </p>
-              <div class="mt-3 flex flex-wrap gap-2">
-                <Button :disabled="dianImportando" @click="importarDescarga">{{ dianImportando ? 'Importando…' : `Importar a ${dianPeriodo}` }}</Button>
-                <Button variant="ghost" :disabled="dianImportando" @click="dianEstado = 'inactivo'; dianResultado = null">Descartar</Button>
-              </div>
-            </div>
-          </template>
-
-          <template v-else>
-            <div class="rounded-md border border-destructive/40 bg-destructive/5 p-3">
-              <p class="text-sm">{{ dianMensaje }}</p>
-              <Button variant="outline" size="sm" class="mt-2" @click="dianEstado = 'inactivo'">Volver a intentar</Button>
-            </div>
-          </template>
-
-          <!-- soportes oficiales -->
-          <div class="border-t border-border pt-3">
-            <div class="flex flex-wrap items-center justify-between gap-2">
-              <div class="min-w-0">
-                <div class="text-sm font-medium">Soportes oficiales</div>
-                <p class="max-w-prose text-xs text-muted-foreground">
-                  La DIAN entrega el soporte de cualquier documento con solo el CUFE y el NIT, sin
-                  credenciales. En vez de esperar a que el cliente los mande, los bajamos nosotros.
-                </p>
-              </div>
-              <Button variant="outline" size="sm" :disabled="soportesEstado === 'corriendo' || !dianPeriodo" @click="bajarSoportes(dianPeriodo)">
-                <CloudDownload class="size-3.5" /> Bajar los de {{ dianPeriodo }}
-              </Button>
-            </div>
-            <p v-if="soportesEstado === 'corriendo'" class="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 class="size-3.5 shrink-0 animate-spin" /> {{ soportesMensaje }}
-            </p>
-            <p v-else-if="soportesEstado === 'listo' && soportesResumen" class="mt-2 text-sm">
-              {{ soportesResumen.bajados }} bajados<template v-if="soportesResumen.sin_encontrar"> · {{ soportesResumen.sin_encontrar }} que la DIAN no tiene</template><template v-if="soportesResumen.fallidos"> · {{ soportesResumen.fallidos }} fallidos</template>.
-            </p>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-
-    <!-- ══════════ Listado de terceros ══════════ -->
-    <Dialog :open="tercerosVerOpen" @update:open="tercerosVerOpen = $event">
-      <DialogContent class="sm:max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>Terceros</DialogTitle>
-          <DialogDescription>
-            El proveedor en una compra, el cliente en una venta. De aquí colgarán las reglas de
-            causación y las retenciones.
-          </DialogDescription>
-        </DialogHeader>
-        <div class="flex items-center gap-2">
-          <Search class="size-4 shrink-0 text-muted-foreground" />
-          <Input v-model="tercerosBuscar" placeholder="Buscar por NIT o razón social" class="h-9 max-w-sm" @keyup.enter="reloadTerceros" />
-          <Button variant="ghost" size="sm" @click="reloadTerceros">Buscar</Button>
-          <Button variant="ghost" size="sm" class="ml-auto" @click="openTercero()"><Plus class="size-3.5" /> Agregar</Button>
-        </div>
-        <div class="max-h-[55vh] overflow-y-auto rounded-md border border-border">
-          <div v-for="t in terceros" :key="t.nit" class="flex items-center gap-3 border-b border-border px-3 py-2 last:border-b-0">
-            <div class="min-w-0 flex-1">
-              <p class="truncate text-sm">{{ t.razon_social || '(sin razón social)' }}</p>
-              <p class="font-mono text-[11px] text-muted-foreground">
-                {{ t.nit }}<template v-if="t.dv">-{{ t.dv }}</template>
-                <template v-if="t.ciiu"> · CIIU {{ t.ciiu }}</template>
-                <template v-if="t.municipio"> · {{ t.municipio }}</template>
-              </p>
-            </div>
-            <Badge v-for="r in t.responsabilidades" :key="r" variant="secondary" class="font-mono text-[10px]">{{ r }}</Badge>
-            <Badge v-if="t.consultado_at" variant="outline" class="font-mono text-[10px]">RUT</Badge>
-            <Button variant="ghost" size="sm" :disabled="consultandoNit === t.nit" @click="consultarRut(t)">
-              {{ consultandoNit === t.nit ? 'Consultando…' : 'Consultar RUT' }}
-            </Button>
-            <Button variant="ghost" size="icon-sm" @click="openTercero(t)"><Pencil class="size-3.5" /></Button>
-          </div>
-          <p v-if="!terceros.length" class="px-3 py-4 text-sm text-muted-foreground">Ningún tercero coincide.</p>
-        </div>
-        <p class="text-xs text-muted-foreground">
-          <strong>Consultar RUT</strong> trae hoy la razón social y el tipo. Las responsabilidades y
-          el CIIU se escriben a mano hasta que se confirme de dónde leerlos en el portal.
-        </p>
-      </DialogContent>
-    </Dialog>
-
-    <!-- Editar el perfil fiscal -->
-    <Dialog :open="perfilOpen" @update:open="perfilOpen = $event">
-      <DialogContent class="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Perfil fiscal</DialogTitle>
-          <DialogDescription>
-            Guardar con una fecha nueva crea otra versión y deja intacta la anterior;
-            guardar con una fecha que ya existe actualiza esa versión.
-          </DialogDescription>
-        </DialogHeader>
-        <div class="grid gap-4 py-2">
-          <div class="grid gap-2 sm:grid-cols-2">
-            <div class="grid gap-1.5">
-              <Label>Vigente desde</Label>
-              <Input v-model="perfilDraft.vigencia_desde" type="date" />
-            </div>
-            <div class="grid gap-1.5">
-              <Label>Régimen</Label>
-              <Select v-model="perfilDraft.regimen">
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="ordinario">Ordinario</SelectItem>
-                  <SelectItem value="simple">SIMPLE</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          <div class="flex items-center gap-2">
-            <Checkbox id="resp-iva" v-model="perfilDraft.responsable_iva" />
-            <Label for="resp-iva">Responsable de IVA</Label>
-          </div>
-          <div v-if="perfilDraft.responsable_iva" class="grid gap-1.5">
-            <Label>Periodicidad de IVA</Label>
-            <Select v-model="perfilDraft.periodicidad_iva">
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="bimestral">Bimestral</SelectItem>
-                <SelectItem value="cuatrimestral">Cuatrimestral</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div class="grid gap-2">
-            <div v-for="b in BANDERAS_PERFIL" :key="b.key" class="flex items-center gap-2">
-              <Checkbox :id="b.key" v-model="perfilDraft[b.key]" />
-              <Label :for="b.key">{{ b.label }}</Label>
-            </div>
-          </div>
-
-          <div class="grid gap-2 sm:grid-cols-2">
-            <div class="grid gap-1.5">
-              <Label>Actividad CIIU</Label>
-              <Input v-model="perfilDraft.ciiu" placeholder="6201" maxlength="4" />
-            </div>
-            <div class="grid gap-1.5">
-              <Label>Notas</Label>
-              <Input v-model="perfilDraft.notas" placeholder="Opcional" />
-            </div>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="ghost" :disabled="savingPerfil" @click="perfilOpen = false">Cancelar</Button>
-          <Button :disabled="savingPerfil" @click="savePerfil">Guardar</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-
-    <!-- Agregar municipio de ICA -->
-    <Dialog :open="icaOpen" @update:open="icaOpen = $event">
-      <DialogContent class="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Municipio de ICA</DialogTitle>
-          <DialogDescription>La tarifa va por mil y también tiene fecha de vigencia.</DialogDescription>
-        </DialogHeader>
-        <div class="grid gap-3 py-2">
-          <div class="grid gap-1.5">
-            <Label>Municipio</Label>
-            <Input v-model="icaDraft.municipio" placeholder="Medellín" />
-          </div>
-          <div class="grid gap-2 sm:grid-cols-2">
-            <div class="grid gap-1.5">
-              <Label>Código DANE</Label>
-              <Input v-model="icaDraft.codigo_dane" placeholder="05001" maxlength="5" />
-            </div>
-            <div class="grid gap-1.5">
-              <Label>Tarifa por mil</Label>
-              <Input v-model="icaDraft.tarifa_por_mil" placeholder="6,9" />
-            </div>
-          </div>
-          <div class="grid gap-2 sm:grid-cols-2">
-            <div class="grid gap-1.5">
-              <Label>Actividad</Label>
-              <Input v-model="icaDraft.actividad" placeholder="Opcional" />
-            </div>
-            <div class="grid gap-1.5">
-              <Label>Vigente desde</Label>
-              <Input v-model="icaDraft.vigencia_desde" type="date" />
-            </div>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="ghost" :disabled="savingIca" @click="icaOpen = false">Cancelar</Button>
-          <Button :disabled="savingIca" @click="saveMunicipio">Guardar</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-
-    <!-- Editar un tercero -->
-    <Dialog :open="terceroOpen" @update:open="terceroOpen = $event">
-      <DialogContent class="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Tercero</DialogTitle>
-          <DialogDescription>El NIT identifica al tercero; guardar con uno que ya existe lo actualiza.</DialogDescription>
-        </DialogHeader>
-        <div class="grid gap-3 py-2">
-          <div class="grid gap-1.5">
-            <Label>NIT</Label>
-            <Input v-model="terceroDraft.nit" placeholder="830008686" />
-          </div>
-          <div class="grid gap-1.5">
-            <Label>Razón social</Label>
-            <Input v-model="terceroDraft.razon_social" />
-          </div>
-          <div class="grid gap-2 sm:grid-cols-2">
-            <div class="grid gap-1.5">
-              <Label>Actividad CIIU</Label>
-              <Input v-model="terceroDraft.ciiu" placeholder="4711" maxlength="4" />
-            </div>
-            <div class="grid gap-1.5">
-              <Label>Municipio</Label>
-              <Input v-model="terceroDraft.municipio" placeholder="Medellín" />
-            </div>
-          </div>
-          <div class="grid gap-1.5">
-            <Label>Responsabilidades</Label>
-            <Input v-model="terceroDraft.responsabilidades" placeholder="O-13, O-15, O-23" />
-          </div>
-          <div class="grid gap-1.5">
-            <Label>Notas</Label>
-            <Input v-model="terceroDraft.notas" placeholder="Opcional" />
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="ghost" :disabled="savingTercero" @click="terceroOpen = false">Cancelar</Button>
-          <Button :disabled="savingTercero" @click="saveTercero">Guardar</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-
-    <!-- Pickers de carpeta (soportes por mes + backup) -->
     <DirectoryPicker :open="periodoPickerOpen" :initial-path="''" :title="periodoPickerTarget ? `Carpeta de soportes de ${monthLabel(periodoPickerTarget)}` : 'Carpeta de soportes del mes'" @pick="onPeriodoFolderPicked" @close="periodoPickerOpen = false" />
     <DirectoryPicker :open="backupPickerOpen" :initial-path="''" title="Carpeta donde se guardará el backup (.contab.zip)" @pick="onBackupFolderPicked" @close="backupPickerOpen = false" />
-
-    <!-- Crear mes -->
-    <Dialog v-model:open="newMonthOpen">
-      <DialogContent class="sm:max-w-sm">
-        <DialogHeader>
-          <DialogTitle>Crear mes</DialogTitle>
-          <DialogDescription>Elige el mes que vas a trabajar. Luego subes su Excel y eliges su carpeta de soportes.</DialogDescription>
-        </DialogHeader>
-        <div class="grid grid-cols-2 gap-2">
-          <div class="flex flex-col gap-1.5">
-            <Label>Mes</Label>
-            <Select :model-value="newMonthMes" @update:model-value="newMonthMes = String($event ?? '')">
-              <SelectTrigger class="w-full"><SelectValue placeholder="Mes" /></SelectTrigger>
-              <SelectContent><SelectItem v-for="m in MESES" :key="m.v" :value="m.v">{{ m.l }}</SelectItem></SelectContent>
-            </Select>
-          </div>
-          <div class="flex flex-col gap-1.5">
-            <Label>Año</Label>
-            <Select :model-value="newMonthAnio" @update:model-value="newMonthAnio = String($event ?? '')">
-              <SelectTrigger class="w-full"><SelectValue placeholder="Año" /></SelectTrigger>
-              <SelectContent><SelectItem v-for="y in ANIOS" :key="y" :value="y">{{ y }}</SelectItem></SelectContent>
-            </Select>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="secondary" @click="newMonthOpen = false">Cancelar</Button>
-          <Button :disabled="!newMonthValue || creatingMonth" @click="createMonth">{{ creatingMonth ? 'Creando…' : 'Crear mes' }}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-
-    <!-- Mover Excel a otro mes -->
-    <Dialog :open="moveTarget !== null" @update:open="(v) => { if (!v) moveTarget = null }">
-      <DialogContent class="sm:max-w-sm">
-        <DialogHeader>
-          <DialogTitle>Mover Excel de mes</DialogTitle>
-          <DialogDescription>Elige el mes destino para «{{ moveTarget?.source_name }}».</DialogDescription>
-        </DialogHeader>
-        <div class="flex flex-col gap-1.5">
-          <Label>Mes destino</Label>
-          <Select :model-value="moveDestino" @update:model-value="moveDestino = String($event ?? '')">
-            <SelectTrigger class="w-full"><SelectValue placeholder="Elegir mes…" /></SelectTrigger>
-            <SelectContent><SelectItem v-for="p in periodos" :key="p.periodo" :value="p.periodo">{{ monthLabel(p.periodo) }} ({{ p.periodo }})</SelectItem></SelectContent>
-          </Select>
-        </div>
-        <DialogFooter>
-          <Button variant="secondary" @click="moveTarget = null">Cancelar</Button>
-          <Button :disabled="!moveDestino || busy" @click="confirmMove">Mover</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-
-    <!-- Borrar mes -->
-    <Dialog :open="deleteMonthTarget !== null" @update:open="(v) => { if (!v) deleteMonthTarget = null }">
-      <DialogContent class="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Borrar mes {{ deleteMonthTarget }}</DialogTitle>
-          <DialogDescription>Se elimina el mes y el Excel que tenga cargado. Los soportes en disco no se tocan. Esta acción no se puede deshacer.</DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button variant="secondary" @click="deleteMonthTarget = null">Cancelar</Button>
-          <Button variant="destructive" :disabled="busy" @click="confirmDeleteMonth">Borrar mes</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-
-    <!-- Archivar empresa -->
-    <Dialog v-model:open="archiveModalOpen">
-      <DialogContent class="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Archivar empresa</DialogTitle>
-          <DialogDescription>Quedará oculta de la lista principal, pero sus datos se conservan y puedes desarchivarla cuando quieras.</DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button variant="secondary" @click="archiveModalOpen = false">Cancelar</Button>
-          <Button :disabled="archiving" @click="confirmArchive">{{ archiving ? 'Archivando…' : 'Archivar' }}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-
-    <!-- Eliminar empresa -->
-    <Dialog v-model:open="deleteModalOpen">
-      <DialogContent class="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Eliminar empresa</DialogTitle>
-          <DialogDescription>La empresa sale del listado y se guarda en la papelera.</DialogDescription>
-        </DialogHeader>
-        <div class="flex flex-col gap-3">
-          <!-- D-078: ya NO es irreversible. Decir que lo es era mentir al usuario. -->
-          <div class="rounded-md border border-status-warning/30 bg-status-warning-bg px-3 py-2 text-sm text-status-warning">
-            La empresa se guarda en la <strong>papelera durante 30 días</strong> y después se borra
-            definitivamente. Si quieres conservarla más tiempo, archívala o haz un backup.
-          </div>
-          <div class="flex flex-col gap-1.5">
-            <Label for="del-nit">Escribe el NIT <strong class="text-foreground">{{ info?.nit }}</strong> para confirmar:</Label>
-            <Input id="del-nit" v-model="deleteConfirmNit" :placeholder="info?.nit" inputmode="numeric" />
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="secondary" @click="deleteModalOpen = false">Cancelar</Button>
-          <Button variant="destructive" :disabled="deleting || deleteConfirmNit.trim() !== info?.nit" @click="confirmDelete">{{ deleting ? 'Eliminando…' : 'Enviar a la papelera' }}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   </div>
 </template>
