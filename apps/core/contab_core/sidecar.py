@@ -490,9 +490,17 @@ def _h_documentos_sin_soporte(params: dict) -> dict:
             for r in filas
             if r["cufe_cude"] not in ya_estan
         ]
+        # Si este mes no tiene carpeta, se dicen los que sí: «no se puede» a secas
+        # parece un fallo del programa, y aquí lo que falta es un dato del usuario.
+        con_carpeta = [
+            r["periodo"] for r in conn.execute(
+                "SELECT periodo FROM periodo_folder WHERE pdfs_folder IS NOT NULL "
+                "ORDER BY periodo DESC"
+            ).fetchall()
+        ]
         return {
             "periodo": periodo, "carpeta": carpeta, "nit": nit,
-            "total": len(filas), "faltan": faltan,
+            "total": len(filas), "faltan": faltan, "meses_con_carpeta": con_carpeta,
         }
     finally:
         conn.close()

@@ -259,11 +259,19 @@ async function bajarSoportes(periodo: string) {
   soportesMensaje.value = 'Viendo cuáles faltan…'
   soportesResumen.value = null
   try {
-    const faltantes = await rpc<{ carpeta: string | null; faltan: { cufe: string; nit: string }[]; total: number }>(
+    const faltantes = await rpc<{ carpeta: string | null; faltan: { cufe: string; nit: string }[]; total: number; meses_con_carpeta: string[] }>(
       'documentos_sin_soporte', { db_path: dbPath.value, periodo },
     )
     if (!faltantes.carpeta) {
-      throw new Error('Este mes no tiene carpeta de soportes. Configúrala primero.')
+      // Decir «no se puede» a secas parece un fallo del programa; lo que falta es
+      // un dato, y el mensaje tiene que decir cuál y dónde ponerlo.
+      const otros = faltantes.meses_con_carpeta?.length
+        ? ` Los meses con carpeta son: ${faltantes.meses_con_carpeta.join(', ')}.`
+        : ' Ningún mes tiene carpeta todavía.'
+      throw new Error(
+        `${periodo} no tiene carpeta de soportes en esta empresa.${otros} `
+        + 'Elígela con «Cambiar soportes» en la lista de meses, o cambia el mes de arriba.',
+      )
     }
     if (!faltantes.faltan.length) {
       soportesEstado.value = 'inactivo'
