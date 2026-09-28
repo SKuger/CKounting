@@ -35,6 +35,7 @@ def estado_empresa(db_path: str | Path, periodo: str) -> dict[str, Any]:
         "periodo": periodo,
         "mes_creado": False,
         "pdfs_folder": None,
+        "soportes_carpeta_existe": True,
         "cargas": 0,
         "filas": 0,
         "soportes": 0,
@@ -69,6 +70,7 @@ def estado_empresa(db_path: str | Path, periodo: str) -> dict[str, Any]:
             estado["mes_creado"] = True
 
         if estado["pdfs_folder"]:
+            estado["soportes_carpeta_existe"] = Path(estado["pdfs_folder"]).is_dir()
             sop = conn.execute(
                 """
                 SELECT COUNT(*) AS total,

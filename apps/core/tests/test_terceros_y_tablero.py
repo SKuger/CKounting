@@ -255,3 +255,18 @@ def test_la_consulta_masiva_respeta_la_cancelacion(tmp_path, monkeypatch):
     with pytest.raises(jobs.Cancelled):
         sidecar._h_terceros_consultar_rut_todos(
             {"db_path": creada["db_path"], "pausa": 0}, progress=cancela)
+
+
+def test_una_carpeta_de_soportes_que_ya_no_existe_se_avisa(tmp_path):
+    """Mover la carpeta en el disco no puede verse como «no hay soportes»: el
+    contador saldría a pedirle al cliente documentos que ya tiene (D-080)."""
+    creada = sidecar._h_create_empresa({"nit": "900181831", "razon_social": "REAL"})
+    db = creada["db_path"]
+    viva = tmp_path / "soportes"
+    viva.mkdir()
+    sidecar._h_create_periodo({"db_path": db, "periodo": "2026-07"})
+    sidecar._h_set_periodo_pdfs_folder({"db_path": db, "periodo": "2026-07", "folder": str(viva)})
+    assert storage.list_periodos(db)[0]["pdfs_folder_existe"] is True
+
+    viva.rename(tmp_path / "movida")
+    assert storage.list_periodos(db)[0]["pdfs_folder_existe"] is False

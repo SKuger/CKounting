@@ -772,11 +772,17 @@ def list_periodos(db_path: str | Path, include_deleted: bool = False) -> list[di
                 f"FROM excel_load WHERE periodo = ? {del_filter}",
                 (p,),
             ).fetchone()
+            carpeta = folders.get(p)
             out.append({
                 "periodo": p,
                 "load_count": agg["lc"],
                 "row_count": agg["rc"],
-                "pdfs_folder": folders.get(p),
+                "pdfs_folder": carpeta,
+                # Una carpeta configurada que ya no está en disco NO es lo mismo que
+                # «no hay soportes»: el usuario la movió o cambió de máquina, y sin
+                # decirlo la pantalla muestra 0 CUFE y parece que faltan documentos.
+                # Es la firma que D-080 prohíbe: causa técnica disfrazada de dato.
+                "pdfs_folder_existe": bool(carpeta) and Path(carpeta).is_dir(),
             })
         out.sort(key=lambda d: d["periodo"], reverse=True)
         return out

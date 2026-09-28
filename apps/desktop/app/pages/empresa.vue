@@ -4,7 +4,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '~/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '~/components/ui/select'
 
 type EmpresaInfo = { db_path: string; nit: string; dv: string | null; razon_social: string; archived?: boolean; created_at: string; default_folder?: string | null; pdfs_folder?: string | null }
-type Periodo = { periodo: string; load_count: number; row_count: number; pdfs_folder: string | null; indexed_cufe_count: number }
+type Periodo = { periodo: string; load_count: number; row_count: number; pdfs_folder: string | null; pdfs_folder_existe: boolean; indexed_cufe_count: number }
 type Carga = { id: number; source_name: string; loaded_at: string; total_rows: number; periodo?: string | null; deleted?: boolean }
 type BackupResult = { path: string; size_bytes: number; excels_included: number; pdfs_included: number }
 type PerfilFiscal = {
@@ -1024,7 +1024,8 @@ watch(dbPath, refresh)
             <div class="min-w-0">
               <div class="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">Soportes</div>
               <div class="truncate text-sm" :title="mesVigente.pdfs_folder || ''">
-                <span v-if="mesVigente.pdfs_folder">{{ folderName(mesVigente.pdfs_folder) }}</span>
+                <span v-if="mesVigente.pdfs_folder && mesVigente.pdfs_folder_existe">{{ folderName(mesVigente.pdfs_folder) }}</span>
+                <span v-else-if="mesVigente.pdfs_folder" class="text-destructive">carpeta no encontrada</span>
                 <span v-else class="text-amber-600 dark:text-amber-400">sin carpeta</span>
               </div>
             </div>
@@ -1081,8 +1082,13 @@ watch(dbPath, refresh)
             >
               <span class="w-36 shrink-0 text-sm first-letter:uppercase">{{ monthLabel(p.periodo) }}</span>
               <span class="font-mono text-[11px] text-muted-foreground">{{ p.row_count }} filas · {{ p.indexed_cufe_count }} CUFE</span>
-              <span class="truncate text-xs text-muted-foreground" :title="p.pdfs_folder || ''">
-                {{ p.pdfs_folder ? folderName(p.pdfs_folder) : 'sin carpeta' }}
+              <span
+                class="truncate text-xs" :title="p.pdfs_folder || ''"
+                :class="p.pdfs_folder && !p.pdfs_folder_existe ? 'text-destructive' : 'text-muted-foreground'"
+              >
+                <template v-if="!p.pdfs_folder">sin carpeta</template>
+                <template v-else-if="!p.pdfs_folder_existe">carpeta no encontrada</template>
+                <template v-else>{{ folderName(p.pdfs_folder) }}</template>
               </span>
               <div class="ml-auto flex items-center gap-1">
                 <Button
