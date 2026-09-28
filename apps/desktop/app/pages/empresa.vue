@@ -85,17 +85,20 @@ const panelActivo = computed(() => {
   if (deleteMonthTarget.value) return 'borrarMes'
   if (archiveModalOpen.value) return 'archivar'
   if (deleteModalOpen.value) return 'borrarEmpresa'
+  if (periodoPickerOpen.value || backupPickerOpen.value) return 'carpeta'
   return null
 })
 const TITULOS_PANEL: Record<string, string> = {
   tercero: 'Tercero', terceros: 'Terceros', dian: 'Traer de la DIAN',
   mes: 'Crear mes', mover: 'Mover el Excel de mes', borrarMes: 'Borrar mes',
   archivar: 'Archivar empresa', borrarEmpresa: 'Enviar la empresa a la papelera',
+  carpeta: 'Elegir carpeta',
 }
 function cerrarPaneles() {
   dianOpen.value = false; tercerosVerOpen.value = false; terceroOpen.value = false
   newMonthOpen.value = false; moveTarget.value = null; deleteMonthTarget.value = null
   archiveModalOpen.value = false; deleteModalOpen.value = false
+  periodoPickerOpen.value = false; backupPickerOpen.value = false
 }
 function alternarPanel(cual: 'dian' | 'terceros' | 'mes') {
   const abierto = panelActivo.value === cual
@@ -109,6 +112,8 @@ function alternarPanel(cual: 'dian' | 'terceros' | 'mes') {
 // El mes vigente es el que se trabaja; el resto es historial. Darles el mismo peso
 // visual hacía que buscar el de este mes costara lo mismo que buscar uno de hace
 // un año, y no es lo mismo que se hace cada día.
+function abrirPickerMes(periodo: string) { cerrarPaneles(); _openPeriodoPickerOriginal(periodo) }
+
 const mesVigente = computed(() => periodos.value[0] ?? null)
 const historialMeses = computed(() => periodos.value.slice(1))
 const icaOpen = ref(false)
@@ -530,7 +535,7 @@ async function confirmDeleteMonth() {
 }
 
 // ── carpeta de soportes DEL MES ──
-function openPeriodoPicker(periodo: string) { periodoPickerTarget.value = periodo; periodoPickerOpen.value = true }
+function _openPeriodoPickerOriginal(periodo: string) { periodoPickerTarget.value = periodo; periodoPickerOpen.value = true }
 async function setPeriodoFolder(periodo: string, folder: string | null) {
   busy.value = true
   try {
@@ -730,7 +735,20 @@ watch(dbPath, refresh)
     <Card v-else class="shrink-0"><CardContent class="py-6"><div class="rounded-md border border-status-error/30 bg-status-error-bg px-3 py-2 text-sm text-status-error">Empresa no encontrada. <NuxtLink to="/" class="underline">Volver</NuxtLink></div></CardContent></Card>
 
     <!-- ══════════ el panel expansible: nunca un modal ══════════ -->
-    <section v-if="panelActivo" class="max-h-[62vh] shrink-0 overflow-y-auto rounded-lg border border-primary/40 bg-card">
+    <!-- el selector de carpetas trae su propio marco -->
+    <DirectoryPicker
+      v-if="panelActivo === 'carpeta'"
+      class="shrink-0"
+      :open="periodoPickerOpen || backupPickerOpen"
+      :initial-path="''"
+      :title="periodoPickerOpen
+        ? (periodoPickerTarget ? `Carpeta de soportes de ${monthLabel(periodoPickerTarget)}` : 'Carpeta de soportes del mes')
+        : 'Carpeta donde se guardará el backup (.contab.zip)'"
+      @pick="(ruta: string) => periodoPickerOpen ? onPeriodoFolderPicked(ruta) : onBackupFolderPicked(ruta)"
+      @close="cerrarPaneles"
+    />
+
+    <section v-if="panelActivo && panelActivo !== 'carpeta'" class="max-h-[62vh] shrink-0 overflow-y-auto rounded-lg border border-primary/40 bg-card">
       <div class="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-border bg-card px-4 py-2.5">
         <h2 class="text-sm font-semibold">{{ TITULOS_PANEL[panelActivo] }}</h2>
         <Button variant="ghost" size="icon-sm" aria-label="Cerrar" @click="cerrarPaneles"><X class="size-4" /></Button>
@@ -999,7 +1017,7 @@ watch(dbPath, refresh)
               <Button variant="outline" size="sm" @click="alternarPanel('dian')"><CloudDownload class="size-4" /> Traerlo de la DIAN</Button>
             </template>
             <div class="ml-auto flex items-center gap-1">
-              <Button variant="ghost" size="sm" :disabled="busy" @click="openPeriodoPicker(mesVigente.periodo)">
+              <Button variant="ghost" size="sm" :disabled="busy" @click="abrirPickerMes(mesVigente.periodo)">
                 <FolderOpen class="size-3.5" /> {{ mesVigente.pdfs_folder ? 'Cambiar carpeta' : 'Elegir carpeta' }}
               </Button>
               <Button variant="ghost" size="icon-sm" title="Borrar mes" :disabled="busy" @click="cerrarPaneles(); deleteMonthTarget = mesVigente.periodo"><Trash2 class="size-3.5" /></Button>
@@ -1038,7 +1056,7 @@ watch(dbPath, refresh)
                   variant="ghost" size="sm"
                   @click="navigateTo({ path: '/load', query: { db: dbPath, id: c.id } })"
                 >Abrir <ChevronRight class="size-3.5" /></Button>
-                <Button variant="ghost" size="sm" :disabled="busy" @click="openPeriodoPicker(p.periodo)"><FolderOpen class="size-3.5" /></Button>
+                <Button variant="ghost" size="sm" :disabled="busy" @click="abrirPickerMes(p.periodo)"><FolderOpen class="size-3.5" /></Button>
                 <Button variant="ghost" size="icon-sm" title="Borrar mes" :disabled="busy" @click="cerrarPaneles(); deleteMonthTarget = p.periodo"><Trash2 class="size-3.5" /></Button>
               </div>
             </div>
@@ -1213,7 +1231,5 @@ watch(dbPath, refresh)
       </aside>
     </div>
 
-    <DirectoryPicker :open="periodoPickerOpen" :initial-path="''" :title="periodoPickerTarget ? `Carpeta de soportes de ${monthLabel(periodoPickerTarget)}` : 'Carpeta de soportes del mes'" @pick="onPeriodoFolderPicked" @close="periodoPickerOpen = false" />
-    <DirectoryPicker :open="backupPickerOpen" :initial-path="''" title="Carpeta donde se guardará el backup (.contab.zip)" @pick="onBackupFolderPicked" @close="backupPickerOpen = false" />
   </div>
 </template>

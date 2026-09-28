@@ -200,6 +200,7 @@ async function onExportFolder(path: string) {
 
 <template>
   <div class="flex h-full min-h-0 flex-col gap-3">
+    <DirectoryPicker :open="exportOpen" :initial-path="''" title="Carpeta donde se guardará el PUC (.xlsx)" @pick="onExportFolder" @close="exportOpen = false" />
     <header class="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
       <NuxtLink :to="{ path: '/empresa', query: { db: dbPath } }" class="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground">
         <ArrowLeft class="size-3.5" /> {{ razonSocial || 'Empresa' }}
@@ -410,7 +411,6 @@ async function onExportFolder(path: string) {
       </DialogContent>
     </Dialog>
 
-    <DirectoryPicker :open="exportOpen" :initial-path="''" title="Carpeta donde se guardará el PUC (.xlsx)" @pick="onExportFolder" @close="exportOpen = false" />
   </div>
 </template>
 

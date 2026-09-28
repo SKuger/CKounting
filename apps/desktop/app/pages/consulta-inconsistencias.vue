@@ -187,6 +187,13 @@ function statusLabel(s: RowStatus): string {
 
 <template>
   <div class="mx-auto flex w-full max-w-5xl flex-col gap-4">
+    <DirectoryPicker
+      :open="exportPickerOpen"
+      :initial-path="''"
+      title="Carpeta donde se guardará el Excel de razones sociales"
+      @pick="onExportFolderPicked"
+      @close="exportPickerOpen = false"
+    />
     <NuxtLink to="/consulta-dian" class="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground">
       <ArrowLeft class="size-3.5" /> Consultas DIAN
     </NuxtLink>
@@ -324,12 +331,5 @@ function statusLabel(s: RowStatus): string {
       </Card>
     </template>
 
-    <DirectoryPicker
-      :open="exportPickerOpen"
-      :initial-path="''"
-      title="Carpeta donde se guardará el Excel de razones sociales"
-      @pick="onExportFolderPicked"
-      @close="exportPickerOpen = false"
-    />
   </div>
 </template>
