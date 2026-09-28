@@ -369,20 +369,31 @@ para correr sin él.)*
 - [x] **2.4** — The `robot` path reuses the persistent browser context and the CDP
       mode already working in [`apps/dian-rut/scraper.py`](../apps/dian-rut/scraper.py),
       instead of launching a second browser stack.
-- [ ] **2.5** — ◐ **A medias.** Lo que hay: la descarga corre en segundo plano en
-      el sidecar DIAN, con mensajes de avance que la UI sondea, y el navegador
-      **borra su perfil al terminar** para no dejar la sesión de un cliente en
-      disco. Lo que **no** hay: la bitácora `ingesta_run` —cuándo corrió, por qué
-      camino, cuántos documentos, cuál falló— y la corrida **sobre varias
-      empresas** de un golpe. El trabajo no va por `jobs.py` porque ocurre en el
-      otro sidecar, que es donde está el navegador; eso hay que decidirlo antes de
-      cerrar la tarea.
-- [ ] **2.6** — ◐ **A medias.** **Hecho**: `pdf_cufe` abre los PDF cifrados
+- [x] **2.5** — La descarga corre en segundo plano en el sidecar DIAN con avance
+      que la UI sondea, el navegador **borra su perfil al terminar**, y cada corrida
+      queda en la bitácora `ingesta_run` (migración 6): cuándo, qué mes, por qué
+      camino, cuántos documentos, y el error **enmascarado** si falló.
+  - **El lote sobre varias empresas se retiró** (decisión de @SKuger, 2026-09-28).
+    Ese requisito venía de suponer credenciales guardadas; con un enlace de un solo
+    uso **por empresa**, un lote es pegar veinte enlaces — el mismo trabajo, más
+    código y más formas de fallar. Si la DIAN algún día da un acceso que sirva para
+    varias, se reabre.
+  - El trabajo no va por `jobs.py` porque ocurre en el otro sidecar, que es donde
+    está el navegador.
+- [x] **2.6** — **Hecho**: `pdf_cufe` abre los PDF cifrados
       (`-upw` y `password=` en pdfium), el estado nuevo `protegido` reemplaza al
       falso `no_text`, `EXTRACTOR_VERSION` sube a 2 para que se re-lea lo cacheado,
       y dar la contraseña fuerza a reintentar lo que quedó marcado como protegido.
       Seis pruebas, con un PDF cifrado generado al vuelo desde una muestra del repo.
-      **Falta**: el descargador que trae cada soporte por CUFE del camino público.
+      Y el **descargador por CUFE**: `documentos_sin_soporte` dice cuáles faltan,
+      el sidecar los baja del camino público uno por uno, y al terminar se re-lee la
+      carpeta **pasando el NIT como contraseña**.
+  - 💡 **Heuristic.** Probe the gate before you design around it. This downloader
+    was going to be «imposible de automatizar» because of Cloudflare — until three
+    consecutive searches in one window showed the Turnstile never appears on this
+    path. Ten minutes of probing turned a blocked task into a 7-minute unattended
+    run. *(ES: mide la barrera antes de diseñar alrededor de ella — tres búsquedas
+    seguidas mostraron que el «soy humano» no aparece en este camino.)*
       El detalle original de la tarea: The portal offers **no XML** — not in
       the listing, not in the public document view. What it does offer is better
       than expected: any document can be fetched **by CUFE + NIT without any
