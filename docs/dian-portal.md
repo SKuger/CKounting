@@ -93,16 +93,82 @@ abra, decir *«protegido con contraseña»* — nunca *«sin texto»*.
 
 ## Camino autenticado — el listado del mes
 
-**Pendiente de verificar.** Es la mitad que necesita entrar con la cuenta de la
-empresa. Lo que hay que dejar escrito aquí cuando se haga:
+**Verificado el 2026-09-28** contra una empresa real, entrando de verdad y
+exportando un listado.
 
-- Cómo se autentica y **qué token se emite, y cuánto dura** — de eso depende si se
-  pueden bajar N empresas en una corrida o hay que reautenticar en medio.
-- **Qué petición hay detrás del botón «Exportar»** del listado de Documentos
-  electrónicos, con sus parámetros de rango de fechas.
-- Si desde ahí se puede bajar el **XML** de cada documento. El camino público
-  **no ofrece XML**, solo PDF, así que hoy la Fase 3 sigue dependiendo de
-  conseguir los XML por otra vía (el correo de recepción del cliente).
+### No hay contraseña: el acceso es un enlace de un solo uso
+
+La DIAN manda por correo un enlace de la forma:
+
+```
+GET /User/AuthToken?pk=<idUsuario>|<cédula>&rk=<NIT>&token=<uuid>
+```
+
+Abrirlo **establece la sesión**. No hay usuario/clave que guardar en ninguna parte.
+
+> **Esto contradice el supuesto de D-098.** Esa decisión guardaba credenciales
+> cifradas en el llavero del sistema porque se asumía un login con clave. No hay
+> clave: lo que el contador pega es un enlace efímero. La bóveda deja de ser
+> necesaria para este camino, y con ella se va el mayor riesgo del proyecto
+> —custodiar credenciales fiscales ajenas—. **Pendiente de confirmar con @SKuger
+> antes de reescribir la decisión.**
+
+### La cadena
+
+| # | Petición | Datos | Respuesta |
+|---|---|---|---|
+| 1 | `GET /User/AuthToken` | `pk`, `rk`, `token` (del correo) | sesión establecida (cookie) |
+| 2 | `GET /Document/Export` | — | el formulario de «Descargar listados» |
+| 3 | `POST /Document/Export` | `StartDate`, `EndDate`, `GroupCode`, `ReceiverCode`, `Type`, `AmountAdmin`, token anti-CSRF | `200 application/json` — la solicitud queda **encolada** |
+| 4 | `POST /Document/TasksPartial` | token anti-CSRF | la tabla de solicitudes con su estado |
+| 5 | `GET /Document/DownloadExportedZipFile?pk=<NIT>&rk=<uuid de la solicitud>` | — | **un ZIP** |
+
+**Es asíncrono**: crear la solicitud no devuelve el archivo. Hay que sondear el
+paso 4 hasta que la fila aparezca completa, y solo entonces descargar. El `rk` de
+la descarga es el identificador de esa solicitud, no el token de acceso.
+
+### El formulario
+
+| Campo | Qué es |
+|---|---|
+| `ReceiverCode` | NIT receptor. Opcional, filtra |
+| `export-range` | rango de fechas, formato `AAAA-MM-DD - AAAA-MM-DD` |
+| `GroupCode` | `0` Todos · `1` Emitidos · `2` Recibidos |
+
+Tope declarado en la página: **100.000 documentos por exportación**.
+
+### Tres trampas al automatizarlo
+
+1. **El navegador sin ventana está bloqueado.** Con `headless=True` el portal
+   responde *«Solicitud bloqueada por controles de seguridad»*. Necesita navegador
+   real — lo mismo que ya hace `apps/dian-rut`.
+2. **El campo de fechas no acepta que le escriban.** Es un selector de rango con
+   calendario propio: un `fill()` se descarta y queda el rango por defecto. Hay que
+   manejar el calendario o fijar el valor disparando los eventos del widget. *(Se
+   descubrió creando sin querer una solicitud con el rango por defecto.)*
+3. **Lo que baja es un ZIP, no un `.xlsx`.** Dentro viene un único Excel con el
+   nombre del uuid de la solicitud. El importador tiene que descomprimir.
+
+### El Excel de adentro es el que Contab ya sabe leer
+
+Comprobado con `excel.load_excel` sobre el archivo descargado: **32 columnas**, la
+estructura de `excel-structure.md`, y parsea sin tocar nada.
+
+Dos diferencias con lo documentado, que se corrigieron en `excel-structure.md`:
+
+- **Las fechas vienen ISO** (`2026-09-28`, `2026-09-28T14:42:08`), no `dd-mm-yyyy`.
+  El código ya lo maneja —`periodo_from_row` valida la forma antes de usarla
+  (D-081)—; lo que estaba desactualizado era la documentación.
+- Aparece el tipo **`Application response`**, que no estaba en la lista. Son los
+  eventos RADIAN (acuse, aceptación), con `Total` e `IVA` en cero. En la muestra:
+  9 de 10 filas. **Ojo al validar**: no son facturas y no tienen soporte que
+  buscarles.
+
+### Lo que sigue sin resolver
+
+**No se vio dónde bajar el XML** de un documento. Ni el camino público (solo PDF)
+ni el listado lo ofrecen. Hasta que aparezca, la Fase 3 depende de conseguir los
+XML por el correo de recepción del cliente.
 
 ## Cómo se capturó esto
 
