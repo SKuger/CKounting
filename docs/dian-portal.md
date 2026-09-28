@@ -164,7 +164,29 @@ Dos diferencias con lo documentado, que se corrigieron en `excel-structure.md`:
   9 de 10 filas. **Ojo al validar**: no son facturas y no tienen soporte que
   buscarles.
 
-### Lo que sigue sin resolver
+### ⚠ Lo que NO se ha mirado: «Documentos recibidos»
+
+**Pendiente, y es la pregunta más importante que queda del portal.** El menú tiene
+una sección `/Document/Received` que **nunca se abrió**. El recorrido del
+2026-09-28 fue directo a «Descarga de listados», que era lo que el contador usa a
+diario, y la sección de documentos recibidos quedó sin revisar.
+
+Importa porque es **el único sitio del portal donde podría estar el XML**. Lo que
+hay que comprobar cuando haya un enlace de acceso nuevo:
+
+- ¿Cada documento de esa lista tiene descarga propia?
+- Si la tiene, ¿entrega el **XML**, un **ZIP con XML y PDF**, o solo el PDF otra vez?
+
+De la respuesta depende la **Fase 3 entera**: el portal público solo da PDF, y el
+correo de facturación —la vía que la ley garantiza— no está disponible en este
+caso. Si esa sección tampoco da XML, la Fase 3 se queda esperando a que se resuelva
+el acceso al correo, y conviene decirlo en el plan en vez de arrastrarla.
+
+> Nota de método: la frase «el portal no da XML» se escribió aquí antes de haber
+> mirado esta sección. Era una conclusión más amplia que la evidencia que la
+> sostenía — dos pantallas de las cinco del menú.
+
+## Lo que sigue sin resolver
 
 **No se vio dónde bajar el XML** de un documento. Ni el camino público (solo PDF)
 ni el listado lo ofrecen. Hasta que aparezca, la Fase 3 depende de conseguir los
