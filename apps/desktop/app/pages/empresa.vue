@@ -17,6 +17,10 @@ type Tercero = {
   responsabilidades: string[]; ciiu: string | null; municipio: string | null
   estado_rut: string | null; consultado_at: string | null; origen: string; notas: string | null
 }
+type Ingesta = {
+  id: number; periodo: string; camino: string; estado: string
+  documentos: number | null; error: string | null; empresa_dian: string | null; corrio_at: string
+}
 type MunicipioIca = { id: number; municipio: string; codigo_dane: string | null; actividad: string | null; tarifa_por_mil: string; vigencia_desde: string }
 
 const route = useRoute()
@@ -90,6 +94,10 @@ const dianEstado = ref<'inactivo' | 'corriendo' | 'listo' | 'error'>('inactivo')
 const dianMensaje = ref('')
 const dianResultado = ref<{ archivo: string; empresa: string | null } | null>(null)
 const dianImportando = ref(false)
+const ingestas = ref<Ingesta[]>([])
+const soportesEstado = ref<'inactivo' | 'corriendo' | 'listo'>('inactivo')
+const soportesMensaje = ref('')
+const soportesResumen = ref<{ bajados: number; sin_encontrar: number; fallidos: number } | null>(null)
 
 // ── terceros ──
 const terceros = ref<Tercero[]>([])
@@ -143,7 +151,7 @@ async function refresh() {
   loading.value = true
   try {
     info.value = await rpc<EmpresaInfo>('open_empresa', { db_path: dbPath.value })
-    await Promise.all([reloadPeriodos(), reloadLoads(), reloadPerfil(), reloadTerceros()])
+    await Promise.all([reloadPeriodos(), reloadLoads(), reloadPerfil(), reloadTerceros(), reloadIngestas()])
   } catch (exc) {
     toast.error('No se pudo abrir la empresa', humanError(exc))
   } finally {
@@ -226,6 +234,77 @@ async function saveMunicipio() {
 }
 
 // ── traer de la DIAN ──
+async function reloadIngestas() {
+  const r = await rpc<{ ingestas: Ingesta[] }>('listar_ingestas', { db_path: dbPath.value, limite: 5 })
+  ingestas.value = r.ingestas
+}
+
+// Toda corrida queda anotada, sobre todo las que fallan: el portal falla de formas
+// que no se repiten, y sin registro cada fallo se investiga desde cero.
+async function anotarFallo(mensaje: string) {
+  try {
+    await rpc('registrar_ingesta', {
+      db_path: dbPath.value, periodo: dianPeriodo.value, camino: 'portal',
+      estado: 'error', error: mensaje,
+    })
+    await reloadIngestas()
+  } catch { /* que falle la anotación no puede tapar el fallo original */ }
+}
+
+// Baja de la DIAN el soporte oficial de los documentos que no lo tienen. Este
+// camino del portal es público —CUFE + NIT, sin credenciales— y el Cloudflare no
+// interrumpe entre búsquedas, así que puede correr solo.
+async function bajarSoportes(periodo: string) {
+  soportesEstado.value = 'corriendo'
+  soportesMensaje.value = 'Viendo cuáles faltan…'
+  soportesResumen.value = null
+  try {
+    const faltantes = await rpc<{ carpeta: string | null; faltan: { cufe: string; nit: string }[]; total: number }>(
+      'documentos_sin_soporte', { db_path: dbPath.value, periodo },
+    )
+    if (!faltantes.carpeta) {
+      throw new Error('Este mes no tiene carpeta de soportes. Configúrala primero.')
+    }
+    if (!faltantes.faltan.length) {
+      soportesEstado.value = 'inactivo'
+      toast.success('No falta ninguno', `Los ${faltantes.total} documentos de ${periodo} ya tienen soporte.`)
+      return
+    }
+
+    const inicio = await $fetch<{ id: string }>('/api/dian/portal/soportes', {
+      method: 'POST',
+      body: { documentos: faltantes.faltan, carpeta: faltantes.carpeta },
+    })
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 3000))
+      const e = await $fetch<{ estado: string; mensaje: string; bajados?: string[]; sin_encontrar?: string[]; fallidos?: string[]; error?: string }>(
+        `/api/dian/portal/estado/${inicio.id}`,
+      )
+      soportesMensaje.value = e.mensaje || ''
+      if (e.estado === 'listo') {
+        // Los PDF del portal vienen cifrados con el NIT: sin releerlos con la
+        // contraseña quedarían marcados como protegidos y la validación diría
+        // que no hay soporte.
+        await rpc('reindexar_soportes_con_nit', { db_path: dbPath.value, carpeta: faltantes.carpeta })
+        soportesEstado.value = 'listo'
+        soportesResumen.value = {
+          bajados: e.bajados?.length ?? 0,
+          sin_encontrar: e.sin_encontrar?.length ?? 0,
+          fallidos: e.fallidos?.length ?? 0,
+        }
+        await reloadPeriodos()
+        return
+      }
+      if (e.estado === 'error') {
+        throw new Error(e.error || 'La descarga de soportes falló.')
+      }
+    }
+  } catch (exc) {
+    soportesEstado.value = 'inactivo'
+    toast.error('No se pudieron bajar los soportes', humanError(exc))
+  }
+}
+
 async function bajarDeLaDian() {
   if (!info.value?.default_folder) {
     toast.error('Falta la carpeta de Excels', 'Configúrala arriba: ahí se guarda lo que baje de la DIAN.')
@@ -262,12 +341,14 @@ async function bajarDeLaDian() {
       if (e.estado === 'error') {
         dianEstado.value = 'error'
         dianMensaje.value = e.error || 'La descarga falló.'
+        await anotarFallo(dianMensaje.value)
         return
       }
     }
   } catch (exc) {
     dianEstado.value = 'error'
     dianMensaje.value = humanError(exc)
+    await anotarFallo(dianMensaje.value)
   }
 }
 
@@ -279,6 +360,7 @@ async function importarDescarga() {
       db_path: dbPath.value, archivo: dianResultado.value.archivo, periodo: dianPeriodo.value,
     })
     await refresh()
+    await reloadIngestas()
     dianEstado.value = 'inactivo'
     dianResultado.value = null
     toast.success(`${r.total_rows} filas importadas`, `Quedaron en el mes ${r.periodo}`)
@@ -756,6 +838,51 @@ watch(dbPath, refresh)
             <Button variant="outline" size="sm" class="mt-3" @click="dianEstado = 'inactivo'">Volver a intentar</Button>
           </div>
         </template>
+
+        <!-- Soportes oficiales, por CUFE -->
+        <div class="border-t border-border pt-3">
+          <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div class="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">Soportes oficiales</div>
+              <p class="mt-1 max-w-prose text-xs text-muted-foreground">
+                La DIAN entrega el soporte de cualquier documento con solo el CUFE y el NIT, sin
+                credenciales. En vez de esperar a que el cliente los mande, los bajamos nosotros.
+              </p>
+            </div>
+            <Button
+              variant="outline" size="sm"
+              :disabled="soportesEstado === 'corriendo' || !dianPeriodo"
+              @click="bajarSoportes(dianPeriodo)"
+            >
+              <CloudDownload class="size-3.5" /> Bajar los de {{ dianPeriodo }}
+            </Button>
+          </div>
+          <p v-if="soportesEstado === 'corriendo'" class="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 class="size-3.5 shrink-0 animate-spin" /> {{ soportesMensaje }}
+          </p>
+          <p v-else-if="soportesEstado === 'listo' && soportesResumen" class="text-sm text-foreground">
+            {{ soportesResumen.bajados }} bajados<template v-if="soportesResumen.sin_encontrar">
+            · {{ soportesResumen.sin_encontrar }} que la DIAN no tiene</template><template v-if="soportesResumen.fallidos">
+            · {{ soportesResumen.fallidos }} fallidos</template>.
+          </p>
+        </div>
+
+        <!-- Bitácora: el portal falla de formas que no se repiten -->
+        <div v-if="ingestas.length" class="border-t border-border pt-3">
+          <div class="mb-1 font-mono text-[11px] uppercase tracking-wide text-muted-foreground">Últimas corridas</div>
+          <div v-for="g in ingestas" :key="g.id" class="flex items-start gap-2 py-1 text-sm">
+            <span
+              class="mt-1 size-1.5 shrink-0 rounded-full"
+              :class="g.estado === 'ok' ? 'bg-primary' : 'bg-destructive'"
+            />
+            <span class="min-w-0 flex-1">
+              <span class="font-mono text-xs text-muted-foreground">{{ g.corrio_at }}</span>
+              · {{ g.periodo }}
+              <template v-if="g.estado === 'ok'"> · {{ g.documentos }} documentos</template>
+              <span v-else class="text-muted-foreground"> · {{ g.error }}</span>
+            </span>
+          </div>
+        </div>
       </CardContent>
     </Card>
 

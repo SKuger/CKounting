@@ -440,7 +440,108 @@ def _h_importar_descarga_dian(params: dict) -> dict:
     resultado = _h_import_excel(
         {"db_path": str(db_path), "source_path": str(excel_path), "periodo": periodo}
     )
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        dian_portal_module.registrar_ingesta(
+            conn, periodo=periodo, camino="portal", estado="ok",
+            documentos=resultado.get("total_rows"), archivo=str(excel_path),
+            empresa_dian=params.get("empresa_dian"),
+        )
+    finally:
+        conn.close()
     return {**resultado, "archivo": str(excel_path)}
+
+
+def _h_documentos_sin_soporte(params: dict) -> dict:
+    """Los documentos del mes a los que les falta el PDF, listos para ir a buscarlos.
+
+    El NIT con el que se consulta es el de la **propia empresa**: el portal acepta
+    el del emisor o el del receptor, y la empresa siempre es uno de los dos.
+    """
+    db_path = Path(params["db_path"])
+    periodo = storage_module._norm_periodo(params.get("periodo") or "")
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        info = storage_module.read_empresa_info(db_path) or {}
+        nit = str(info.get("nit") or "")
+
+        carpeta = conn.execute(
+            "SELECT pdfs_folder FROM periodo_folder WHERE periodo = ?", (periodo,)
+        ).fetchone()
+        carpeta = carpeta["pdfs_folder"] if carpeta else None
+        ya_estan = (
+            pdf_cufe_module.get_indexed_cufes(conn, carpeta) if carpeta else set()
+        )
+
+        filas = conn.execute(
+            "SELECT DISTINCT cufe_cude FROM excel_row WHERE periodo = ? AND cufe_cude IS NOT NULL",
+            (periodo,),
+        ).fetchall()
+        faltan = [
+            {"cufe": r["cufe_cude"], "nit": nit}
+            for r in filas
+            if r["cufe_cude"] not in ya_estan
+        ]
+        return {
+            "periodo": periodo, "carpeta": carpeta, "nit": nit,
+            "total": len(filas), "faltan": faltan,
+        }
+    finally:
+        conn.close()
+
+
+def _h_reindexar_soportes_con_nit(params: dict) -> dict:
+    """Re-lee la carpeta del mes pasando el NIT como contraseña.
+
+    Los PDF que entrega el portal vienen cifrados con él; sin esto quedarían
+    marcados como protegidos y la validación diría que no hay soporte.
+    """
+    db_path = Path(params["db_path"])
+    carpeta = params["carpeta"]
+    info = storage_module.read_empresa_info(db_path) or {}
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        stats = pdf_cufe_module.index_folder(
+            conn, carpeta, password=str(info.get("nit") or "") or None
+        )
+        return stats.to_dict()
+    finally:
+        conn.close()
+
+
+def _h_registrar_ingesta(params: dict) -> dict:
+    """Anota una corrida que NO terminó en importación (una que falló, o el camino
+    manual). El mensaje se guarda enmascarado: podría arrastrar el enlace."""
+    db_path = Path(params["db_path"])
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return dian_portal_module.registrar_ingesta(
+            conn,
+            periodo=params.get("periodo") or "",
+            camino=params.get("camino") or "portal",
+            estado=params.get("estado") or "error",
+            documentos=params.get("documentos"),
+            archivo=params.get("archivo"),
+            error=params.get("error"),
+            empresa_dian=params.get("empresa_dian"),
+        )
+    finally:
+        conn.close()
+
+
+def _h_listar_ingestas(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return {"ingestas": dian_portal_module.listar_ingestas(
+            conn, periodo=params.get("periodo"), limite=int(params.get("limite", 20)))}
+    finally:
+        conn.close()
 
 
 def _h_resumen_periodos(params: dict) -> dict:
@@ -1315,6 +1416,10 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     # Ingesta desde el portal de la DIAN (Fase 2)
     "preparar_descarga_dian": _h_preparar_descarga_dian,
     "importar_descarga_dian": _h_importar_descarga_dian,
+    "registrar_ingesta": _h_registrar_ingesta,
+    "documentos_sin_soporte": _h_documentos_sin_soporte,
+    "reindexar_soportes_con_nit": _h_reindexar_soportes_con_nit,
+    "listar_ingestas": _h_listar_ingestas,
     # Catálogo de terceros por empresa (Fase 1.3, D-100)
     "terceros_list": _h_terceros_list,
     "terceros_sembrar": _h_terceros_sembrar,
