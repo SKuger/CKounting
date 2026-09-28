@@ -420,9 +420,15 @@ def _h_preparar_descarga_dian(params: dict) -> dict:
     El enlace **no se guarda**: entra, se valida y vuelve a salir hacia el
     navegador. Lo que sí queda en la respuesta es el rango calculado.
     """
-    return dian_portal_module.preparar_descarga(
+    plan = dian_portal_module.preparar_descarga(
         params.get("periodo") or "", params.get("enlace") or "", params.get("grupo")
     )
+    # La carpeta la decide Contab: el ZIP del portal es un intermedio, no un
+    # documento del contador, y no hay por qué hacerle configurar nada.
+    info = storage_module.read_empresa_info(Path(params["db_path"])) or {}
+    plan["carpeta"] = str(paths_module.descargas_dir(str(info.get("nit") or "")))
+    plan["nit_receptor"] = info.get("nit")
+    return plan
 
 
 def _h_importar_descarga_dian(params: dict) -> dict:

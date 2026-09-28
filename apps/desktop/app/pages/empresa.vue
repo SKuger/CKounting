@@ -306,23 +306,19 @@ async function bajarSoportes(periodo: string) {
 }
 
 async function bajarDeLaDian() {
-  if (!info.value?.default_folder) {
-    toast.error('Falta la carpeta de Excels', 'Configúrala arriba: ahí se guarda lo que baje de la DIAN.')
-    return
-  }
   dianEstado.value = 'corriendo'
   dianMensaje.value = 'Validando…'
   dianResultado.value = null
   try {
     // El core valida el enlace y calcula el rango del mes; si algo está mal, se
     // sabe ANTES de abrir un navegador contra la DIAN.
-    const plan = await rpc<{ enlace: string; desde: string; hasta: string; grupo: string; etiqueta: string }>(
-      'preparar_descarga_dian', { periodo: dianPeriodo.value, enlace: dianEnlace.value },
+    // El core valida y además decide dónde cae el archivo: es un intermedio.
+    const plan = await rpc<Record<string, unknown>>(
+      'preparar_descarga_dian', { db_path: dbPath.value, periodo: dianPeriodo.value, enlace: dianEnlace.value },
     )
     dianMensaje.value = 'Abriendo el portal…'
     const inicio = await $fetch<{ id: string }>('/api/dian/portal/descargar', {
-      method: 'POST',
-      body: { ...plan, carpeta: info.value.default_folder, nit_receptor: info.value.nit },
+      method: 'POST', body: plan,
     })
     // El enlace ya cumplió: fuera del campo, para que no quede en pantalla.
     dianEnlace.value = ''
@@ -799,9 +795,6 @@ watch(dbPath, refresh)
             </Button>
           </div>
 
-          <p v-if="!info.default_folder" class="text-sm text-amber-600 dark:text-amber-400">
-            Falta configurar la carpeta de Excels: es donde se guarda lo que baje.
-          </p>
         </template>
 
         <template v-else-if="dianEstado === 'corriendo'">
