@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ArrowLeft, Pencil, FolderOpen, FileSpreadsheet, Trash2, Archive, Download, ChevronRight, EllipsisVertical, CalendarPlus, RotateCcw, UploadCloud, BookText, Landmark, Plus, X, Users, Search, Sparkles } from 'lucide-vue-next'
+import { ArrowLeft, Pencil, FolderOpen, FileSpreadsheet, Trash2, Archive, Download, ChevronRight, EllipsisVertical, CalendarPlus, RotateCcw, UploadCloud, BookText, Landmark, Plus, X, Users, Search, Sparkles, CloudDownload, Loader2 } from 'lucide-vue-next'
 import { Popover, PopoverContent, PopoverTrigger } from '~/components/ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '~/components/ui/select'
 
-type EmpresaInfo = { db_path: string; nit: string; dv: string | null; razon_social: string; archived?: boolean; created_at: string }
+type EmpresaInfo = { db_path: string; nit: string; dv: string | null; razon_social: string; archived?: boolean; created_at: string; default_folder?: string | null; pdfs_folder?: string | null }
 type Periodo = { periodo: string; load_count: number; row_count: number; pdfs_folder: string | null; indexed_cufe_count: number }
 type Carga = { id: number; source_name: string; loaded_at: string; total_rows: number; periodo?: string | null; deleted?: boolean }
 type BackupResult = { path: string; size_bytes: number; excels_included: number; pdfs_included: number }
@@ -79,6 +79,18 @@ const perfilDraft = reactive({
   ciiu: '', notas: '',
 })
 const icaDraft = reactive({ municipio: '', codigo_dane: '', actividad: '', tarifa_por_mil: '', vigencia_desde: hoyISO() })
+// ── traer de la DIAN ──
+// El enlace de acceso vive en este campo y en ninguna parte más: no se guarda en
+// la base, ni se manda a un log. Es una llave a la cuenta DIAN del cliente.
+const dianEnlace = ref('')
+const dianMes = ref(String(now.getMonth() + 1).padStart(2, '0'))
+const dianAnio = ref(String(now.getFullYear()))
+const dianPeriodo = computed(() => (dianAnio.value && dianMes.value) ? `${dianAnio.value}-${dianMes.value}` : '')
+const dianEstado = ref<'inactivo' | 'corriendo' | 'listo' | 'error'>('inactivo')
+const dianMensaje = ref('')
+const dianResultado = ref<{ archivo: string; empresa: string | null } | null>(null)
+const dianImportando = ref(false)
+
 // ── terceros ──
 const terceros = ref<Tercero[]>([])
 const tercerosCounts = ref({ total: 0, con_rut: 0, sin_rut: 0 })
@@ -210,6 +222,70 @@ async function saveMunicipio() {
     toast.error('No se pudo guardar el municipio', humanError(exc))
   } finally {
     savingIca.value = false
+  }
+}
+
+// ── traer de la DIAN ──
+async function bajarDeLaDian() {
+  if (!info.value?.default_folder) {
+    toast.error('Falta la carpeta de Excels', 'Configúrala arriba: ahí se guarda lo que baje de la DIAN.')
+    return
+  }
+  dianEstado.value = 'corriendo'
+  dianMensaje.value = 'Validando…'
+  dianResultado.value = null
+  try {
+    // El core valida el enlace y calcula el rango del mes; si algo está mal, se
+    // sabe ANTES de abrir un navegador contra la DIAN.
+    const plan = await rpc<{ enlace: string; desde: string; hasta: string; grupo: string; etiqueta: string }>(
+      'preparar_descarga_dian', { periodo: dianPeriodo.value, enlace: dianEnlace.value },
+    )
+    dianMensaje.value = 'Abriendo el portal…'
+    const inicio = await $fetch<{ id: string }>('/api/dian/portal/descargar', {
+      method: 'POST',
+      body: { ...plan, carpeta: info.value.default_folder, nit_receptor: info.value.nit },
+    })
+    // El enlace ya cumplió: fuera del campo, para que no quede en pantalla.
+    dianEnlace.value = ''
+
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 2500))
+      const e = await $fetch<{ estado: string; mensaje: string; archivo: string | null; empresa: string | null; error: string | null }>(
+        `/api/dian/portal/estado/${inicio.id}`,
+      )
+      dianMensaje.value = e.mensaje || ''
+      if (e.estado === 'listo') {
+        dianEstado.value = 'listo'
+        dianResultado.value = { archivo: e.archivo || '', empresa: e.empresa }
+        return
+      }
+      if (e.estado === 'error') {
+        dianEstado.value = 'error'
+        dianMensaje.value = e.error || 'La descarga falló.'
+        return
+      }
+    }
+  } catch (exc) {
+    dianEstado.value = 'error'
+    dianMensaje.value = humanError(exc)
+  }
+}
+
+async function importarDescarga() {
+  if (!dianResultado.value) return
+  dianImportando.value = true
+  try {
+    const r = await rpc<{ total_rows: number; periodo: string }>('importar_descarga_dian', {
+      db_path: dbPath.value, archivo: dianResultado.value.archivo, periodo: dianPeriodo.value,
+    })
+    await refresh()
+    dianEstado.value = 'inactivo'
+    dianResultado.value = null
+    toast.success(`${r.total_rows} filas importadas`, `Quedaron en el mes ${r.periodo}`)
+  } catch (exc) {
+    toast.error('No se pudo importar', humanError(exc))
+  } finally {
+    dianImportando.value = false
   }
 }
 
@@ -587,6 +663,99 @@ watch(dbPath, refresh)
             <Button variant="ghost" size="sm" :disabled="busy" @click="restoreLoad(c)"><RotateCcw class="size-3.5" /> Restaurar</Button>
           </div>
         </div>
+      </CardContent>
+    </Card>
+
+    <!-- Traer de la DIAN — el listado del mes, sin bajarlo a mano (Fase 2) -->
+    <Card v-if="info">
+      <CardHeader>
+        <CardTitle class="flex items-center gap-2"><CloudDownload class="size-4 text-muted-foreground" /> Traer de la DIAN</CardTitle>
+        <CardDescription>
+          Pega el enlace de acceso que la DIAN manda al correo, elige el mes, y Contab hace el
+          resto: entra al portal, pide el listado, espera a que lo generen y lo baja. Nada entra a
+          la contabilidad hasta que lo apruebes.
+        </CardDescription>
+      </CardHeader>
+      <CardContent class="space-y-4">
+        <template v-if="dianEstado === 'inactivo'">
+          <div class="grid gap-1.5">
+            <Label for="dian-enlace">Enlace de acceso</Label>
+            <Input
+              id="dian-enlace"
+              v-model="dianEnlace"
+              type="password"
+              autocomplete="off"
+              placeholder="https://catalogo-vpfe.dian.gov.co/User/AuthToken?…"
+            />
+            <p class="text-xs text-muted-foreground">
+              No se guarda en ningún lado: se usa para esta descarga y se descarta. Es una llave a
+              la cuenta DIAN de la empresa.
+            </p>
+          </div>
+
+          <div class="flex flex-wrap items-end gap-3">
+            <div class="grid gap-1.5">
+              <Label>Mes</Label>
+              <Select v-model="dianMes">
+                <SelectTrigger class="w-40"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem v-for="m in MESES" :key="m.v" :value="m.v">{{ m.l }}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div class="grid gap-1.5">
+              <Label>Año</Label>
+              <Select v-model="dianAnio">
+                <SelectTrigger class="w-28"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem v-for="a in ANIOS" :key="a" :value="a">{{ a }}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <Button :disabled="!dianEnlace || !dianPeriodo" @click="bajarDeLaDian">
+              <CloudDownload class="size-4" /> Bajar {{ dianPeriodo }}
+            </Button>
+          </div>
+
+          <p v-if="!info.default_folder" class="text-sm text-amber-600 dark:text-amber-400">
+            Falta configurar la carpeta de Excels: es donde se guarda lo que baje.
+          </p>
+        </template>
+
+        <template v-else-if="dianEstado === 'corriendo'">
+          <div class="flex items-center gap-3 text-sm text-muted-foreground">
+            <Loader2 class="size-4 shrink-0 animate-spin" />
+            <span>{{ dianMensaje }}</span>
+          </div>
+          <p class="text-xs text-muted-foreground">
+            Se abrió una ventana del navegador: el portal de la DIAN no acepta conexiones sin
+            ventana. Déjala trabajar; se cierra sola al terminar.
+          </p>
+        </template>
+
+        <template v-else-if="dianEstado === 'listo'">
+          <div class="rounded-md border border-primary/40 bg-primary/5 p-4">
+            <p class="text-sm text-foreground">
+              Listo<template v-if="dianResultado?.empresa">, entrando como <strong>{{ dianResultado.empresa }}</strong></template>.
+              El archivo de <strong>{{ dianPeriodo }}</strong> está descargado y <strong>todavía no se ha importado</strong>.
+            </p>
+            <div class="mt-3 flex flex-wrap gap-2">
+              <Button :disabled="dianImportando" @click="importarDescarga">
+                {{ dianImportando ? 'Importando…' : `Importar a ${dianPeriodo}` }}
+              </Button>
+              <Button variant="ghost" :disabled="dianImportando" @click="dianEstado = 'inactivo'; dianResultado = null">
+                Descartar
+              </Button>
+            </div>
+          </div>
+        </template>
+
+        <template v-else>
+          <div class="rounded-md border border-destructive/40 bg-destructive/5 p-4">
+            <p class="text-sm text-foreground">{{ dianMensaje }}</p>
+            <Button variant="outline" size="sm" class="mt-3" @click="dianEstado = 'inactivo'">Volver a intentar</Button>
+          </div>
+        </template>
       </CardContent>
     </Card>
 
