@@ -242,3 +242,103 @@ def _nombre_empresa(cuerpo: str) -> str | None:
                 if len(siguiente) > 5 and not siguiente.lower().startswith("inicio"):
                     return siguiente
     return None
+
+
+# ────────────────── Soportes por CUFE: el camino público (2.6) ──────────────────
+# Cualquier documento se baja dando CUFE + NIT, **sin credenciales de nadie**, y
+# —comprobado el 2026-09-28 con tres búsquedas seguidas— el Cloudflare no pide el
+# «soy humano» en cada una. Por eso esto puede correr solo.
+#
+# El PDF llega CIFRADO con el NIT. Quien lo lea después tiene que pasar esa
+# contraseña; `contab_core.pdf_cufe` ya lo hace.
+
+BUSCAR_URL = f"{PORTAL}/User/SearchDocument"
+ESPERA_ENTRE_DOCUMENTOS = 1.5
+
+
+@dataclass
+class Soportes:
+    bajados: list[str] = field(default_factory=list)
+    sin_encontrar: list[str] = field(default_factory=list)
+    fallidos: list[str] = field(default_factory=list)
+
+    def como_dict(self) -> dict[str, Any]:
+        return {
+            "bajados": self.bajados,
+            "sin_encontrar": self.sin_encontrar,
+            "fallidos": self.fallidos,
+            "total": len(self.bajados) + len(self.sin_encontrar) + len(self.fallidos),
+        }
+
+
+async def _un_soporte(pagina, cufe: str, nit: str, carpeta: Path) -> str | None:
+    """Busca un documento y baja su PDF. Devuelve el nombre del archivo o None."""
+    await pagina.goto(BUSCAR_URL, wait_until="domcontentloaded", timeout=60_000)
+    await pagina.wait_for_timeout(2_500)
+    await pagina.fill("#DocumentKey", cufe)
+    await pagina.wait_for_timeout(400)
+    try:
+        await pagina.fill("#SearchDocumentNit", str(nit))
+    except Exception:
+        pass
+    try:
+        await pagina.get_by_role("button", name="Buscar").first.click(timeout=10_000)
+    except Exception:
+        await pagina.locator("button[type=submit], input[type=submit]").first.click()
+    await pagina.wait_for_timeout(5_000)
+
+    if "DATOS DEL EMISOR" not in (await pagina.inner_text("body")).upper():
+        return None      # la DIAN no lo tiene, o el NIT no corresponde
+
+    async with pagina.expect_download(timeout=60_000) as info:
+        await pagina.get_by_text("Descargar PDF", exact=False).first.click()
+    bajada = await info.value
+    nombre = bajada.suggested_filename or f"{cufe[:16]}.pdf"
+    destino = carpeta / nombre
+    # Nunca se pisa un soporte que ya estaba: el del cliente puede ser el bueno.
+    if destino.exists():
+        destino = carpeta / f"{destino.stem}_dian{destino.suffix}"
+    await bajada.save_as(str(destino))
+    return destino.name
+
+
+async def descargar_soportes(
+    documentos: list[dict[str, str]],
+    carpeta: str | Path,
+    *,
+    progreso: Callable[[str], None] | None = None,
+) -> Soportes:
+    """Baja el soporte oficial de cada documento. `documentos`: [{cufe, nit}, …]."""
+    carpeta = Path(carpeta)
+    carpeta.mkdir(parents=True, exist_ok=True)
+    avisa = progreso or (lambda _m: None)
+    res = Soportes()
+
+    async with async_playwright() as p:
+        contexto = await p.chromium.launch_persistent_context(
+            str(carpeta / ".perfil-soportes"),
+            headless=False,          # sin ventana el portal bloquea
+            accept_downloads=True,
+            viewport={"width": 1400, "height": 900},
+            args=["--disable-blink-features=AutomationControlled"],
+        )
+        try:
+            pagina = contexto.pages[0] if contexto.pages else await contexto.new_page()
+            for i, doc in enumerate(documentos, 1):
+                cufe = (doc.get("cufe") or "").strip().lower()
+                nit = str(doc.get("nit") or "").strip()
+                if not cufe or not nit:
+                    res.fallidos.append(cufe or "(sin CUFE)")
+                    continue
+                avisa(f"Bajando {i} de {len(documentos)}…")
+                try:
+                    nombre = await _un_soporte(pagina, cufe, nit, carpeta)
+                except Exception:
+                    res.fallidos.append(cufe)
+                else:
+                    (res.bajados if nombre else res.sin_encontrar).append(nombre or cufe)
+                await asyncio.sleep(ESPERA_ENTRE_DOCUMENTOS)
+        finally:
+            await contexto.close()
+            shutil.rmtree(carpeta / ".perfil-soportes", ignore_errors=True)
+    return res

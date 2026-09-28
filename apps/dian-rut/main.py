@@ -153,6 +153,31 @@ async def portal_descargar(payload: dict):
     return {"id": corrida_id, **_corridas[corrida_id]}
 
 
+async def _correr_soportes(corrida_id: str, datos: dict):
+    estado = _corridas[corrida_id]
+    try:
+        def avisa(mensaje: str):
+            estado["mensaje"] = mensaje
+        res = await portal_mod.descargar_soportes(
+            datos["documentos"], datos["carpeta"], progreso=avisa)
+        estado.update(estado="listo", mensaje="Listo", **res.como_dict())
+    except Exception:
+        estado.update(estado="error", error="La descarga de soportes falló.",
+                      mensaje="La descarga de soportes falló.")
+
+
+@app.post("/portal/soportes")
+async def portal_soportes(payload: dict):
+    documentos = payload.get("documentos") or []
+    if not documentos or not payload.get("carpeta"):
+        return JSONResponse(status_code=400,
+                            content={"error": "Faltan los documentos o la carpeta."})
+    corrida_id = str(uuid.uuid4())
+    _corridas[corrida_id] = {"estado": "corriendo", "mensaje": "Arrancando…", "error": None}
+    asyncio.create_task(_correr_soportes(corrida_id, dict(payload)))
+    return {"id": corrida_id, **_corridas[corrida_id]}
+
+
 @app.get("/portal/estado/{corrida_id}")
 async def portal_estado(corrida_id: str):
     estado = _corridas.get(corrida_id)
