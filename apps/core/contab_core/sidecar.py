@@ -17,6 +17,7 @@ from typing import Any
 from . import backup as backup_module
 from . import cita_personas as citas_module
 from . import dian_inconsistencias as dian_inc_module
+from . import dian_portal as dian_portal_module
 from . import excel as excel_module
 from . import export as export_module
 from . import jobs as jobs_module
@@ -411,6 +412,35 @@ def _h_import_excel(params: dict) -> dict:
         "periodo": periodo,
         "columns": excel_module.DIAN_COLUMNS + excel_module.DERIVED_COLUMNS,
     }
+
+
+def _h_preparar_descarga_dian(params: dict) -> dict:
+    """Valida el enlace y el mes, y devuelve lo que el sidecar DIAN necesita.
+
+    El enlace **no se guarda**: entra, se valida y vuelve a salir hacia el
+    navegador. Lo que sí queda en la respuesta es el rango calculado.
+    """
+    return dian_portal_module.preparar_descarga(
+        params.get("periodo") or "", params.get("enlace") or "", params.get("grupo")
+    )
+
+
+def _h_importar_descarga_dian(params: dict) -> dict:
+    """Abre el ZIP que bajó el portal e importa su Excel al mes de la empresa.
+
+    Se llama DESPUÉS de que el contador aprueba el resumen de la descarga: bajar y
+    contabilizar son dos actos distintos, y el segundo no ocurre solo (D-097).
+    """
+    db_path = Path(params["db_path"])
+    periodo = storage_module._norm_periodo(params.get("periodo") or "")
+    descargado = Path(params["archivo"])
+
+    destino = descargado.with_name(f"dian-{periodo}.xlsx")
+    excel_path = dian_portal_module.extraer_excel(descargado, destino)
+    resultado = _h_import_excel(
+        {"db_path": str(db_path), "source_path": str(excel_path), "periodo": periodo}
+    )
+    return {**resultado, "archivo": str(excel_path)}
 
 
 def _h_resumen_periodos(params: dict) -> dict:
@@ -1282,6 +1312,9 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "delete_perfil_fiscal": _h_delete_perfil_fiscal,
     "save_municipio_ica": _h_save_municipio_ica,
     "delete_municipio_ica": _h_delete_municipio_ica,
+    # Ingesta desde el portal de la DIAN (Fase 2)
+    "preparar_descarga_dian": _h_preparar_descarga_dian,
+    "importar_descarga_dian": _h_importar_descarga_dian,
     # Catálogo de terceros por empresa (Fase 1.3, D-100)
     "terceros_list": _h_terceros_list,
     "terceros_sembrar": _h_terceros_sembrar,
