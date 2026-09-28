@@ -8,6 +8,7 @@ import httpx
 from processor import process_excel
 from dian_paths import UPLOADS_DIR, RESULTS_DIR, STATIC_DIR
 from citas import vigia
+import portal as portal_mod
 
 app = FastAPI(title="DIAN RUT Automator")
 
@@ -107,6 +108,58 @@ async def download_file(filename: str):
 
 
 # ─── Vigía de citas DIAN (D-104) ───────────────────────────────────────────────────────────────
+
+# ─────────────── Portal DIAN: descarga del listado del mes (Fase 2) ───────────────
+# Cada corrida vive en memoria mientras dura. El ENLACE DE ACCESO no se guarda:
+# entra por el cuerpo de la petición, se pasa al navegador y no queda en el estado.
+
+_corridas: dict[str, dict] = {}
+
+
+async def _correr_descarga(corrida_id: str, datos: dict):
+    estado = _corridas[corrida_id]
+    enlace = datos.pop("enlace")          # sale del dict antes de guardar nada
+    try:
+        def avisa(mensaje: str):
+            estado["mensaje"] = mensaje
+        res = await portal_mod.descargar_listado(
+            enlace,
+            datos["desde"], datos["hasta"], datos["carpeta"],
+            etiqueta=datos.get("etiqueta") or "listado",
+            grupo=datos.get("grupo") or "todos",
+            nit_receptor=datos.get("nit_receptor"),
+            progreso=avisa,
+        )
+        estado.update(estado="listo", mensaje="Listo", **res.como_dict())
+    except portal_mod.PortalError as exc:
+        estado.update(estado="error", mensaje=str(exc), error=str(exc))
+    except Exception as exc:
+        # Nunca se propaga el texto crudo: podría arrastrar la URL con el token.
+        estado.update(estado="error", error="La descarga falló por un error inesperado.",
+                      mensaje="La descarga falló por un error inesperado.")
+        print("portal: fallo inesperado:", type(exc).__name__)
+
+
+@app.post("/portal/descargar")
+async def portal_descargar(payload: dict):
+    faltan = [k for k in ("enlace", "desde", "hasta", "carpeta") if not payload.get(k)]
+    if faltan:
+        return JSONResponse(status_code=400,
+                            content={"error": f"Faltan datos: {', '.join(faltan)}"})
+    corrida_id = str(uuid.uuid4())
+    _corridas[corrida_id] = {"estado": "corriendo", "mensaje": "Arrancando…",
+                             "archivo": None, "empresa": None, "error": None}
+    asyncio.create_task(_correr_descarga(corrida_id, dict(payload)))
+    return {"id": corrida_id, **_corridas[corrida_id]}
+
+
+@app.get("/portal/estado/{corrida_id}")
+async def portal_estado(corrida_id: str):
+    estado = _corridas.get(corrida_id)
+    if estado is None:
+        return JSONResponse(status_code=404, content={"error": "Esa descarga no existe."})
+    return {"id": corrida_id, **estado}
+
 
 @app.get("/citas/status")
 async def citas_status():
