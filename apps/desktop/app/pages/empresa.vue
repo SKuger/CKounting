@@ -1064,7 +1064,7 @@ watch(dbPath, refresh)
         </p>
 
         <!-- HISTORIAL -->
-        <section class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-card">
+        <section class="flex max-h-[46vh] min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card">
           <div class="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-2">
             <h2 class="text-sm font-semibold">Historial</h2>
             <Button v-if="trashedLoads.length" variant="ghost" size="sm" :class="showTrash ? 'text-foreground' : ''" @click="showTrash = !showTrash">
