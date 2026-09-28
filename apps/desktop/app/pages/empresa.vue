@@ -154,6 +154,9 @@ const tercerosBuscar = ref('')
 const tercerosAbierto = ref(false)
 const sembrando = ref(false)
 const consultandoNit = ref<string | null>(null)
+// La consulta masiva es un trabajo largo: una petición HTTP por tercero. Va por
+// el mecanismo de trabajos en segundo plano, que ya trae progreso y cancelar.
+const rutMasivo = useJob()
 const terceroOpen = ref(false)
 const savingTercero = ref(false)
 const terceroDraft = reactive({ nit: '', razon_social: '', ciiu: '', municipio: '', responsabilidades: '', notas: '' })
@@ -450,6 +453,31 @@ async function sembrarTerceros() {
     toast.error('No se pudo derivar el catálogo', humanError(exc))
   } finally {
     sembrando.value = false
+  }
+}
+
+async function consultarRutDeTodos() {
+  const pendientes = tercerosCounts.value.sin_rut
+  if (!pendientes) {
+    toast.success('Ninguno pendiente', 'Todos los terceros ya tienen el RUT consultado.')
+    return
+  }
+  try {
+    const r = await rutMasivo.correr<{ encontrados: number; sin_resultado: number; fallidos: number; total: number }>(
+      'terceros_consultar_rut_todos', { db_path: dbPath.value, solo_faltantes: true },
+    )
+    await reloadTerceros()
+    const detalle = [
+      `${r.encontrados} encontrados`,
+      r.sin_resultado ? `${r.sin_resultado} sin resultado` : '',
+      r.fallidos ? `${r.fallidos} fallidos` : '',
+    ].filter(Boolean).join(' · ')
+    toast.success(`${r.total} terceros consultados`, detalle)
+  } catch (exc) {
+    await reloadTerceros()
+    const msg = humanError(exc)
+    if (msg === 'Cancelado.') toast.success('Consulta cancelada', 'Lo consultado hasta ahora queda guardado.')
+    else toast.error('La consulta masiva falló', msg)
   }
 }
 
@@ -841,7 +869,13 @@ watch(dbPath, refresh)
             <Search class="size-4 shrink-0 text-muted-foreground" />
             <Input v-model="tercerosBuscar" placeholder="Buscar por NIT o razón social" class="h-9 max-w-sm" @keyup.enter="reloadTerceros" />
             <Button variant="ghost" size="sm" @click="reloadTerceros">Buscar</Button>
-            <Button variant="ghost" size="sm" class="ml-auto" @click="openTercero()"><Plus class="size-3.5" /> Agregar</Button>
+            <Button
+              v-if="tercerosCounts.sin_rut" variant="outline" size="sm" class="ml-auto"
+              :disabled="rutMasivo.corriendo.value" @click="consultarRutDeTodos"
+            >
+              Consultar el RUT de los {{ tercerosCounts.sin_rut }} pendientes
+            </Button>
+            <Button variant="ghost" size="sm" :class="tercerosCounts.sin_rut ? '' : 'ml-auto'" @click="openTercero()"><Plus class="size-3.5" /> Agregar</Button>
           </div>
           <div class="mt-2 rounded-md border border-border">
             <div v-for="t in terceros" :key="t.nit" class="flex items-center gap-3 border-b border-border px-3 py-2 last:border-b-0">
@@ -1200,10 +1234,27 @@ watch(dbPath, refresh)
             <template v-else>Vacío. «Derivar» los saca de las filas del Excel ya importadas.</template>
           </p>
           <div class="mt-2 flex flex-wrap gap-1.5">
-            <Button variant="outline" size="sm" :disabled="sembrando" @click="sembrarTerceros"><Sparkles class="size-3.5" /> Derivar</Button>
+            <Button variant="outline" size="sm" :disabled="sembrando || rutMasivo.corriendo.value" @click="sembrarTerceros"><Sparkles class="size-3.5" /> Derivar</Button>
+            <Button
+              v-if="tercerosCounts.sin_rut" size="sm" variant="outline"
+              :disabled="rutMasivo.corriendo.value" @click="consultarRutDeTodos"
+            >
+              Consultar los {{ tercerosCounts.sin_rut }}
+            </Button>
             <Button v-if="tercerosCounts.total" size="sm" :variant="panelActivo === 'terceros' ? 'secondary' : 'ghost'" @click="alternarPanel('terceros')">
               {{ panelActivo === 'terceros' ? 'Cerrar listado' : 'Ver listado' }}
             </Button>
+          </div>
+
+          <!-- progreso de la consulta masiva -->
+          <div v-if="rutMasivo.corriendo.value" class="mt-2">
+            <div class="h-1 w-full overflow-hidden rounded-full bg-muted">
+              <div class="h-full bg-primary transition-[width]" :style="{ width: `${rutMasivo.progreso.value.percent ?? 0}%` }" />
+            </div>
+            <div class="mt-1 flex items-center justify-between gap-2">
+              <span class="min-w-0 truncate text-[11px] text-muted-foreground">{{ rutMasivo.etiqueta.value }}</span>
+              <Button variant="ghost" size="sm" class="h-6 px-1 text-xs" @click="rutMasivo.cancelar()">Cancelar</Button>
+            </div>
           </div>
         </div>
 

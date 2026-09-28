@@ -1267,6 +1267,64 @@ def _h_tercero_consultar_rut(params: dict) -> dict:
         conn.close()
 
 
+def _h_terceros_consultar_rut_todos(params: dict, progress=None) -> dict:
+    """Consulta el RUT de todos los terceros pendientes, uno por uno.
+
+    Es un trabajo largo —una consulta HTTP por tercero— así que va como trabajo en
+    segundo plano (D-076): treinta y seis terceros son treinta y seis peticiones, y
+    una petición síncrona reventaría por timeout mientras Python sigue trabajando.
+
+    Va **de uno en uno y con pausa**: es un servicio público del Estado y no hay
+    ninguna prisa que justifique golpearlo en paralelo. Un fallo de red en un NIT
+    no aborta el resto; se cuenta y se sigue.
+    """
+    import time as _time
+
+    db_path = Path(params["db_path"])
+    solo_faltantes = bool(params.get("solo_faltantes", True))
+    pausa = float(params.get("pausa", 0.7))
+
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        pendientes = terceros_module.pendientes_de_rut(conn, solo_faltantes=solo_faltantes)
+        total = len(pendientes)
+        if progress:
+            progress(0, total, f"{total} terceros por consultar")
+
+        encontrados = fallidos = sin_resultado = 0
+        for i, fila in enumerate(pendientes, 1):
+            nit = fila["nit"]
+            dv = fila.get("dv") or nit_module.compute_dv(nit)
+            if progress:
+                progress(i - 1, total, f"{fila.get('razon_social') or nit}…")
+            try:
+                consulta = dian_inc_module.consultar(nit, dv)
+            except Exception:
+                log.exception("falló la consulta del RUT de %s", nit)
+                fallidos += 1
+            else:
+                if consulta.get("found"):
+                    terceros_module.actualizar_desde_rut(conn, nit, consulta)
+                    encontrados += 1
+                elif consulta.get("error"):
+                    fallidos += 1
+                else:
+                    sin_resultado += 1
+            if i < total and pausa:
+                _time.sleep(pausa)
+
+        if progress:
+            progress(total, total, "Listo")
+        return {
+            "total": total, "encontrados": encontrados,
+            "sin_resultado": sin_resultado, "fallidos": fallidos,
+            "counts": terceros_module.contar(conn),
+        }
+    finally:
+        conn.close()
+
+
 def _h_tablero(params: dict) -> dict:
     return tablero_module.tablero(
         params.get("periodo"), include_archived=bool(params.get("include_archived", False))
@@ -1342,6 +1400,7 @@ ASYNC_CAPABLE: dict[str, Callable[[dict, Any], Any]] = {
     "run_validations": _h_run_validations,
     "reindex_pdfs": lambda p, progress: _h_reindex_pdfs(p, progress=progress),
     "list_load_soportes": lambda p, progress: _h_list_load_soportes(p, progress=progress),
+    "terceros_consultar_rut_todos": _h_terceros_consultar_rut_todos,
 }
 
 
@@ -1439,6 +1498,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "terceros_sembrar": _h_terceros_sembrar,
     "tercero_save": _h_tercero_save,
     "tercero_consultar_rut": _h_tercero_consultar_rut,
+    "terceros_consultar_rut_todos": _h_terceros_consultar_rut_todos,
     # Tablero multiempresa (Fase 1.5)
     "tablero": _h_tablero,
     # Plan Único de Cuentas (PUC) por empresa (D-070)
