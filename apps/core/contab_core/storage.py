@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import log
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 # Cuánto espera una escritura a que se libere el lock antes de rendirse (ms).
 BUSY_TIMEOUT_MS = 5_000
@@ -201,6 +201,24 @@ CREATE TABLE IF NOT EXISTS empresa_perfil_fiscal (
 -- Municipios donde la empresa declara ICA, con su tarifa. El ICA es municipal:
 -- la misma empresa retiene a tarifas distintas en municipios distintos.
 -- La tarifa va como TEXT y se lee con Decimal (D-075: nada de float en importes).
+-- Bitácora de las ingestas desde el portal de la DIAN (Fase 2.5).
+-- Qué se intentó, cuándo, por qué camino y cómo salió. El portal falla de formas
+-- raras —mantenimiento, sesión vencida, bloqueo de seguridad— y sin registro cada
+-- fallo se investiga desde cero.
+-- `error` se guarda SIEMPRE enmascarado: el enlace de acceso no puede acabar aquí.
+CREATE TABLE IF NOT EXISTS ingesta_run (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  periodo      TEXT NOT NULL,
+  camino       TEXT NOT NULL,                 -- 'portal' | 'manual'
+  estado       TEXT NOT NULL,                 -- 'ok' | 'error'
+  documentos   INTEGER,
+  archivo      TEXT,
+  error        TEXT,
+  empresa_dian TEXT,                          -- cómo se identificó el portal
+  corrio_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_ingesta_run_periodo ON ingesta_run(periodo);
+
 -- Catálogo de terceros de la empresa (Fase 1.3). Vive DENTRO de la .db de cada
 -- empresa y no en un catálogo central: D-100 descartó el caché compartido porque
 -- habría necesitado una excepción escrita a D-003, y esa regla vale más que las
@@ -407,6 +425,17 @@ CREATE INDEX IF NOT EXISTS idx_excel_row_fecha ON excel_row(fecha_emision);
 """
 
 
+def _m006_bitacora_ingesta(conn: sqlite3.Connection) -> None:
+    """Migración 6 — bitácora de las ingestas desde el portal (Fase 2.5).
+
+    La tabla y su índice se declaran en SCHEMA_SQL con `IF NOT EXISTS`, así que el
+    `executescript` los crea en cualquier BD. El índice puede ir ahí y no acá
+    —al revés que en la migración 3— porque la tabla es nueva: se crea en el mismo
+    script, dos líneas antes.
+    """
+    return None
+
+
 def _m005_terceros(conn: sqlite3.Connection) -> None:
     """Migración 5 — catálogo de terceros por empresa (Fase 1.3).
 
@@ -492,6 +521,7 @@ MIGRACIONES: list[tuple[int, object]] = [
     (3, _m003_columnas_consultables),
     (4, _m004_perfil_fiscal),
     (5, _m005_terceros),
+    (6, _m006_bitacora_ingesta),
 ]
 
 

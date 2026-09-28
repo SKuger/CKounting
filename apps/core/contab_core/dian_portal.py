@@ -130,3 +130,58 @@ def preparar_descarga(periodo: str, enlace: str, grupo: str | None = None) -> di
         "grupo": validar_grupo(grupo),
         "etiqueta": periodo,
     }
+
+
+# ─────────────────────────── bitácora (Fase 2.5) ───────────────────────────
+# Qué se intentó, cuándo y cómo salió. El portal falla de formas que no se
+# repiten —mantenimiento, sesión vencida, bloqueo de seguridad—, y sin registro
+# cada fallo se investiga desde cero.
+#
+# El «bajar varias empresas de un golpe» que pedía el plan se retiró el 2026-09-28:
+# el acceso es un enlace de un solo uso POR EMPRESA, así que un lote sería pegar
+# veinte enlaces — el mismo trabajo, con más código y más formas de fallar.
+
+CAMINOS = ("portal", "manual")
+ESTADOS = ("ok", "error")
+
+
+def registrar_ingesta(
+    conn,
+    *,
+    periodo: str,
+    camino: str = "portal",
+    estado: str = "ok",
+    documentos: int | None = None,
+    archivo: str | None = None,
+    error: str | None = None,
+    empresa_dian: str | None = None,
+) -> dict[str, Any]:
+    """Anota una corrida. El error se guarda **enmascarado**, siempre."""
+    from .storage import transaction
+
+    if camino not in CAMINOS:
+        raise DianPortalError(f"Camino desconocido: «{camino}»")
+    if estado not in ESTADOS:
+        raise DianPortalError(f"Estado desconocido: «{estado}»")
+
+    with transaction(conn):
+        cur = conn.execute(
+            "INSERT INTO ingesta_run(periodo, camino, estado, documentos, archivo, error, "
+            "empresa_dian) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (periodo, camino, estado, documentos, archivo,
+             enmascarar(error) if error else None, empresa_dian),
+        )
+        fila_id = cur.lastrowid
+    return dict(conn.execute("SELECT * FROM ingesta_run WHERE id = ?", (fila_id,)).fetchone())
+
+
+def listar_ingestas(conn, *, periodo: str | None = None, limite: int = 20) -> list[dict[str, Any]]:
+    """Las últimas corridas, de la más reciente a la más vieja."""
+    q = "SELECT * FROM ingesta_run"
+    params: list[Any] = []
+    if periodo:
+        q += " WHERE periodo = ?"
+        params.append(periodo)
+    q += " ORDER BY corrio_at DESC, id DESC LIMIT ?"
+    params.append(int(limite))
+    return [dict(r) for r in conn.execute(q, params).fetchall()]

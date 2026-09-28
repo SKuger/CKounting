@@ -130,3 +130,53 @@ def test_un_archivo_que_no_es_ni_zip_ni_excel_es_error(tmp_path):
 def test_un_archivo_que_no_existe_lo_dice_por_su_nombre(tmp_path):
     with pytest.raises(DianPortalError, match="No encuentro"):
         dp.extraer_excel(tmp_path / "no-esta.zip", tmp_path / "mes.xlsx")
+
+
+# ── la bitácora ──────────────────────────────────────────────────────────────
+
+@pytest.fixture()
+def conn(tmp_path):
+    from contab_core import storage
+    db = tmp_path / "empresa.db"
+    storage.init_empresa_db(db, "900181831", "4", "REAL Seguros")
+    c = storage.connect(db)
+    storage.ensure_schema(c)
+    yield c
+    c.close()
+
+
+def test_una_corrida_queda_anotada(conn):
+    dp.registrar_ingesta(conn, periodo="2026-07", documentos=412, archivo="/tmp/x.xlsx")
+    corridas = dp.listar_ingestas(conn)
+    assert len(corridas) == 1
+    assert corridas[0]["periodo"] == "2026-07" and corridas[0]["documentos"] == 412
+    assert corridas[0]["estado"] == "ok" and corridas[0]["corrio_at"]
+
+
+def test_el_error_se_guarda_enmascarado(conn):
+    """El punto entero de la bitácora es poder leerla después. Si el enlace se
+    guardara ahí, la llave de la cuenta del cliente quedaría en la base."""
+    dp.registrar_ingesta(
+        conn, periodo="2026-07", estado="error",
+        error=f"no pude abrir {ENLACE} después de 3 intentos",
+    )
+    guardado = dp.listar_ingestas(conn)[0]["error"]
+    assert SECRETO not in guardado
+    assert "«enlace omitido»" in guardado and "después de 3 intentos" in guardado
+
+
+def test_las_corridas_salen_de_la_mas_reciente(conn):
+    for p in ("2026-05", "2026-06", "2026-07"):
+        dp.registrar_ingesta(conn, periodo=p)
+    assert dp.listar_ingestas(conn)[0]["periodo"] == "2026-07"
+
+
+def test_se_pueden_filtrar_por_mes(conn):
+    dp.registrar_ingesta(conn, periodo="2026-06")
+    dp.registrar_ingesta(conn, periodo="2026-07")
+    assert len(dp.listar_ingestas(conn, periodo="2026-07")) == 1
+
+
+def test_un_camino_inventado_se_rechaza(conn):
+    with pytest.raises(DianPortalError, match="Camino desconocido"):
+        dp.registrar_ingesta(conn, periodo="2026-07", camino="telepatía")
