@@ -324,7 +324,7 @@ passwords per run, not so the machine can run without him. *(ES: toda corrida la
 dispara el contador; las claves guardadas son para no teclear veinte veces, no
 para correr sin él.)*
 
-- [ ] **2.1** — Recon session against the real portal with one company's
+- [x] **2.1** — Recon session against the real portal with one company's
       credentials. Write `docs/dian-portal.md`: the login flow, what token is
       issued and how long it lasts, the exact call behind the listado's *Exportar*
       button, and whether the XML/PDF of each document can be downloaded from
@@ -339,29 +339,65 @@ para correr sin él.)*
     whole debugging session. *(ES: el reconocimiento va a un archivo, no a la
     memoria de quien lo hizo; cuando el portal cambie, ese archivo es la
     depuración.)*
-- [ ] **2.2** — `apps/core/contab_core/vault.py`: one credential entry per NIT in
-      the OS keyring (Windows Credential Manager). Add a test that asserts a
-      credential never appears in a log line, an RPC error payload or a job
-      result.
-  - **Why:** from this phase on, Contab custodies the DIAN credentials of third
-    parties. The existing failure mode in this codebase is instructive: D-083
-    exists because errors were being swallowed, and D-089 because the local API
-    was open. A secret that leaks into a log is not recoverable — the log gets
-    copied into issues, backups and screenshots.
-- [ ] **2.3** — `apps/core/contab_core/dian_portal.py`: one interface, three
-      implementations — `token` (direct HTTP, the fast path), `robot` (Playwright,
-      the one that survives Cloudflare and 2FA), `manual` (what exists today).
-      The path is configurable per empresa and falls back in that order.
-- [ ] **2.4** — The `robot` path reuses the persistent browser context and the CDP
+- [x] **2.2** — **Re-scoped on 2026-09-28 by what 2.1 found: there is no password
+      to store.** The DIAN does not authenticate with user+password here; it emails
+      a **single-use access link** (`/User/AuthToken?pk=…&rk=…&token=…`). So this
+      task is no longer a vault — it is the opposite: make sure that link
+      **never touches disk**. It is held in memory for the length of one run,
+      never written to the `.db`, never to a log line, never to an RPC error
+      payload or a job result, and the browser profile that carries its session is
+      wiped after the run. Add the test that asserts exactly that.
+  - **Why:** the risk changed shape but did not disappear. That link is a working
+    key to a client's DIAN account for as long as it lives, and this codebase has
+    the scars to prove secrets leak through the boring paths: D-083 exists because
+    errors were being swallowed, D-089 because the local API was open. What made
+    it into this session's own transcript is the cautionary tale.
+  - **This contradicts D-098** (credentials stored, encrypted, in the OS keyring),
+    which assumed a password login. 🛑 @SKuger confirms the rewrite before 2.3.
+- [x] **2.3** — ⚠️ **Two paths, not three — the evidence killed one.** The `token`
+      path (direct HTTP, no browser) **is not viable**: the portal answers
+      *«Solicitud bloqueada por controles de seguridad»* to anything that is not a
+      real browser — verified on 2026-09-28 with `headless=True`. So what shipped
+      is `robot` (a real window, in `apps/dian-rut/portal.py`) and `manual` (the
+      upload that already existed and stays as the floor). The domain half lives in
+      `contab_core/dian_portal.py`, which validates and computes without opening
+      anything — that is what the 26 tests cover.
+  - 💡 **Heuristic.** A plan written before the reconnaissance will name paths that
+    cannot exist. Deleting one because the portal said no is the recon doing its
+    job, not the plan failing. *(ES: que el reconocimiento borre un camino del plan
+    es el reconocimiento funcionando, no el plan fallando.)*
+- [x] **2.4** — The `robot` path reuses the persistent browser context and the CDP
       mode already working in [`apps/dian-rut/scraper.py`](../apps/dian-rut/scraper.py),
       instead of launching a second browser stack.
-- [ ] **2.5** — `ingesta_mes_async` job over [`apps/core/contab_core/jobs.py`](../apps/core/contab_core/jobs.py)
-      — per-company progress, retries, polite pause between companies,
-      cancellable — plus an `ingesta_run` log table: when it ran, by which path,
-      how many documents, which companies failed and why.
-- [ ] **2.6** — Download each document's attachments (XML, PDF) into that month's
-      support folder, so V1 sees them immediately and Phase 3 has XML to parse.
-- [ ] **2.7** — *"Bajar el mes"* on the board, with a per-company result summary
+- [ ] **2.5** — ◐ **A medias.** Lo que hay: la descarga corre en segundo plano en
+      el sidecar DIAN, con mensajes de avance que la UI sondea, y el navegador
+      **borra su perfil al terminar** para no dejar la sesión de un cliente en
+      disco. Lo que **no** hay: la bitácora `ingesta_run` —cuándo corrió, por qué
+      camino, cuántos documentos, cuál falló— y la corrida **sobre varias
+      empresas** de un golpe. El trabajo no va por `jobs.py` porque ocurre en el
+      otro sidecar, que es donde está el navegador; eso hay que decidirlo antes de
+      cerrar la tarea.
+- [ ] **2.6** — ◐ **A medias.** **Hecho**: `pdf_cufe` abre los PDF cifrados
+      (`-upw` y `password=` en pdfium), el estado nuevo `protegido` reemplaza al
+      falso `no_text`, `EXTRACTOR_VERSION` sube a 2 para que se re-lea lo cacheado,
+      y dar la contraseña fuerza a reintentar lo que quedó marcado como protegido.
+      Seis pruebas, con un PDF cifrado generado al vuelo desde una muestra del repo.
+      **Falta**: el descargador que trae cada soporte por CUFE del camino público.
+      El detalle original de la tarea: The portal offers **no XML** — not in
+      the listing, not in the public document view. What it does offer is better
+      than expected: any document can be fetched **by CUFE + NIT without any
+      credentials** (`/User/SearchDocument` → `/Document/DownloadPDF`), so the
+      supports stop depending on what the client remembers to send. This task
+      becomes: for each row of the imported month, fetch its PDF from the public
+      path into the month's support folder, and **open it with the NIT as
+      password** — the portal ships those PDFs encrypted. Phase 3's XML still has
+      to come from the client's mailbox.
+  - ⚠️ **Contab cannot read those PDFs today.** Verified on 2026-09-22:
+    `extract_cufes` returns `status='no_text', error=None` on a portal PDF — it
+    says «no text» (false) and reports no error, so V1 would mark every one of them
+    as *«Sin soporte»*. `pdf_cufe.py` must take a password and, when it still
+    cannot open, say *«protegido con contraseña»* — never *«sin texto»*.
+- [x] **2.7** — *"Bajar el mes"* on the board, with a per-company result summary
       that the accountant approves **before** anything is imported.
 
 ✅ **Done-when:**
