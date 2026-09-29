@@ -39,6 +39,16 @@ EXCLUIR_RE = re.compile(r"veh[ií]culo|el[eé]ctric|h[ií]brid|gran contribuyent
 ESPERA_MIN_S, ESPERA_MAX_S = 60, 120
 PASO_TIMEOUT_MS = 90_000  # el portal tarda ~15 s por paso; a veces bastante más
 
+# Pero en cuanto el portal ofrece trámites —o sea, cuando YA sabemos que hay cupo—
+# noventa segundos es una eternidad: el flujo caduca solo y la pantalla vuelve al
+# inicio, así que cuando el clic por fin se rinde lo que se le entrega al usuario
+# ya no sirve. Pasado ese punto se falla rápido, mientras la pantalla vive.
+PASO_RAPIDO_MS = 12_000
+
+# Y si aun así se pierde el hilo, no se espera el minuto largo de siempre: acabamos
+# de ver que hay cupo, y dentro de un minuto puede no haberlo.
+ESPERA_REINTENTO_S = 5
+
 CITAS_DIR = Path(WORKDIR) / "citas"
 CAPTURAS = CITAS_DIR / "capturas"
 PERFIL = CITAS_DIR / "browser_profile"
@@ -253,6 +263,9 @@ def recorrido(page: Page, estudiar=None, cedula: str | None = None) -> tuple[str
     if _captcha_visible(page):
         return "captcha", _texto(page), ""
 
+    # Desde aquí el portal ofrece trámites: hay cupo y el reloj corre.
+    page.set_default_timeout(PASO_RAPIDO_MS)
+
     # Desde aquí el portal ofrece trámites. Cualquier paso que no salga como en el manual del usuario
     # es "detenerse y avisar": perder un cupo real por un selector sería lo peor.
     try:
@@ -283,7 +296,24 @@ def recorrido(page: Page, estudiar=None, cedula: str | None = None) -> tuple[str
             return "captcha", _texto(page), detalle + " · Cédula llenada."
         return "hay_cupo", _texto(page), detalle + " · Cédula llenada y tratamiento aceptado. Completa lo que sigue."
     except Exception as e:  # noqa: BLE001
-        return "hay_cupo", _texto(page), f"Hay trámites pero me trabé ({str(e).splitlines()[0][:120]}): termina tú."
+        motivo = str(e).splitlines()[0][:120]
+        texto = _texto(page)
+        # ¿La pantalla sigue sirviendo? Si el portal devolvió el flujo al inicio,
+        # pausar ahí es peor que inútil: el usuario se queda mirando una pantalla
+        # muerta creyendo que tiene una cita. Mejor decirlo y reintentar ya, que
+        # el cupo que acabamos de ver puede seguir estando.
+        if _util(texto):
+            return "hay_cupo", texto, f"Hay trámites pero me trabé ({motivo}): termina tú."
+        return "perdido", texto, f"Había cupo y se perdió el hilo ({motivo}); el portal volvió al inicio."
+
+
+def _util(texto: str) -> bool:
+    """¿La pantalla sigue en algún punto del trámite, o el portal ya se reinició?
+
+    Se mira si queda algo del flujo —el desplegable de trámites, el calendario o el
+    formulario de datos—. Si no queda nada, estamos otra vez en la portada.
+    """
+    return bool(TRAMITE_RE.search(texto) or FECHA_RE.search(texto) or DATOS_RE.search(texto))
 
 
 def _captcha_visible(page: Page) -> bool:
@@ -424,6 +454,12 @@ class Vigia:
         # Ahora solo la levanta un acto del usuario: Continuar, o resolver a la
         # persona en Contab.
         self._continuar = threading.Event()
+        # Pestañas donde ya se encontró algo. NUNCA se reutilizan: el usuario está
+        # haciendo el trámite ahí. Si la búsqueda sigue —por Continuar o porque la
+        # pausa falló por lo que sea— arranca en una pestaña NUEVA y la del cupo se
+        # queda intacta. La pausa protege; esto además garantiza que, aunque la
+        # pausa fallara, la pantalla encontrada no se pierde.
+        self._reservadas: set = set()
         self._hilo: threading.Thread | None = None
         self._log: deque[dict] = deque(maxlen=200)
         self.estado = "detenido"  # detenido | iniciando | revisando | esperando | hay_cupo | captcha
@@ -446,6 +482,7 @@ class Vigia:
             self._stop.clear()
             self._continuar.clear()
             self.pausado = False
+            self._reservadas = set()
             self.estado, self.intentos, self.sin_cupo = "iniciando", 0, 0
             self.pantalla = self.detalle = self.captura = self.proxima_revision = self.persona = None
             self._hilo = threading.Thread(target=self._correr, name="vigia-citas", daemon=True)
@@ -537,8 +574,12 @@ class Vigia:
             self._anotar("info", "Búsqueda detenida")
 
     def _pagina(self, ctx) -> Page:
+        """Una pestaña para buscar. Nunca una donde ya se encontró cupo."""
         try:
-            page = next((p for p in ctx.pages if not p.is_closed()), None) or ctx.new_page()
+            page = next(
+                (p for p in ctx.pages if not p.is_closed() and p not in self._reservadas),
+                None,
+            ) or ctx.new_page()
         except Exception as e:
             raise _VentanaCerrada() from e
         page.set_default_timeout(PASO_TIMEOUT_MS)
@@ -588,6 +629,14 @@ class Vigia:
             elif resultado == "otra_ciudad":
                 self._anotar("info", f"Revisión {self.intentos}: hay trámites pero no en {CIUDAD} ({detalle[:300]}); sigo buscando")
                 self._evidencia(page, "otra_ciudad")
+            elif resultado == "perdido":
+                self._anotar("warn", f"Revisión {self.intentos}: {detalle} Reintento ya mismo.")
+                self._evidencia(page, "perdido")
+                self.estado = "esperando"
+                self.proxima_revision = (dt.datetime.now() + dt.timedelta(seconds=ESPERA_REINTENTO_S)).isoformat(timespec="seconds")
+                if self._stop.wait(ESPERA_REINTENTO_S):
+                    return True
+                continue
             elif resultado == "sin_fechas":
                 self._anotar("info", f"Revisión {self.intentos}: hay trámite en {CIUDAD} pero sin días disponibles; sigo buscando")
                 self._evidencia(page, "sin_fechas")
@@ -635,11 +684,17 @@ class Vigia:
                     estado = estado_de(persona["id"])
                 except sqlite3.Error:
                     continue
-                if estado in ("agendada", None):
-                    txt = "agendada" if estado == "agendada" else "quitada de la lista"
-                    self._anotar("ok", f"{_quien(persona)}: {txt}. Sigo con la siguiente persona.")
+                if estado == "agendada":
+                    self._anotar("ok", f"{_quien(persona)}: agendada. Sigo con la siguiente persona.")
                     self.pantalla = self.detalle = self.captura = None
                     return True
+                if estado is None:
+                    # La persona no aparece en la base. Antes esto reanudaba la
+                    # búsqueda —«la quitaron de la lista»—, pero es indistinguible
+                    # de que el sidecar esté leyendo otro contab.db, y entonces
+                    # reanudar significa perder el cupo. Se queda en pausa y se
+                    # avisa: que el usuario decida con el botón.
+                    self._anotar("warn", "No encuentro a esta persona en la lista; sigo en pausa por si acaso.")
             return False
         finally:
             self.pausado = False
@@ -653,6 +708,12 @@ class Vigia:
         except sqlite3.Error as e:
             self._anotar("warn", f"No pude anotar el resultado en la lista: {e}")
         self.estado = resultado
+        # Desde aquí esta pestaña es del usuario: la búsqueda no vuelve a usarla.
+        self._reservadas.add(page)
+        try:
+            page.bring_to_front()
+        except Exception:  # noqa: BLE001 — traerla al frente es cortesía, no requisito
+            pass
         self.captura = self._evidencia(page, self.estado)
         self.pantalla = _resumen_pantalla(texto)
         self.detalle = detalle
@@ -661,14 +722,25 @@ class Vigia:
         else:
             titulo, encabezado = "Cita DIAN: ¡hay cupo!", f"¡HAY CUPO en {CIUDAD}! Devoluciones · Videoatención."
         self._anotar("ok", f"{encabezado} {detalle}".strip())
-        MENSAJE.write_text(
-            f"{encabezado}\n{detalle}\nDetectado: {dt.datetime.now():%Y-%m-%d %H:%M:%S}\n\n"
-            "La ventana del navegador quedó abierta en esa pantalla: termina la reserva ahí y marca a la\n"
-            "persona como agendada en Contab (Consultas DIAN → Citas); el bot sigue con la siguiente.\n"
-            f"Captura: {self.captura}\n\n---- Lo que muestra el portal ----\n{self.pantalla}\n",
-            encoding="utf-8",
-        )
-        _avisar(titulo, f"{encabezado}\n{detalle}\n\nTermina la reserva en la ventana del navegador que quedó abierta.")
+        # Todo lo que sigue es AVISO, no el hallazgo. Si falla —disco lleno, permisos,
+        # una carpeta que no existe— no puede llevarse la búsqueda por delante: el
+        # cupo ya está en pantalla y perderlo por no poder escribir un .txt sería
+        # absurdo. Se anota y se sigue.
+        self._avisar_encontrado(titulo, encabezado, detalle)
+
+    def _avisar_encontrado(self, titulo: str, encabezado: str, detalle: str) -> None:
+        try:
+            MENSAJE.parent.mkdir(parents=True, exist_ok=True)
+            MENSAJE.write_text(
+                f"{encabezado}\n{detalle}\nDetectado: {dt.datetime.now():%Y-%m-%d %H:%M:%S}\n\n"
+                "La ventana del navegador quedó abierta en esa pantalla: termina la reserva ahí y marca a la\n"
+                "persona como agendada en Contab (Consultas DIAN → Citas); el bot sigue con la siguiente.\n"
+                f"Captura: {self.captura}\n\n---- Lo que muestra el portal ----\n{self.pantalla}\n",
+                encoding="utf-8",
+            )
+            _avisar(titulo, f"{encabezado}\n{detalle}\n\nTermina la reserva en la ventana del navegador que quedó abierta.")
+        except Exception as e:  # noqa: BLE001
+            self._anotar("warn", f"No pude dejar el aviso en disco ({str(e).splitlines()[0][:120]}), pero el cupo está en pantalla")
 
 
 vigia = Vigia()
