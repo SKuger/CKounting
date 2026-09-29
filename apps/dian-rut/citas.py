@@ -39,6 +39,16 @@ EXCLUIR_RE = re.compile(r"veh[ií]culo|el[eé]ctric|h[ií]brid|gran contribuyent
 ESPERA_MIN_S, ESPERA_MAX_S = 60, 120
 PASO_TIMEOUT_MS = 90_000  # el portal tarda ~15 s por paso; a veces bastante más
 
+# Pero en cuanto el portal ofrece trámites —o sea, cuando YA sabemos que hay cupo—
+# noventa segundos es una eternidad: el flujo caduca solo y la pantalla vuelve al
+# inicio, así que cuando el clic por fin se rinde lo que se le entrega al usuario
+# ya no sirve. Pasado ese punto se falla rápido, mientras la pantalla vive.
+PASO_RAPIDO_MS = 12_000
+
+# Y si aun así se pierde el hilo, no se espera el minuto largo de siempre: acabamos
+# de ver que hay cupo, y dentro de un minuto puede no haberlo.
+ESPERA_REINTENTO_S = 5
+
 CITAS_DIR = Path(WORKDIR) / "citas"
 CAPTURAS = CITAS_DIR / "capturas"
 PERFIL = CITAS_DIR / "browser_profile"
@@ -253,6 +263,9 @@ def recorrido(page: Page, estudiar=None, cedula: str | None = None) -> tuple[str
     if _captcha_visible(page):
         return "captcha", _texto(page), ""
 
+    # Desde aquí el portal ofrece trámites: hay cupo y el reloj corre.
+    page.set_default_timeout(PASO_RAPIDO_MS)
+
     # Desde aquí el portal ofrece trámites. Cualquier paso que no salga como en el manual del usuario
     # es "detenerse y avisar": perder un cupo real por un selector sería lo peor.
     try:
@@ -283,7 +296,24 @@ def recorrido(page: Page, estudiar=None, cedula: str | None = None) -> tuple[str
             return "captcha", _texto(page), detalle + " · Cédula llenada."
         return "hay_cupo", _texto(page), detalle + " · Cédula llenada y tratamiento aceptado. Completa lo que sigue."
     except Exception as e:  # noqa: BLE001
-        return "hay_cupo", _texto(page), f"Hay trámites pero me trabé ({str(e).splitlines()[0][:120]}): termina tú."
+        motivo = str(e).splitlines()[0][:120]
+        texto = _texto(page)
+        # ¿La pantalla sigue sirviendo? Si el portal devolvió el flujo al inicio,
+        # pausar ahí es peor que inútil: el usuario se queda mirando una pantalla
+        # muerta creyendo que tiene una cita. Mejor decirlo y reintentar ya, que
+        # el cupo que acabamos de ver puede seguir estando.
+        if _util(texto):
+            return "hay_cupo", texto, f"Hay trámites pero me trabé ({motivo}): termina tú."
+        return "perdido", texto, f"Había cupo y se perdió el hilo ({motivo}); el portal volvió al inicio."
+
+
+def _util(texto: str) -> bool:
+    """¿La pantalla sigue en algún punto del trámite, o el portal ya se reinició?
+
+    Se mira si queda algo del flujo —el desplegable de trámites, el calendario o el
+    formulario de datos—. Si no queda nada, estamos otra vez en la portada.
+    """
+    return bool(TRAMITE_RE.search(texto) or FECHA_RE.search(texto) or DATOS_RE.search(texto))
 
 
 def _captcha_visible(page: Page) -> bool:
@@ -599,6 +629,14 @@ class Vigia:
             elif resultado == "otra_ciudad":
                 self._anotar("info", f"Revisión {self.intentos}: hay trámites pero no en {CIUDAD} ({detalle[:300]}); sigo buscando")
                 self._evidencia(page, "otra_ciudad")
+            elif resultado == "perdido":
+                self._anotar("warn", f"Revisión {self.intentos}: {detalle} Reintento ya mismo.")
+                self._evidencia(page, "perdido")
+                self.estado = "esperando"
+                self.proxima_revision = (dt.datetime.now() + dt.timedelta(seconds=ESPERA_REINTENTO_S)).isoformat(timespec="seconds")
+                if self._stop.wait(ESPERA_REINTENTO_S):
+                    return True
+                continue
             elif resultado == "sin_fechas":
                 self._anotar("info", f"Revisión {self.intentos}: hay trámite en {CIUDAD} pero sin días disponibles; sigo buscando")
                 self._evidencia(page, "sin_fechas")
