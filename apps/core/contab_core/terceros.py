@@ -240,3 +240,12 @@ def actualizar_desde_rut(conn, nit: str, datos: dict[str, Any]) -> dict[str, Any
     with transaction(conn):
         conn.execute(f"UPDATE tercero SET {', '.join(campos)} WHERE nit = ?", valores)
     return obtener(conn, nit_n)
+
+
+def pendientes_de_rut(conn, *, solo_faltantes: bool = True) -> list[dict[str, Any]]:
+    """Los terceros a los que hay que consultarles el RUT."""
+    q = "SELECT nit, dv, razon_social FROM tercero"
+    if solo_faltantes:
+        q += " WHERE consultado_at IS NULL"
+    q += " ORDER BY razon_social COLLATE NOCASE, nit"
+    return [dict(r) for r in conn.execute(q).fetchall()]

@@ -417,9 +417,17 @@ class Vigia:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._stop = threading.Event()
+        # La pausa al encontrar cupo NO puede depender de la base de datos. Antes se
+        # reanudaba sola en cuanto la persona dejaba de estar `en_curso`, y si el
+        # marcado fallaba —su error solo se anotaba como aviso— la espera terminaba
+        # al instante, el bot volvía a navegar y se perdía el cupo encontrado.
+        # Ahora solo la levanta un acto del usuario: Continuar, o resolver a la
+        # persona en Contab.
+        self._continuar = threading.Event()
         self._hilo: threading.Thread | None = None
         self._log: deque[dict] = deque(maxlen=200)
         self.estado = "detenido"  # detenido | iniciando | revisando | esperando | hay_cupo | captcha
+        self.pausado = False
         self.intentos = 0
         self.sin_cupo = 0
         self.ultima_revision: str | None = None
@@ -436,6 +444,8 @@ class Vigia:
             if self._hilo and self._hilo.is_alive():
                 return False
             self._stop.clear()
+            self._continuar.clear()
+            self.pausado = False
             self.estado, self.intentos, self.sin_cupo = "iniciando", 0, 0
             self.pantalla = self.detalle = self.captura = self.proxima_revision = self.persona = None
             self._hilo = threading.Thread(target=self._correr, name="vigia-citas", daemon=True)
@@ -444,11 +454,23 @@ class Vigia:
 
     def detener(self) -> None:
         self._stop.set()
+        self._continuar.set()      # que una pausa no deje el hilo colgado
+
+    def continuar(self) -> dict:
+        """Reanuda la búsqueda después de un cupo encontrado. Sin esto, el bot se
+        queda quieto para siempre: perder un cupo por seguir buscando es peor que
+        quedarse esperando de más."""
+        if not self.pausado:
+            return {"reanudado": False, "motivo": "La búsqueda no está en pausa."}
+        self._continuar.set()
+        self._anotar("info", "Continuar: sigo buscando la siguiente cita")
+        return {"reanudado": True}
 
     def snapshot(self) -> dict:
         return {
             "activo": bool(self._hilo and self._hilo.is_alive()),
             "estado": self.estado,
+            "pausado": self.pausado,
             "intentos": self.intentos,
             "sin_cupo": self.sin_cupo,
             "ultima_revision": self.ultima_revision,
@@ -571,8 +593,9 @@ class Vigia:
                 self._evidencia(page, "sin_fechas")
             elif resultado in ("hay_cupo", "captcha"):
                 self._encontrado(page, resultado, texto, detalle)
-                # La ventana queda en esa pantalla hasta que el contador, en Contab, marque a la persona
-                # como agendada o la devuelva a pendiente; entonces seguimos con la siguiente.
+                # La ventana queda EN ESA PANTALLA y la búsqueda se detiene hasta que
+                # el usuario pulse Continuar. No se vuelve a navegar por nada: el
+                # cupo encontrado dura poco y volver al portal lo pierde.
                 if not self._esperar_usuario(persona):
                     return True
                 if page.is_closed():
@@ -587,18 +610,39 @@ class Vigia:
         return True
 
     def _esperar_usuario(self, persona: dict) -> bool:
-        """Espera a que la persona deje de estar `en_curso`. False si pulsaron Detener."""
-        while not self._stop.wait(2):
-            try:
-                estado = estado_de(persona["id"])
-            except sqlite3.Error:
-                continue
-            if estado != "en_curso":
-                txt = "agendada" if estado == "agendada" else ("devuelta a pendiente" if estado else "quitada de la lista")
-                self._anotar("ok", f"{_quien(persona)}: {txt}. Sigo con la siguiente persona.")
-                self.pantalla = self.detalle = self.captura = None
-                return True
-        return False
+        """Pausa la búsqueda hasta que el usuario la reanude. False si pulsaron Detener.
+
+        Se levanta de dos maneras, **ambas actos deliberados del usuario**:
+
+        - pulsar *Continuar* en Contab, o
+        - marcar a la persona como **agendada** (o quitarla de la lista).
+
+        Lo que ya NO la levanta es que la persona siga en `pendiente`. Antes bastaba
+        con que no estuviera `en_curso`, así que un fallo al marcarla —que solo se
+        anotaba como aviso— reanudaba la búsqueda sola, el bot volvía a navegar y el
+        cupo encontrado se perdía. Quedarse esperando de más es barato; perder un
+        cupo no.
+        """
+        self.pausado = True
+        self._continuar.clear()
+        self._anotar("ok", f"En pausa: la ventana queda en esa pantalla. Pulsa «Continuar» cuando termines.")
+        try:
+            while not self._stop.is_set():
+                if self._continuar.wait(1):
+                    self.pantalla = self.detalle = self.captura = None
+                    return not self._stop.is_set()
+                try:
+                    estado = estado_de(persona["id"])
+                except sqlite3.Error:
+                    continue
+                if estado in ("agendada", None):
+                    txt = "agendada" if estado == "agendada" else "quitada de la lista"
+                    self._anotar("ok", f"{_quien(persona)}: {txt}. Sigo con la siguiente persona.")
+                    self.pantalla = self.detalle = self.captura = None
+                    return True
+            return False
+        finally:
+            self.pausado = False
 
     def _encontrado(self, page: Page, resultado: str, texto: str, detalle: str) -> None:
         persona = self.persona or {"cedula": "?"}

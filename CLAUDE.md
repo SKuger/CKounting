@@ -66,6 +66,20 @@ Catálogo completo (103 entradas) → [`docs/decisions.md`](docs/decisions.md).
 - Cuando el usuario dice *"te voy a pasar un Excel de muestra"* o *"te guío en este punto"*, **detenerse y esperar el input** antes de inventar columnas, validaciones o estructuras.
 - Los datos de prueba en `docs/samples/` son **falsos** (sin PII real) y se pueden commitear.
 
+### Nada de modales para formularios (norma, 2026-09-28)
+
+**No se usan modales.** Todo formulario —editar, crear, configurar, listar— se abre
+como un **panel expansible** que despliega y repliega el mismo botón que lo invoca.
+
+- El panel vive **en su sitio**: lo grande (traer de la DIAN, un listado) se expande
+  como una banda a lo ancho, bajo la cabecera; lo pequeño (una ficha del panel
+  lateral) se expande dentro de su propia tarjeta.
+- Solo uno abierto a la vez, y el botón que lo abrió lo cierra.
+- **Por qué**: un modal tapa el contexto justo cuando se necesita —configurar el
+  perfil fiscal mientras se mira el mes, o pegar el enlace mientras se ve qué mes
+  falta— y obliga a cerrarlo para comprobar cualquier cosa. El panel deja ver lo de
+  atrás y no roba el foco de la página.
+
 ### El libro de avance (norma, 2026-09-21)
 
 Hay un **libro de avance publicado como artifact**, que es donde el dueño mira cómo va el plan sin abrir el repo:

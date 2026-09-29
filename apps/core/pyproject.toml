@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.9,<1"]
+dev = ["pytest>=8", "ruff>=0.9,<1", "pypdf>=4,<7"]  # pypdf: solo pruebas — cifra una muestra para el caso del PDF protegido
 build = ["pyinstaller>=6"]  # empaqueta el sidecar (contab-sidecar.spec) para el instalador de escritorio
 
 [project.scripts]

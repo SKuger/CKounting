@@ -35,6 +35,20 @@ def papelera_dir() -> Path:
     return p
 
 
+def descargas_dir(nit: str) -> Path:
+    """Donde caen los archivos que Contab baja de la DIAN, por empresa.
+
+    Es una carpeta que administra Contab, no una que el contador elija: el ZIP y el
+    Excel del portal son un paso intermedio, no documentos suyos. Pedirle que
+    configurara una carpeta para esto era pedirle trabajo por un archivo que no va
+    a volver a abrir — y encima el campo que se le pedía (`default_folder`) no tiene
+    dónde configurarse desde que el mes pasó a ser el contenedor (D-062).
+    """
+    destino = data_dir() / "descargas" / (nit or "sin-nit")
+    destino.mkdir(parents=True, exist_ok=True)
+    return destino
+
+
 def program_db_path() -> Path:
     """The program-level DB (contab.db): user, settings, empresa registry.
     Complements D-003 (per-empresa DBs stay isolated); this only holds

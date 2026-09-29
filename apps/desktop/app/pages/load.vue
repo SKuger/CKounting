@@ -334,6 +334,13 @@ watch(loadId, refresh)
 
 <template>
   <div class="flex h-full min-h-0 flex-col">
+    <DirectoryPicker
+      :open="exportPickerOpen"
+      :initial-path="exportFolder || empresaInfo?.default_folder || ''"
+      title="Carpeta donde se guardará el reporte"
+      @pick="onExportFolderPicked"
+      @close="exportPickerOpen = false"
+    />
     <header class="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
       <NuxtLink :to="{ path: '/empresa', query: { db: dbPath } }" class="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground">
         <ArrowLeft class="size-3.5" /> {{ empresaInfo?.razon_social || 'Empresa' }}
@@ -500,13 +507,6 @@ watch(loadId, refresh)
       </div>
     </section>
 
-    <DirectoryPicker
-      :open="exportPickerOpen"
-      :initial-path="exportFolder || empresaInfo?.default_folder || ''"
-      title="Carpeta donde se guardará el reporte"
-      @pick="onExportFolderPicked"
-      @close="exportPickerOpen = false"
-    />
 
     <Dialog v-model:open="renameOpen">
       <DialogContent class="sm:max-w-2xl">

@@ -37,12 +37,19 @@ LABEL_RE = re.compile(r"\b(CUFE|CUDE|CUDS)\b\s*:?\s*", re.IGNORECASE)
 EXTRACTION_STATUS_OK = "ok"
 EXTRACTION_STATUS_NO_TEXT = "no_text"
 EXTRACTION_STATUS_ERROR = "error"
+# El PDF existe y tiene texto, pero está cifrado y la contraseña que se probó no
+# lo abre. Merece estado propio: decir "sin texto" mandaría al contador a pedirle
+# al cliente un soporte que ya tiene (D-080 aplicado a un caso nuevo). Los PDF que
+# entrega el portal de la DIAN vienen cifrados con el NIT.
+EXTRACTION_STATUS_PROTEGIDO = "protegido"
 
 # Bump whenever the extraction algorithm changes so cached entries (keyed only by
 # mtime/size) get re-extracted instead of returning a value the old code produced.
 #   1 → segment-boundary regrouping (no more glued auth numbers) + QR cross-check
 #       of unlabeled/failed text reads (D-067).
-EXTRACTOR_VERSION = 1
+# 2: el extractor aprende a abrir PDFs con contraseña. Subirlo hace que se
+# re-lean los que quedaron cacheados como «sin texto» sin serlo.
+EXTRACTOR_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -163,12 +170,23 @@ def comprobar_pdftotext() -> dict:
             "error": None}
 
 
-def _pdftotext(pdf_path: Path, layout: bool, timeout: float = 30.0) -> str:
-    """Texto del PDF. Lanza PopplerNoDisponible si falta el binario.
+class PdfProtegido(RuntimeError):
+    """El PDF está cifrado y la contraseña probada no lo abre."""
+
+
+def _pdftotext(pdf_path: Path, layout: bool, timeout: float = 30.0,
+               password: str | None = None) -> str:
+    """Texto del PDF. Lanza PopplerNoDisponible si falta el binario y PdfProtegido
+    si el archivo está cifrado.
 
     Antes devolvía "" ante CUALQUIER fallo, así que 'falta Poppler' y 'este PDF no
-    tiene texto' acababan en el mismo sitio (D-080)."""
-    args = [pdftotext_exe(), "-layout" if layout else "-raw", "-enc", "UTF-8", str(pdf_path), "-"]
+    tiene texto' acababan en el mismo sitio (D-080). Un PDF cifrado caía en esa
+    misma trampa: `pdftotext` sale con código 1 y «Incorrect password», y eso se
+    convertía en «sin texto»."""
+    args = [pdftotext_exe(), "-layout" if layout else "-raw", "-enc", "UTF-8"]
+    if password:
+        args += ["-upw", str(password)]
+    args += [str(pdf_path), "-"]
     try:
         result = subprocess.run(args, capture_output=True, timeout=timeout, check=False)
     except FileNotFoundError as exc:
@@ -180,6 +198,12 @@ def _pdftotext(pdf_path: Path, layout: bool, timeout: float = 30.0) -> str:
     except subprocess.TimeoutExpired:
         return ""  # este PDF concreto tardó demasiado; los demás pueden ir bien
     if result.returncode != 0:
+        salida = result.stderr.decode("utf-8", errors="replace").lower()
+        if "password" in salida or "encrypt" in salida:
+            raise PdfProtegido(
+                "El PDF está protegido con contraseña. Los que entrega el portal de "
+                "la DIAN se abren con el NIT de la empresa."
+            )
         return ""
     return result.stdout.decode("utf-8", errors="replace")
 
@@ -240,7 +264,8 @@ def _decode_qrs_in_image(detector: cv2.QRCodeDetector, img: np.ndarray) -> list[
     return list(payloads)
 
 
-def _scan_qrs_in_pdf(pdf_path: Path, dpi_attempts: tuple[int, ...]) -> list[str]:
+def _scan_qrs_in_pdf(pdf_path: Path, dpi_attempts: tuple[int, ...],
+                     password: str | None = None) -> list[str]:
     """Walk every page at each requested DPI, collect every distinct QR payload.
 
     Different QRs on the same page can be detected at different DPIs (Movistar:
@@ -249,7 +274,7 @@ def _scan_qrs_in_pdf(pdf_path: Path, dpi_attempts: tuple[int, ...]) -> list[str]
     detector = cv2.QRCodeDetector()
     seen: set[str] = set()
     try:
-        pdf = pdfium.PdfDocument(str(pdf_path))
+        pdf = pdfium.PdfDocument(str(pdf_path), password=password or None)
     except Exception:
         return []
     try:
@@ -286,6 +311,7 @@ def extract_cufes(
     pdf_path: str | Path,
     *,
     qr_dpi_attempts: tuple[int, ...] = DEFAULT_QR_DPI_ATTEMPTS,
+    password: str | None = None,
 ) -> ExtractionResult:
     """Run the layered extraction: pdftotext-raw → pdftotext-layout → QR scan.
 
@@ -303,7 +329,12 @@ def extract_cufes(
 
     # Pass 1: raw text. Labeled hit → done.
     try:
-        text = _pdftotext(pdf_path, layout=False)
+        text = _pdftotext(pdf_path, layout=False, password=password)
+    except PdfProtegido as exc:
+        # Cifrado y la contraseña no abre. Se dice lo que pasa: si esto volviera
+        # como "sin texto", el contador saldría a pedir un soporte que ya tiene.
+        return ExtractionResult(cufes=[], source="none",
+                                status=EXTRACTION_STATUS_PROTEGIDO, error=str(exc))
     except PopplerNoDisponible as exc:
         # Falta la dependencia, no es culpa del PDF: se reporta como ERROR con el
         # motivo real en vez de dejar la fila como "sin soporte" (D-080).
@@ -314,7 +345,7 @@ def extract_cufes(
         return ExtractionResult(cufes=cufes, source="pdftotext-raw", status=EXTRACTION_STATUS_OK)
 
     # Pass 2: layout text (a labeled layout sometimes surfaces the anchor).
-    text2 = _pdftotext(pdf_path, layout=True)
+    text2 = _pdftotext(pdf_path, layout=True, password=password)
     cufes2 = _find_cufes_in_text(text2) if (text2 and text2 != text) else []
     if cufes2 and cufes2[0].label is not None:
         return ExtractionResult(cufes=cufes2, source="pdftotext-layout", status=EXTRACTION_STATUS_OK)
@@ -326,7 +357,7 @@ def extract_cufes(
 
     # Pass 3: QR scan — authoritative when present.
     try:
-        payloads = _scan_qrs_in_pdf(pdf_path, qr_dpi_attempts)
+        payloads = _scan_qrs_in_pdf(pdf_path, qr_dpi_attempts, password=password)
     except Exception as exc:
         if best_text:
             return ExtractionResult(cufes=best_text, source=best_source, status=EXTRACTION_STATUS_OK)
@@ -373,7 +404,7 @@ class IndexStats:
         }
 
 
-def index_folder(conn, folder: str | Path, progress=None) -> IndexStats:
+def index_folder(conn, folder: str | Path, progress=None, password: str | None = None) -> IndexStats:
     """Incrementally index every PDF in folder.
     Re-extracts only when (mtime, size) changed or the PDF is new.
 
@@ -423,7 +454,16 @@ def index_folder(conn, folder: str | Path, progress=None) -> IndexStats:
             "AND extractor_version = ?",
             (str(folder), full, mtime, size, EXTRACTOR_VERSION),
         ).fetchone()
-        if cached_row is not None:
+        # El caché no distingue si se intentó CON contraseña o sin ella, y el
+        # archivo no cambia por darle una. Sin esta excepción, indexar una carpeta
+        # antes de saber el NIT dejaría todos sus PDFs marcados como protegidos
+        # para siempre: reintentar con la clave devolvería la respuesta vieja.
+        reintentar_con_clave = (
+            password is not None
+            and cached_row is not None
+            and cached_row["extraction_status"] == EXTRACTION_STATUS_PROTEGIDO
+        )
+        if cached_row is not None and not reintentar_con_clave:
             stats.cached += 1
             if cached_row["extraction_status"] != EXTRACTION_STATUS_OK:
                 stats.no_cufe.append(pdf_path.name)
@@ -431,7 +471,7 @@ def index_folder(conn, folder: str | Path, progress=None) -> IndexStats:
 
         # Stale / new entry → re-extract. La extracción va FUERA de la transacción:
         # es la parte lenta y no toca la BD.
-        result = extract_cufes(pdf_path)
+        result = extract_cufes(pdf_path, password=password)
         with transaction(conn):
             conn.execute(
                 "DELETE FROM pdf_cufe_index WHERE folder_path = ? AND pdf_path = ?",

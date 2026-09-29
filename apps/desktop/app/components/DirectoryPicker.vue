@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowUp, House, Folder, Check } from 'lucide-vue-next'
+import { ArrowUp, House, Folder, Check, X } from 'lucide-vue-next'
 
 type DirEntry = { name: string; is_dir: true }
 type DirResponse = {
@@ -115,52 +115,50 @@ function pick() {
 </script>
 
 <template>
-  <Dialog :open="open" @update:open="(v) => { if (!v) emit('close') }">
-    <DialogContent class="flex max-h-[80vh] flex-col gap-0 p-0 sm:max-w-2xl">
-      <DialogHeader class="border-b border-border px-4 py-3">
-        <DialogTitle>{{ title }}</DialogTitle>
-        <DialogDescription class="sr-only">Navega y elige una carpeta del sistema de archivos.</DialogDescription>
-      </DialogHeader>
+  <!-- Panel, no ventana superpuesta (norma 2026-09-28). Quien lo usa decide dónde
+       ponerlo; el componente solo se dibuja cuando `open` es verdadero. -->
+  <section v-if="open" class="flex max-h-[60vh] flex-col overflow-hidden rounded-lg border border-primary/40 bg-card">
+    <div class="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-2.5">
+      <h2 class="text-sm font-semibold">{{ title }}</h2>
+      <Button variant="ghost" size="icon-sm" aria-label="Cerrar" @click="emit('close')"><X class="size-4" /></Button>
+    </div>
 
-      <div class="flex items-center gap-2 border-b border-border px-4 py-2">
-        <Button variant="secondary" size="sm" :disabled="!parent" @click="goParent"><ArrowUp class="size-4" /> Subir</Button>
-        <Button variant="secondary" size="sm" @click="goHome"><House class="size-4" /> Inicio</Button>
-        <label class="flex cursor-pointer items-center gap-1.5 text-sm text-muted-foreground">
-          <input v-model="showHidden" type="checkbox" class="size-3.5 accent-primary"> Ocultas
-        </label>
-      </div>
+    <div class="flex shrink-0 items-center gap-2 border-b border-border px-4 py-2">
+      <Button variant="secondary" size="sm" :disabled="!parent" @click="goParent"><ArrowUp class="size-4" /> Subir</Button>
+      <Button variant="secondary" size="sm" @click="goHome"><House class="size-4" /> Inicio</Button>
+      <label class="flex cursor-pointer items-center gap-1.5 text-sm text-muted-foreground">
+        <input v-model="showHidden" type="checkbox" class="size-3.5 accent-primary"> Ocultas
+      </label>
+    </div>
 
-      <div class="flex flex-wrap items-center gap-1 border-b border-border px-4 py-2 text-xs">
-        <template v-for="(c, i) in breadcrumbs" :key="i">
-          <button type="button" class="rounded px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" @click="loadPath(c.path)">{{ c.label || 'raíz' }}</button>
-          <span v-if="i < breadcrumbs.length - 1" class="text-muted-foreground">{{ separator }}</span>
-        </template>
-      </div>
+    <div class="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-4 py-2 text-xs">
+      <template v-for="(c, i) in breadcrumbs" :key="i">
+        <button type="button" class="rounded px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" @click="loadPath(c.path)">{{ c.label || 'raíz' }}</button>
+        <span v-if="i < breadcrumbs.length - 1" class="text-muted-foreground">{{ separator }}</span>
+      </template>
+    </div>
 
-      <div class="min-h-0 flex-1 overflow-auto px-3 py-2">
-        <p v-if="loading" class="px-1 py-2 text-sm text-muted-foreground">Cargando…</p>
-        <div v-else-if="errorMsg" class="rounded-md border border-status-error/30 bg-status-error-bg px-3 py-2 text-sm text-status-error">{{ errorMsg }}</div>
-        <p v-else-if="!entries.length" class="px-1 py-2 text-sm text-muted-foreground">Sin subcarpetas.</p>
-        <ul v-else class="flex flex-col gap-0.5">
-          <li
-            v-for="e in entries"
-            :key="e.name"
-            class="flex cursor-pointer select-none items-center gap-2 rounded-md px-2.5 py-2 text-sm transition-colors hover:bg-accent"
-            @dblclick="enter(e.name)"
-            @click="enter(e.name)"
-          >
-            <Folder class="size-4 shrink-0 text-muted-foreground" /> {{ e.name }}
-          </li>
-        </ul>
-      </div>
+    <div class="min-h-0 flex-1 overflow-auto px-3 py-2">
+      <p v-if="loading" class="px-1 py-2 text-sm text-muted-foreground">Cargando…</p>
+      <div v-else-if="errorMsg" class="rounded-md border border-status-error/30 bg-status-error-bg px-3 py-2 text-sm text-status-error">{{ errorMsg }}</div>
+      <p v-else-if="!entries.length" class="px-1 py-2 text-sm text-muted-foreground">Sin subcarpetas.</p>
+      <ul v-else class="grid gap-0.5 sm:grid-cols-2 lg:grid-cols-3">
+        <li
+          v-for="e in entries"
+          :key="e.name"
+          class="flex cursor-pointer select-none items-center gap-2 rounded-md px-2.5 py-2 text-sm transition-colors hover:bg-accent"
+          @dblclick="enter(e.name)"
+          @click="enter(e.name)"
+        >
+          <Folder class="size-4 shrink-0 text-muted-foreground" /> <span class="truncate">{{ e.name }}</span>
+        </li>
+      </ul>
+    </div>
 
-      <DialogFooter class="flex items-center gap-2 border-t border-border px-4 py-3 sm:justify-between">
-        <div class="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">{{ currentPath || '—' }}</div>
-        <div class="flex shrink-0 gap-2">
-          <Button variant="secondary" @click="emit('close')">Cancelar</Button>
-          <Button :disabled="!currentPath" @click="pick"><Check class="size-4" /> Seleccionar esta carpeta</Button>
-        </div>
-      </DialogFooter>
-    </DialogContent>
-  </Dialog>
+    <div class="flex shrink-0 flex-wrap items-center gap-2 border-t border-border px-4 py-2.5">
+      <div class="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">{{ currentPath || '—' }}</div>
+      <Button variant="secondary" size="sm" @click="emit('close')">Cancelar</Button>
+      <Button size="sm" :disabled="!currentPath" @click="pick"><Check class="size-4" /> Seleccionar esta carpeta</Button>
+    </div>
+  </section>
 </template>

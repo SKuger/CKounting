@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ArrowLeft, CalendarCheck, CalendarSearch, Pencil, RotateCcw, Square, Trash2, UserPlus } from 'lucide-vue-next'
+import { ArrowLeft, CalendarCheck, CalendarSearch, Pencil, Play, RotateCcw, Square, Trash2, UserPlus } from 'lucide-vue-next'
 
 type Estado = 'detenido' | 'iniciando' | 'revisando' | 'esperando' | 'hay_cupo' | 'captcha'
 type LogLine = { t: string; nivel: 'info' | 'warn' | 'error' | 'ok'; msg: string }
 type Status = {
   activo: boolean
   estado: Estado
+  pausado: boolean
   intentos: number
   sin_cupo: number
   ultima_revision: string | null
@@ -67,8 +68,8 @@ const estadoTexto = computed(() => {
     case 'iniciando': return 'Abriendo el navegador…'
     case 'revisando': return 'Revisando el portal de la DIAN…'
     case 'esperando': return faltan.value ? `Sin cupo. Próxima revisión en ${faltan.value}` : 'Esperando la próxima revisión'
-    case 'hay_cupo': return '¡Hay cupo! Termina la reserva en la ventana del navegador'
-    case 'captcha': return 'El portal pidió un CAPTCHA: termínalo tú en la ventana del navegador'
+    case 'hay_cupo': return '¡Hay cupo! En pausa: termina la reserva en la ventana del navegador'
+    case 'captcha': return 'El portal pidió un CAPTCHA. En pausa: termínalo tú en la ventana del navegador'
     default: return 'Detenido'
   }
 })
@@ -188,6 +189,22 @@ async function buscar() {
     toast.info('Buscando citas', 'Se abrirá una ventana del navegador; puedes minimizarla, pero no la cierres.')
   } catch (e) {
     toast.error('No se pudo iniciar la búsqueda', String(e))
+  } finally {
+    busy.value = false
+  }
+}
+
+// Reanudar es un acto deliberado: mientras esté en pausa, la ventana se queda en
+// la pantalla del cupo y el bot no vuelve a navegar.
+async function continuar() {
+  busy.value = true
+  try {
+    const s = await $fetch<Status & { reanudado: boolean; motivo?: string }>('/api/dian/citas/continuar', { method: 'POST' })
+    status.value = s
+    if (s.reanudado) toast.success('Sigo buscando', 'La búsqueda se reanudó.')
+    else toast.error('No se reanudó', s.motivo || 'La búsqueda no estaba en pausa.')
+  } catch (e) {
+    toast.error('No se pudo reanudar', String(e))
   } finally {
     busy.value = false
   }
@@ -348,14 +365,26 @@ onBeforeUnmount(() => {
           {{ status?.estado === 'captcha' ? 'El portal pidió un CAPTCHA' : 'Pantalla donde encontró cupo' }}
         </p>
         <p class="text-sm text-muted-foreground">
-          La ventana del navegador quedó abierta en esta pantalla: termina la reserva ahí y marca a la persona como
-          agendada; el bot seguirá con la siguiente.
+          <strong class="text-foreground">La búsqueda está detenida</strong> y la ventana del navegador se queda
+          justo en esta pantalla: haz ahí el trámite con calma. El bot no vuelve a navegar hasta que tú se lo digas.
         </p>
         <p v-if="status?.detalle" class="text-sm font-medium">{{ status.detalle }}</p>
-        <div v-if="personaActual && personaActual.estado === 'en_curso'" class="flex flex-wrap gap-2">
-          <Button @click="cambiarEstado(personaActual, 'agendada')"><CalendarCheck class="size-4" /> Marcar agendada</Button>
-          <Button variant="secondary" @click="cambiarEstado(personaActual, 'pendiente')"><RotateCcw class="size-4" /> No se pudo: volver a pendiente</Button>
+
+        <div class="flex flex-wrap gap-2">
+          <Button v-if="personaActual && personaActual.estado === 'en_curso'" @click="cambiarEstado(personaActual, 'agendada')">
+            <CalendarCheck class="size-4" /> Marcar agendada y seguir
+          </Button>
+          <Button :disabled="busy || !status?.pausado" variant="secondary" @click="continuar">
+            <Play class="size-4" /> Continuar buscando
+          </Button>
+          <Button v-if="personaActual && personaActual.estado === 'en_curso'" variant="ghost" @click="cambiarEstado(personaActual, 'pendiente')">
+            <RotateCcw class="size-4" /> No se pudo: volver a pendiente
+          </Button>
         </div>
+        <p class="text-xs text-muted-foreground">
+          «Continuar» reanuda la búsqueda sin tocar a la persona; «Marcar agendada» la cierra y sigue con la
+          siguiente. Si no pulsas ninguno, el bot se queda quieto — que es lo que debe hacer.
+        </p>
         <pre v-if="status?.pantalla" class="max-h-60 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-xs">{{ status.pantalla }}</pre>
         <img v-if="capturaUrl" :src="capturaUrl" alt="Captura del portal de la DIAN" class="rounded-md border border-border">
       </CardContent>

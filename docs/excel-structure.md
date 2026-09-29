@@ -7,7 +7,7 @@ Análisis estructural del archivo `Ejemplo_LaDian.xlsx` (muestra entregada por e
 - **Origen**: portal MUISCA / DIAN — sección "Documentos Electrónicos".
 - **Naturaleza**: consolidado de documentos electrónicos emitidos + recibidos para un NIT.
 - **NO es**: información exógena (form. 1001/1003/etc.), ni medios magnéticos.
-- **Tipos de documento observados**: `Factura electrónica`, `Factura electrónica de contingencia`, `Nota de crédito electrónica`, `Documento soporte con no obligados`, `Nomina Individual`.
+- **Tipos de documento observados**: `Factura electrónica`, `Factura electrónica de contingencia`, `Nota de crédito electrónica`, `Documento soporte con no obligados`, `Nomina Individual`, y —visto el 2026-09-28— **`Application response`**: los eventos RADIAN (acuse de recibo, aceptación), con `Total` e `IVA` en cero. No son facturas y no tienen soporte que buscarles; en un listado real fueron 9 de 10 filas.
 
 ## Layout
 
@@ -20,7 +20,7 @@ Análisis estructural del archivo `Ejemplo_LaDian.xlsx` (muestra entregada por e
 
 | Tema | Detalle | Acción al implementar |
 |---|---|---|
-| **Fechas** | Texto `dd-mm-yyyy` (Emisión) y `dd-mm-yyyy HH:MM:SS` (Recepción). **NO son seriales de Excel.** | Parser con locale day-first. NO usar `pd.to_datetime` con `dayfirst=False`. |
+| **Fechas** | **Cambió.** La muestra de 2026-03 traía `dd-mm-yyyy`; un listado exportado el **2026-09-28** trae **ISO**: `2026-09-28` (Emisión) y `2026-09-28T14:42:08` (Recepción). **NO son seriales de Excel.** | `_parse_date` normaliza a ISO y `periodo_from_row` VALIDA la forma antes de usarla (D-081). No asumir ninguno de los dos formatos: la DIAN ya cambió una vez. |
 | **NIT con ceros a la izquierda** | NITs como `051904524` se preservan solo si vienen del shared-string XML. Numéricos como `900183118` pierden ceros si los hubiera. | Coercer a `str` siempre y zero-pad si la longitud esperada lo amerita. |
 | **Folio** | Almacenado como número. Hasta 9-10 dígitos (`509558651`). | Coercer a `str` para evitar formato exponencial en exportes y para preservar prefijos no esperados. |
 | **Espacios en razón social** | Múltiples espacios internos y trailing (`'REAL '`, `' YOHANA MUÑOZ  SANCHEZ '`). | `re.sub(r'\s+', ' ', value).strip()` antes de mostrar/exportar. |

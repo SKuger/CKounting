@@ -184,3 +184,89 @@ def test_el_tablero_cuenta_las_cargas_del_mes(sample_excel):
     con_cargas = [e for e in tablero.tablero("2026-02")["empresas"] if e["cargas"]]
     assert len(con_cargas) == 1
     assert con_cargas[0]["filas"] > 0
+
+
+# ── consulta masiva del RUT ──────────────────────────────────────────────────
+
+def test_solo_se_consultan_los_que_no_tienen_rut(conn):
+    terceros.guardar(conn, {"nit": "830008686", "razon_social": "D1"})
+    terceros.guardar(conn, {"nit": "901111111", "razon_social": "Otro"})
+    terceros.actualizar_desde_rut(conn, "830008686", {"razon_social": "D1 SAS"})
+
+    pendientes = terceros.pendientes_de_rut(conn)
+    assert [t["nit"] for t in pendientes] == ["901111111"]
+    assert len(terceros.pendientes_de_rut(conn, solo_faltantes=False)) == 2
+
+
+def test_la_consulta_masiva_no_se_cae_si_un_nit_falla(tmp_path, monkeypatch):
+    """Treinta y seis consultas son treinta y seis oportunidades de que la red
+    falle. Una que reviente no puede llevarse las otras treinta y cinco."""
+    from contab_core import dian_inconsistencias, sidecar
+
+    creada = sidecar._h_create_empresa({"nit": "900181831", "razon_social": "REAL"})
+    db_path = creada["db_path"]
+    c = storage.connect(db_path)
+    try:
+        storage.ensure_schema(c)
+        for n, nombre in (("830008686", "D1"), ("901111111", "Rota"), ("890900806", "Éxito")):
+            terceros.guardar(c, {"nit": n, "razon_social": nombre})
+    finally:
+        c.close()
+
+    def falsa(nit, dv, **kw):
+        if nit == "901111111":
+            raise OSError("se cayó la red")
+        return {"nit": nit, "dv": dv, "razon_social": f"NOMBRE {nit}", "tipo": "empresa",
+                "found": True, "error": None}
+
+    monkeypatch.setattr(dian_inconsistencias, "consultar", falsa)
+
+    avances: list[tuple] = []
+    res = sidecar._h_terceros_consultar_rut_todos(
+        {"db_path": db_path, "pausa": 0},
+        progress=lambda done=0, total=0, message="": avances.append((done, total)),
+    )
+    assert res["total"] == 3
+    assert res["encontrados"] == 2 and res["fallidos"] == 1
+    assert res["counts"]["con_rut"] == 2
+    assert avances and avances[-1] == (3, 3), "el progreso llega al final"
+
+
+def test_la_consulta_masiva_respeta_la_cancelacion(tmp_path, monkeypatch):
+    """`report` lanza Cancelled cuando el usuario cancela; el trabajo tiene que
+    dejarlo pasar en vez de tragárselo."""
+    from contab_core import dian_inconsistencias, jobs, sidecar
+
+    creada = sidecar._h_create_empresa({"nit": "900181831", "razon_social": "REAL"})
+    c = storage.connect(creada["db_path"])
+    try:
+        storage.ensure_schema(c)
+        for n in ("830008686", "901111111"):
+            terceros.guardar(c, {"nit": n, "razon_social": n})
+    finally:
+        c.close()
+
+    monkeypatch.setattr(dian_inconsistencias, "consultar",
+                        lambda nit, dv, **kw: {"found": False, "error": None})
+
+    def cancela(done=0, total=0, message=""):
+        raise jobs.Cancelled()
+
+    with pytest.raises(jobs.Cancelled):
+        sidecar._h_terceros_consultar_rut_todos(
+            {"db_path": creada["db_path"], "pausa": 0}, progress=cancela)
+
+
+def test_una_carpeta_de_soportes_que_ya_no_existe_se_avisa(tmp_path):
+    """Mover la carpeta en el disco no puede verse como «no hay soportes»: el
+    contador saldría a pedirle al cliente documentos que ya tiene (D-080)."""
+    creada = sidecar._h_create_empresa({"nit": "900181831", "razon_social": "REAL"})
+    db = creada["db_path"]
+    viva = tmp_path / "soportes"
+    viva.mkdir()
+    sidecar._h_create_periodo({"db_path": db, "periodo": "2026-07"})
+    sidecar._h_set_periodo_pdfs_folder({"db_path": db, "periodo": "2026-07", "folder": str(viva)})
+    assert storage.list_periodos(db)[0]["pdfs_folder_existe"] is True
+
+    viva.rename(tmp_path / "movida")
+    assert storage.list_periodos(db)[0]["pdfs_folder_existe"] is False

@@ -17,6 +17,7 @@ from typing import Any
 from . import backup as backup_module
 from . import cita_personas as citas_module
 from . import dian_inconsistencias as dian_inc_module
+from . import dian_portal as dian_portal_module
 from . import excel as excel_module
 from . import export as export_module
 from . import jobs as jobs_module
@@ -411,6 +412,150 @@ def _h_import_excel(params: dict) -> dict:
         "periodo": periodo,
         "columns": excel_module.DIAN_COLUMNS + excel_module.DERIVED_COLUMNS,
     }
+
+
+def _h_preparar_descarga_dian(params: dict) -> dict:
+    """Valida el enlace y el mes, y devuelve lo que el sidecar DIAN necesita.
+
+    El enlace **no se guarda**: entra, se valida y vuelve a salir hacia el
+    navegador. Lo que sí queda en la respuesta es el rango calculado.
+    """
+    plan = dian_portal_module.preparar_descarga(
+        params.get("periodo") or "", params.get("enlace") or "", params.get("grupo")
+    )
+    # La carpeta la decide Contab: el ZIP del portal es un intermedio, no un
+    # documento del contador, y no hay por qué hacerle configurar nada.
+    info = storage_module.read_empresa_info(Path(params["db_path"])) or {}
+    plan["carpeta"] = str(paths_module.descargas_dir(str(info.get("nit") or "")))
+    plan["nit_receptor"] = info.get("nit")
+    return plan
+
+
+def _h_importar_descarga_dian(params: dict) -> dict:
+    """Abre el ZIP que bajó el portal e importa su Excel al mes de la empresa.
+
+    Se llama DESPUÉS de que el contador aprueba el resumen de la descarga: bajar y
+    contabilizar son dos actos distintos, y el segundo no ocurre solo (D-097).
+    """
+    db_path = Path(params["db_path"])
+    periodo = storage_module._norm_periodo(params.get("periodo") or "")
+    descargado = Path(params["archivo"])
+
+    destino = descargado.with_name(f"dian-{periodo}.xlsx")
+    excel_path = dian_portal_module.extraer_excel(descargado, destino)
+    resultado = _h_import_excel(
+        {"db_path": str(db_path), "source_path": str(excel_path), "periodo": periodo}
+    )
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        dian_portal_module.registrar_ingesta(
+            conn, periodo=periodo, camino="portal", estado="ok",
+            documentos=resultado.get("total_rows"), archivo=str(excel_path),
+            empresa_dian=params.get("empresa_dian"),
+        )
+    finally:
+        conn.close()
+    return {**resultado, "archivo": str(excel_path)}
+
+
+def _h_documentos_sin_soporte(params: dict) -> dict:
+    """Los documentos del mes a los que les falta el PDF, listos para ir a buscarlos.
+
+    El NIT con el que se consulta es el de la **propia empresa**: el portal acepta
+    el del emisor o el del receptor, y la empresa siempre es uno de los dos.
+    """
+    db_path = Path(params["db_path"])
+    periodo = storage_module._norm_periodo(params.get("periodo") or "")
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        info = storage_module.read_empresa_info(db_path) or {}
+        nit = str(info.get("nit") or "")
+
+        carpeta = conn.execute(
+            "SELECT pdfs_folder FROM periodo_folder WHERE periodo = ?", (periodo,)
+        ).fetchone()
+        carpeta = carpeta["pdfs_folder"] if carpeta else None
+        ya_estan = (
+            pdf_cufe_module.get_indexed_cufes(conn, carpeta) if carpeta else set()
+        )
+
+        filas = conn.execute(
+            "SELECT DISTINCT cufe_cude FROM excel_row WHERE periodo = ? AND cufe_cude IS NOT NULL",
+            (periodo,),
+        ).fetchall()
+        faltan = [
+            {"cufe": r["cufe_cude"], "nit": nit}
+            for r in filas
+            if r["cufe_cude"] not in ya_estan
+        ]
+        # Si este mes no tiene carpeta, se dicen los que sí: «no se puede» a secas
+        # parece un fallo del programa, y aquí lo que falta es un dato del usuario.
+        con_carpeta = [
+            r["periodo"] for r in conn.execute(
+                "SELECT periodo FROM periodo_folder WHERE pdfs_folder IS NOT NULL "
+                "ORDER BY periodo DESC"
+            ).fetchall()
+        ]
+        return {
+            "periodo": periodo, "carpeta": carpeta, "nit": nit,
+            "total": len(filas), "faltan": faltan, "meses_con_carpeta": con_carpeta,
+        }
+    finally:
+        conn.close()
+
+
+def _h_reindexar_soportes_con_nit(params: dict) -> dict:
+    """Re-lee la carpeta del mes pasando el NIT como contraseña.
+
+    Los PDF que entrega el portal vienen cifrados con él; sin esto quedarían
+    marcados como protegidos y la validación diría que no hay soporte.
+    """
+    db_path = Path(params["db_path"])
+    carpeta = params["carpeta"]
+    info = storage_module.read_empresa_info(db_path) or {}
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        stats = pdf_cufe_module.index_folder(
+            conn, carpeta, password=str(info.get("nit") or "") or None
+        )
+        return stats.to_dict()
+    finally:
+        conn.close()
+
+
+def _h_registrar_ingesta(params: dict) -> dict:
+    """Anota una corrida que NO terminó en importación (una que falló, o el camino
+    manual). El mensaje se guarda enmascarado: podría arrastrar el enlace."""
+    db_path = Path(params["db_path"])
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return dian_portal_module.registrar_ingesta(
+            conn,
+            periodo=params.get("periodo") or "",
+            camino=params.get("camino") or "portal",
+            estado=params.get("estado") or "error",
+            documentos=params.get("documentos"),
+            archivo=params.get("archivo"),
+            error=params.get("error"),
+            empresa_dian=params.get("empresa_dian"),
+        )
+    finally:
+        conn.close()
+
+
+def _h_listar_ingestas(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return {"ingestas": dian_portal_module.listar_ingestas(
+            conn, periodo=params.get("periodo"), limite=int(params.get("limite", 20)))}
+    finally:
+        conn.close()
 
 
 def _h_resumen_periodos(params: dict) -> dict:
@@ -1122,6 +1267,64 @@ def _h_tercero_consultar_rut(params: dict) -> dict:
         conn.close()
 
 
+def _h_terceros_consultar_rut_todos(params: dict, progress=None) -> dict:
+    """Consulta el RUT de todos los terceros pendientes, uno por uno.
+
+    Es un trabajo largo —una consulta HTTP por tercero— así que va como trabajo en
+    segundo plano (D-076): treinta y seis terceros son treinta y seis peticiones, y
+    una petición síncrona reventaría por timeout mientras Python sigue trabajando.
+
+    Va **de uno en uno y con pausa**: es un servicio público del Estado y no hay
+    ninguna prisa que justifique golpearlo en paralelo. Un fallo de red en un NIT
+    no aborta el resto; se cuenta y se sigue.
+    """
+    import time as _time
+
+    db_path = Path(params["db_path"])
+    solo_faltantes = bool(params.get("solo_faltantes", True))
+    pausa = float(params.get("pausa", 0.7))
+
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        pendientes = terceros_module.pendientes_de_rut(conn, solo_faltantes=solo_faltantes)
+        total = len(pendientes)
+        if progress:
+            progress(0, total, f"{total} terceros por consultar")
+
+        encontrados = fallidos = sin_resultado = 0
+        for i, fila in enumerate(pendientes, 1):
+            nit = fila["nit"]
+            dv = fila.get("dv") or nit_module.compute_dv(nit)
+            if progress:
+                progress(i - 1, total, f"{fila.get('razon_social') or nit}…")
+            try:
+                consulta = dian_inc_module.consultar(nit, dv)
+            except Exception:
+                log.exception("falló la consulta del RUT de %s", nit)
+                fallidos += 1
+            else:
+                if consulta.get("found"):
+                    terceros_module.actualizar_desde_rut(conn, nit, consulta)
+                    encontrados += 1
+                elif consulta.get("error"):
+                    fallidos += 1
+                else:
+                    sin_resultado += 1
+            if i < total and pausa:
+                _time.sleep(pausa)
+
+        if progress:
+            progress(total, total, "Listo")
+        return {
+            "total": total, "encontrados": encontrados,
+            "sin_resultado": sin_resultado, "fallidos": fallidos,
+            "counts": terceros_module.contar(conn),
+        }
+    finally:
+        conn.close()
+
+
 def _h_tablero(params: dict) -> dict:
     return tablero_module.tablero(
         params.get("periodo"), include_archived=bool(params.get("include_archived", False))
@@ -1197,6 +1400,7 @@ ASYNC_CAPABLE: dict[str, Callable[[dict, Any], Any]] = {
     "run_validations": _h_run_validations,
     "reindex_pdfs": lambda p, progress: _h_reindex_pdfs(p, progress=progress),
     "list_load_soportes": lambda p, progress: _h_list_load_soportes(p, progress=progress),
+    "terceros_consultar_rut_todos": _h_terceros_consultar_rut_todos,
 }
 
 
@@ -1282,11 +1486,19 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "delete_perfil_fiscal": _h_delete_perfil_fiscal,
     "save_municipio_ica": _h_save_municipio_ica,
     "delete_municipio_ica": _h_delete_municipio_ica,
+    # Ingesta desde el portal de la DIAN (Fase 2)
+    "preparar_descarga_dian": _h_preparar_descarga_dian,
+    "importar_descarga_dian": _h_importar_descarga_dian,
+    "registrar_ingesta": _h_registrar_ingesta,
+    "documentos_sin_soporte": _h_documentos_sin_soporte,
+    "reindexar_soportes_con_nit": _h_reindexar_soportes_con_nit,
+    "listar_ingestas": _h_listar_ingestas,
     # Catálogo de terceros por empresa (Fase 1.3, D-100)
     "terceros_list": _h_terceros_list,
     "terceros_sembrar": _h_terceros_sembrar,
     "tercero_save": _h_tercero_save,
     "tercero_consultar_rut": _h_tercero_consultar_rut,
+    "terceros_consultar_rut_todos": _h_terceros_consultar_rut_todos,
     # Tablero multiempresa (Fase 1.5)
     "tablero": _h_tablero,
     # Plan Único de Cuentas (PUC) por empresa (D-070)
