@@ -194,6 +194,10 @@ async def citas_status():
 async def citas_start():
     return {"started": vigia.iniciar(), **vigia.snapshot()}
 
+@app.post("/citas/continuar")
+async def citas_continuar():
+    return {**vigia.continuar(), **vigia.snapshot()}
+
 @app.post("/citas/stop")
 async def citas_stop():
     vigia.detener()
