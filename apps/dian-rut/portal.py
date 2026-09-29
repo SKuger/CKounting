@@ -13,6 +13,10 @@ más simple:
 
 1. **Sin ventana no funciona.** Con `headless=True` responde «Solicitud bloqueada
    por controles de seguridad». Por eso se lanza con ventana.
+   Y usa el **navegador del sistema** (Chrome o Edge), no el Chromium de
+   Playwright: el instalador no lo empaqueta (D-058), así que pedirlo haría que
+   estos botones fallaran justo en la app instalada — donde nadie los habría
+   probado.
 2. **El campo de fechas ignora que le escriban** — es un calendario propio. En vez
    de pelear con el widget, se envía el formulario por `fetch` desde la propia
    página, reusando sus campos y cambiando solo las fechas y el grupo.
@@ -29,6 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from citas import _navegador as navegador_del_sistema
 from playwright.async_api import async_playwright
 
 PORTAL = "https://catalogo-vpfe.dian.gov.co"
@@ -155,6 +160,7 @@ async def descargar_listado(
     async with async_playwright() as p:
         contexto = await p.chromium.launch_persistent_context(
             str(perfil),
+            executable_path=navegador_del_sistema(),   # D-058: no hay Chromium propio
             headless=False,          # sin ventana el portal bloquea la petición
             accept_downloads=True,
             viewport={"width": 1400, "height": 900},
@@ -317,6 +323,7 @@ async def descargar_soportes(
     async with async_playwright() as p:
         contexto = await p.chromium.launch_persistent_context(
             str(carpeta / ".perfil-soportes"),
+            executable_path=navegador_del_sistema(),   # D-058: no hay Chromium propio
             headless=False,          # sin ventana el portal bloquea
             accept_downloads=True,
             viewport={"width": 1400, "height": 900},
