@@ -41,6 +41,28 @@ CUFE `b55c678e…0683441`), sin iniciar sesión en ninguna cuenta.
 El formulario pide **dos** datos: el CUFE **y** el NIT del emisor **o** del
 receptor. Contab tiene los dos en cada fila del Excel, así que el cruce es directo.
 
+### El botón de descargar no descarga: hay un aviso de por medio (2026-10-01)
+
+«Descargar PDF» es un `a.downloadLink` que **no pide el archivo**. Abre un aviso
+—*«Este archivo contiene contraseña y corresponde al NIT del Emisor o Receptor que
+digitó anteriormente»*— y la descarga solo arranca al pulsar **«Aceptar»**.
+
+Esto tuvo a `descargar_soportes` roto desde que se escribió: pulsaba el primero,
+esperaba un archivo que no iba a salir y reventaba a los 60 s con un *timeout* de
+descarga. **Se culpó a Cloudflare, y no era.** El síntoma engaña porque el clic sí
+dispara una petición —el icono de advertencia del aviso— y parece que algo pasó.
+
+### Y sí se puede automatizar: tres seguidas, sin credenciales (2026-10-01)
+
+Comprobado con una factura real (SURAMERICANA → ALAGUNA HERNANDEZ, 71 KB), con el
+navegador que lanza Playwright usando el Chrome del sistema y **sin sesión de
+nadie**: tres descargas seguidas en la misma corrida, sin que el Turnstile pidiera
+nada. Unos **25 s por documento**: un mes de 40 facturas son ~17 minutos.
+
+Lo que Cloudflare protege es la vista de documento **dentro de la sesión**
+(`/Document/Received`), no esta búsqueda pública. Son dos cosas distintas y
+conviene no volver a mezclarlas.
+
 ### Lo que muestra la página del documento
 
 Más de lo que trae el Excel de la DIAN:
@@ -193,6 +215,11 @@ seguros (exenta); hay que ver uno con IVA para confirmar la forma de los impuest
 pase el Chrome del sistema con `executable_path`. El síntoma es silencioso y
 costó un rato entenderlo: el botón de descarga **no dispara ni una petición** —el
 JavaScript se detiene porque la verificación falló— y la página no dice nada.
+
+> **Pendiente de volver a mirar con esta lente**: el 2026-10-01 se descubrió que en
+> el camino público el mismo síntoma —un clic que no baja nada— era un aviso con un
+> «Aceptar», no el Turnstile. Nadie ha comprobado si `button.download-document`
+> abre algo parecido.
 
 Lo que sí funciona es el **modo humano** que este proyecto ya tenía para el scraper
 del RUT (D-058): el usuario abre **su propio navegador** con el puerto de
