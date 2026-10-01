@@ -33,6 +33,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+import httpx
+
 from citas import _navegador as navegador_del_sistema
 from playwright.async_api import async_playwright
 
@@ -267,17 +269,45 @@ def _nombre_empresa(cuerpo: str) -> str | None:
 
 
 # ────────────────── Soportes por CUFE: el camino público (2.6) ──────────────────
-# Cualquier documento se baja dando CUFE + NIT, **sin credenciales de nadie**, y
-# —comprobado el 2026-10-01 bajando tres PDF seguidos con el navegador del bot— el
-# Cloudflare no pide el «soy humano» en cada una. Por eso esto puede correr solo.
-# Lo que Cloudflare sí protege es la vista de documento DENTRO de la sesión
+# Cualquier documento se baja dando CUFE + NIT, **sin credenciales de nadie**.
+# Lo que Cloudflare protege es la vista de documento DENTRO de la sesión
 # (`/Document/Received`), no esta búsqueda pública.
+#
+# **El navegador ya no baja los PDF: solo fabrica tokens.** Hacerlo a golpe de
+# clics costaba ~25 s por documento, casi todo esperas a ciegas. La misma cadena
+# por HTTP tarda 2-3 s, porque el portero del camino público —el Turnstile— viaja
+# como un campo del formulario y no como cookie, así que se puede trasplantar a un
+# cliente HTTP. Medido contra el portal real el 2026-10-01.
+#
+# Lo que impide que esto sea instantáneo, y conviene no volver a pelearlo:
+#
+# 1. **El token es de un solo uso.** Sirve para un documento y se quema. Renovarlo
+#    con `turnstile.reset()` cuesta entre 2 y 9 s, y es el verdadero techo: por eso
+#    hay una pestaña cosechando en segundo plano mientras los obreros descargan.
+# 2. **El portal rechaza una parte de los intentos** —403, o HTML en vez de PDF,
+#    siempre en el último paso—. No se encontró patrón; se reintenta con un token
+#    nuevo, que sale más barato que averiguar por qué.
+# 3. **Cada documento necesita sesión propia.** Reusando la misma cookie el acierto
+#    cae a 1 de 6; con un cliente nuevo por documento sube a 3 de 5 por intento.
+# 4. **El portal deja correr un rato y luego cierra la llave.** Medido con el
+#    septiembre real del usuario: los primeros 7 documentos a 5,6 s cada uno, y del
+#    octavo en adelante aparece «Un momento, estamos comprobando que no sea un bot»
+#    y todo se va al respaldo. Por eso hay cortacircuitos: tras unos cuantos fallos
+#    seguidos se deja de intentar por HTTP, porque si no se paga dos veces —el
+#    intento rápido Y los clics— y la corrida sale MÁS lenta que no haber optimizado
+#    nada. Eso ya pasó: 33 s por documento contra los 25 s del camino a clics.
 #
 # El PDF llega CIFRADO con el NIT. Quien lo lea después tiene que pasar esa
 # contraseña; `contab_core.pdf_cufe` ya lo hace.
 
 BUSCAR_URL = f"{PORTAL}/User/SearchDocument"
-ESPERA_ENTRE_DOCUMENTOS = 1.5
+MOSTRAR_URL = f"{PORTAL}/Document/ShowDocumentToPublic"
+BAJAR_URL = f"{PORTAL}/Document/DownloadPDF"
+INTENTOS_POR_DOCUMENTO = 2
+OBREROS = 2
+TOKENS_EN_COLA = 3
+ESPERA_MAXIMA_TOKEN = 90    # si el portal nos marcó, dejan de salir tokens
+FALLOS_PARA_RENDIRSE = 3    # seguidos: el portal cerró la llave para esta corrida
 
 
 @dataclass
@@ -295,8 +325,106 @@ class Soportes:
         }
 
 
+def _oculto(html: str, nombre: str) -> str | None:
+    """El valor de un `<input hidden>`, venga el `value` antes o después del `name`."""
+    for patron in (
+        r'name="%s"[^>]*value="([^"]*)"' % nombre,
+        r'value="([^"]*)"[^>]*name="%s"' % nombre,
+    ):
+        m = re.search(patron, html)
+        if m:
+            return m.group(1)
+    return None
+
+
+_JS_TOKEN = (
+    "() => (document.querySelector('[name=\"cf-turnstile-response\"]')||{}).value||''"
+)
+_JS_RENOVAR = """() => {
+  try { window.turnstile && window.turnstile.reset(); } catch (e) {}
+  const el = document.querySelector('[name="cf-turnstile-response"]');
+  if (el) el.value = '';
+}"""
+
+
+async def _cosechar_tokens(pagina, cola: asyncio.Queue, parar: asyncio.Event) -> None:
+    """Mantiene la cola surtida de tokens del Turnstile. Muere cuando se le dice."""
+    await pagina.goto(BUSCAR_URL, wait_until="domcontentloaded", timeout=60_000)
+    while not parar.is_set():
+        token = ""
+        for _ in range(80):          # hasta 20 s: renovar tarda lo que tarda
+            if parar.is_set():
+                return
+            try:
+                token = await pagina.evaluate(_JS_TOKEN)
+            except Exception:
+                return               # la pestaña se cerró; no es un error
+            if token:
+                break
+            await pagina.wait_for_timeout(250)
+        if not token:
+            return
+        await cola.put(token)
+        try:
+            await pagina.evaluate(_JS_RENOVAR)
+        except Exception:
+            return
+
+
+async def _bajar_por_http(
+    cliente: httpx.AsyncClient, token: str, cufe: str, nit: str, carpeta: Path
+) -> tuple[str | None, str | None]:
+    """Un documento por HTTP. Devuelve (nombre del archivo, motivo del fallo)."""
+    r = await cliente.get(BUSCAR_URL)
+    rvt = _oculto(r.text, "__RequestVerificationToken")
+    busqueda = await cliente.post(BUSCAR_URL, data={
+        "__RequestVerificationToken": rvt or "",
+        "cf-turnstile-response": token,
+        "DocumentKey": cufe,
+        "SearchDocumentNit": nit,
+    })
+    # La respuesta no es el documento: es un formulario puente que el navegador
+    # reenvía solo. Aquí se reenvía a mano.
+    ident = _oculto(busqueda.text, "Id")
+    pase = _oculto(busqueda.text, "Token")
+    captcha = _oculto(busqueda.text, "Captcha")
+    rvt2 = _oculto(busqueda.text, "__RequestVerificationToken")
+    if not (ident and pase):
+        return None, "la búsqueda no devolvió el documento"
+
+    documento = await cliente.post(MOSTRAR_URL, data={
+        "__RequestVerificationToken": rvt2 or "",
+        "Id": ident, "Token": pase, "Captcha": captcha or "", "Nit": nit,
+    })
+    if "DATOS DEL EMISOR" not in documento.text.upper():
+        return None, "no se llegó a la página del documento"
+
+    pdf = await cliente.post(
+        BAJAR_URL,
+        data={
+            "__RequestVerificationToken": _oculto(documento.text, "__RequestVerificationToken") or rvt2 or "",
+            "trackId": cufe, "token": pase, "captcha": captcha or "",
+        },
+        headers={"Referer": MOSTRAR_URL},
+    )
+    if "pdf" not in pdf.headers.get("content-type", ""):
+        return None, f"la descarga devolvió {pdf.status_code}"
+
+    destino = carpeta / f"{cufe}.pdf"
+    # Nunca se pisa un soporte que ya estaba: el del cliente puede ser el bueno.
+    if destino.exists():
+        destino = carpeta / f"{destino.stem}_dian{destino.suffix}"
+    destino.write_bytes(pdf.content)
+    return destino.name, None
+
+
 async def _un_soporte(pagina, cufe: str, nit: str, carpeta: Path) -> str | None:
-    """Busca un documento y baja su PDF. Devuelve el nombre del archivo o None."""
+    """A clics, como lo haría una persona. Es el respaldo cuando el HTTP no pasa.
+
+    Devuelve el nombre del archivo, o None si la DIAN no tiene ese documento —y
+    esa distinción es la razón de conservarlo: el camino HTTP no sabe separar
+    «no existe» de «me rechazaron», y aquí la página lo dice.
+    """
     await pagina.goto(BUSCAR_URL, wait_until="domcontentloaded", timeout=60_000)
     await pagina.wait_for_timeout(2_500)
     await pagina.fill("#DocumentKey", cufe)
@@ -325,7 +453,6 @@ async def _un_soporte(pagina, cufe: str, nit: str, carpeta: Path) -> str | None:
     bajada = await info.value
     nombre = bajada.suggested_filename or f"{cufe[:16]}.pdf"
     destino = carpeta / nombre
-    # Nunca se pisa un soporte que ya estaba: el del cliente puede ser el bueno.
     if destino.exists():
         destino = carpeta / f"{destino.stem}_dian{destino.suffix}"
     await bajada.save_as(str(destino))
@@ -344,6 +471,12 @@ async def descargar_soportes(
     avisa = progreso or (lambda _m: None)
     res = Soportes()
 
+    pendientes: asyncio.Queue = asyncio.Queue()
+    for doc in documentos:
+        pendientes.put_nowait(doc)
+    total = pendientes.qsize()
+    hechos = 0
+
     async with async_playwright() as p:
         contexto = await p.chromium.launch_persistent_context(
             str(carpeta / ".perfil-soportes"),
@@ -354,21 +487,99 @@ async def descargar_soportes(
             args=["--disable-blink-features=AutomationControlled"],
         )
         try:
-            pagina = contexto.pages[0] if contexto.pages else await contexto.new_page()
-            for i, doc in enumerate(documentos, 1):
-                cufe = (doc.get("cufe") or "").strip().lower()
-                nit = str(doc.get("nit") or "").strip()
-                if not cufe or not nit:
-                    res.fallidos.append(cufe or "(sin CUFE)")
-                    continue
-                avisa(f"Bajando {i} de {len(documentos)}…")
-                try:
-                    nombre = await _un_soporte(pagina, cufe, nit, carpeta)
-                except Exception:
-                    res.fallidos.append(cufe)
-                else:
-                    (res.bajados if nombre else res.sin_encontrar).append(nombre or cufe)
-                await asyncio.sleep(ESPERA_ENTRE_DOCUMENTOS)
+            fabrica = contexto.pages[0] if contexto.pages else await contexto.new_page()
+            respaldo = await contexto.new_page()
+            cola: asyncio.Queue = asyncio.Queue(maxsize=TOKENS_EN_COLA)
+            parar = asyncio.Event()
+            # El User-Agent se lee de la pestaña quieta: la otra está navegando, y
+            # evaluar sobre una página en plena navegación destruye el contexto.
+            ua = await respaldo.evaluate("() => navigator.userAgent")
+            cosechadora = asyncio.create_task(_cosechar_tokens(fabrica, cola, parar))
+            # El respaldo a clics es de uno en uno: comparte pestaña.
+            turno_respaldo = asyncio.Lock()
+
+            rendidos = 0          # fallos seguidos del camino rápido
+            rendido = False       # y, una vez cerrada la llave, no se reabre
+
+            async def obrero() -> None:
+                nonlocal hechos, rendidos, rendido
+                while True:
+                    try:
+                        doc = pendientes.get_nowait()
+                    except asyncio.QueueEmpty:
+                        return
+                    cufe = (doc.get("cufe") or "").strip().lower()
+                    nit = str(doc.get("nit") or "").strip()
+                    if not cufe or not nit:
+                        res.fallidos.append(cufe or "(sin CUFE)")
+                        continue
+                    hechos += 1
+                    avisa(f"Bajando {hechos} de {total}…")
+                    nombre = None
+                    intentos = 0 if rendido else INTENTOS_POR_DOCUMENTO
+                    for _ in range(intentos):
+                        try:
+                            token = await asyncio.wait_for(
+                                cola.get(), timeout=ESPERA_MAXIMA_TOKEN)
+                        except asyncio.TimeoutError:
+                            # El portal dejó de dar tokens: muestra «estamos
+                            # comprobando que no sea un bot». Colgarse esperando
+                            # sería lo peor; se deja constancia y se sigue.
+                            break
+                        # El resultado se guarda FUERA del try: cerrar el cliente
+                        # puede reventar con el PDF ya en disco, y darlo entonces
+                        # por fallido hacía que el respaldo lo bajara otra vez —17
+                        # duplicados `_dian` en una corrida de 32, y el doble de
+                        # tiempo.
+                        hecho = None
+                        try:
+                            async with httpx.AsyncClient(
+                                timeout=30, follow_redirects=True,
+                                headers={"User-Agent": ua, "Origin": PORTAL,
+                                         "Referer": BUSCAR_URL},
+                            ) as cliente:
+                                hecho = await _bajar_por_http(
+                                    cliente, token, cufe, nit, carpeta)
+                        except Exception:
+                            pass
+                        nombre = hecho[0] if hecho else None
+                        if nombre:
+                            rendidos = 0
+                            break
+                        rendidos += 1
+                        # Se queda rendido para el resto de la corrida: un acierto
+                        # suelto después del freno no significa que la llave se
+                        # haya reabierto, y reintentar vuelve a pagarse dos veces.
+                        if rendidos >= FALLOS_PARA_RENDIRSE:
+                            rendido = True
+                            break
+                    if nombre:
+                        res.bajados.append(nombre)
+                        continue
+                    # Agotados los intentos rápidos, se va a clics: es lento, pero
+                    # es lo único que distingue «la DIAN no lo tiene» de un rechazo.
+                    async with turno_respaldo:
+                        fallo = None
+                        for sobra in (True, False):
+                            try:
+                                nombre = await _un_soporte(respaldo, cufe, nit, carpeta)
+                            except Exception as e:
+                                fallo = e
+                                if sobra:
+                                    await asyncio.sleep(3)   # un respiro y se repite
+                                    continue
+                            else:
+                                fallo = None
+                            break
+                        if fallo is not None:
+                            res.fallidos.append(cufe)
+                        else:
+                            (res.bajados if nombre else res.sin_encontrar).append(
+                                nombre or cufe)
+
+            await asyncio.gather(*[obrero() for _ in range(OBREROS)])
+            parar.set()
+            cosechadora.cancel()
         finally:
             await contexto.close()
             shutil.rmtree(carpeta / ".perfil-soportes", ignore_errors=True)
