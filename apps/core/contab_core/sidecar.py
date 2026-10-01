@@ -459,6 +459,9 @@ def _h_importar_descarga_dian(params: dict) -> dict:
     return {**resultado, "archivo": str(excel_path)}
 
 
+TIPO_EVENTO_RADIAN = "Application response"
+
+
 def _h_documentos_sin_soporte(params: dict) -> dict:
     """Los documentos del mes a los que les falta el PDF, listos para ir a buscarlos.
 
@@ -481,9 +484,15 @@ def _h_documentos_sin_soporte(params: dict) -> dict:
             pdf_cufe_module.get_indexed_cufes(conn, carpeta) if carpeta else set()
         )
 
+        # Los «Application response» son eventos RADIAN (acuse, aceptación), no
+        # documentos: van con Total e IVA en cero y no tienen soporte que buscar.
+        # En el septiembre real del usuario eran 9 de 41 filas, así que incluirlos
+        # era mandar al bot a buscar una cuarta parte de cosas que no existen.
         filas = conn.execute(
-            "SELECT DISTINCT cufe_cude FROM excel_row WHERE periodo = ? AND cufe_cude IS NOT NULL",
-            (periodo,),
+            "SELECT DISTINCT cufe_cude FROM excel_row "
+            "WHERE periodo = ? AND cufe_cude IS NOT NULL "
+            "AND COALESCE(tipo_doc, '') <> ?",
+            (periodo, TIPO_EVENTO_RADIAN),
         ).fetchall()
         faltan = [
             {"cufe": r["cufe_cude"], "nit": nit}
