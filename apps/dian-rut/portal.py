@@ -268,8 +268,10 @@ def _nombre_empresa(cuerpo: str) -> str | None:
 
 # ────────────────── Soportes por CUFE: el camino público (2.6) ──────────────────
 # Cualquier documento se baja dando CUFE + NIT, **sin credenciales de nadie**, y
-# —comprobado el 2026-09-28 con tres búsquedas seguidas— el Cloudflare no pide el
-# «soy humano» en cada una. Por eso esto puede correr solo.
+# —comprobado el 2026-10-01 bajando tres PDF seguidos con el navegador del bot— el
+# Cloudflare no pide el «soy humano» en cada una. Por eso esto puede correr solo.
+# Lo que Cloudflare sí protege es la vista de documento DENTRO de la sesión
+# (`/Document/Received`), no esta búsqueda pública.
 #
 # El PDF llega CIFRADO con el NIT. Quien lo lea después tiene que pasar esa
 # contraseña; `contab_core.pdf_cufe` ya lo hace.
@@ -312,8 +314,14 @@ async def _un_soporte(pagina, cufe: str, nit: str, carpeta: Path) -> str | None:
     if "DATOS DEL EMISOR" not in (await pagina.inner_text("body")).upper():
         return None      # la DIAN no lo tiene, o el NIT no corresponde
 
+    # «Descargar PDF» NO baja nada: es un `a.downloadLink` que abre un aviso —«Este
+    # archivo contiene contraseña y corresponde al NIT…»— y la descarga solo arranca
+    # al pulsar «Aceptar». Sin ese segundo clic, `expect_download` espera un archivo
+    # que nunca sale y revienta a los 60 s. Se culpó a Cloudflare; no era.
     async with pagina.expect_download(timeout=60_000) as info:
-        await pagina.get_by_text("Descargar PDF", exact=False).first.click()
+        await pagina.locator("a.downloadLink").first.click()
+        await pagina.wait_for_timeout(1_200)
+        await pagina.get_by_role("button", name="Aceptar").first.click(timeout=15_000)
     bajada = await info.value
     nombre = bajada.suggested_filename or f"{cufe[:16]}.pdf"
     destino = carpeta / nombre
