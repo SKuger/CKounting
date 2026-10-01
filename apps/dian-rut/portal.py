@@ -83,15 +83,32 @@ def _valida_enlace(enlace: str) -> None:
 # el calendario del widget sería más frágil y no aporta nada.
 _JS_EXPORTAR = """
 async ({desde, hasta, grupo}) => {
-  const form = document.querySelector('form') ||
-               document.querySelector('#export-range')?.closest('form');
-  if (!form) return {ok: false, error: 'no encontré el formulario de exportación'};
+  // NO se usa `document.querySelector('form')`: el PRIMER formulario de estas
+  // páginas es el de CERRAR SESIÓN, así que serializarlo mandaba un cuerpo sin los
+  // campos de la exportación y la DIAN respondía 500. Se arma el cuerpo con los
+  // campos que de verdad existen, vengan del formulario que vengan.
   const datos = new URLSearchParams();
-  for (const [k, v] of new FormData(form).entries()) datos.append(k, v);
+  for (const el of document.querySelectorAll('input[name], select[name], textarea[name]')) {
+    if (el.disabled) continue;
+    if (el.type === 'checkbox' || el.type === 'radio') { if (!el.checked) continue; }
+    if (el.form && (el.form.getAttribute('action') || '').toLowerCase().includes('logout')) continue;
+    if (!datos.has(el.name)) datos.append(el.name, el.value ?? '');
+  }
   datos.set('StartDate', desde);
   datos.set('EndDate', hasta);
   if (grupo !== null) datos.set('GroupCode', grupo);
   if (!datos.has('Type')) datos.set('Type', '1');
+  if (!datos.has('AmountAdmin')) datos.set('AmountAdmin', '');
+
+  const token = document.querySelector('input[name="__RequestVerificationToken"]');
+  if (token && !datos.has('__RequestVerificationToken'))
+    datos.set('__RequestVerificationToken', token.value);
+
+  const faltan = ['StartDate', 'EndDate', 'GroupCode', '__RequestVerificationToken']
+    .filter(k => !datos.get(k));
+  if (faltan.length)
+    return {ok: false, error: 'a la página le faltan campos: ' + faltan.join(', ')};
+
   const r = await fetch('/Document/Export', {
     method: 'POST',
     headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest'},
@@ -99,8 +116,7 @@ async ({desde, hasta, grupo}) => {
     credentials: 'same-origin',
   });
   const texto = await r.text();
-  return {ok: r.ok, status: r.status, cuerpo: texto.slice(0, 300),
-          campos: [...datos.keys()]};
+  return {ok: r.ok, status: r.status, cuerpo: texto.slice(0, 300), campos: [...datos.keys()]};
 }
 """
 

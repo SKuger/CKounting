@@ -164,33 +164,53 @@ Dos diferencias con lo documentado, que se corrigieron en `excel-structure.md`:
   9 de 10 filas. **Ojo al validar**: no son facturas y no tienen soporte que
   buscarles.
 
-### ⚠ Lo que NO se ha mirado: «Documentos recibidos»
+### Documentos recibidos — **aquí sí está el XML** (2026-10-01)
 
-**Pendiente, y es la pregunta más importante que queda del portal.** El menú tiene
-una sección `/Document/Received` que **nunca se abrió**. El recorrido del
-2026-09-28 fue directo a «Descarga de listados», que era lo que el contador usa a
-diario, y la sección de documentos recibidos quedó sin revisar.
+`/Document/Received` es la sección que faltaba mirar, y responde la pregunta que
+bloqueaba la Fase 3: **cada documento se baja con su XML**.
 
-Importa porque es **el único sitio del portal donde podría estar el XML**. Lo que
-hay que comprobar cuando haya un enlace de acceso nuevo:
+### Cómo
 
-- ¿Cada documento de esa lista tiene descarga propia?
-- Si la tiene, ¿entrega el **XML**, un **ZIP con XML y PDF**, o solo el PDF otra vez?
+| # | Paso | Detalle |
+|---|---|---|
+| 1 | `GET /Document/Received` | el buscador. El rango por defecto son los **últimos dos días** |
+| 2 | `POST /Document/GetDocumentsPageToken` | la búsqueda: `StartDate`, `EndDate`, `DocumentKey`, `SerieAndNumber`, `SenderCode`, `ReceiverCode`, `DocumentTypeId`, `Status`, `RadianStatus`, `ReferencesType`, `FilterType`, token anti-CSRF |
+| 3 | botón `button.download-document` de cada fila | su `data-id` es el **CUFE**; el tooltip dice «Descargar elementos» |
+| 4 | la descarga | **ZIP con dos archivos**: `<cufe>.pdf` y `<cufe>.xml` |
 
-De la respuesta depende la **Fase 3 entera**: el portal público solo da PDF, y el
-correo de facturación —la vía que la ley garantiza— no está disponible en este
-caso. Si esa sección tampoco da XML, la Fase 3 se queda esperando a que se resuelva
-el acceso al correo, y conviene decirlo en el plan en vez de arrastrarla.
+### Qué trae el XML
 
-> Nota de método: la frase «el portal no da XML» se escribió aquí antes de haber
-> mirado esta sección. Era una conclusión más amplia que la evidencia que la
-> sostenía — dos pantallas de las cinco del menú.
+Comprobado con una factura real: es un **`Invoice` UBL directo** —no un
+`AttachedDocument` con el documento dentro de un CDATA, así que no hay que
+desenvolver nada—. En la muestra: `cbc:UUID` (el CUFE), `IssueDate`, `ProfileID`,
+`AccountingSupplierParty`, `AccountingCustomerParty`, **dos `cac:InvoiceLine`**,
+`LineExtensionAmount` y `PayableAmount`. Sin `TaxTotal`, porque era una póliza de
+seguros (exenta); hay que ver uno con IVA para confirmar la forma de los impuestos.
+
+### ⚠ Esto NO se puede automatizar con un navegador propio
+
+**Cloudflare Turnstile rechaza el navegador que lanza Playwright**, aunque se le
+pase el Chrome del sistema con `executable_path`. El síntoma es silencioso y
+costó un rato entenderlo: el botón de descarga **no dispara ni una petición** —el
+JavaScript se detiene porque la verificación falló— y la página no dice nada.
+
+Lo que sí funciona es el **modo humano** que este proyecto ya tenía para el scraper
+del RUT (D-058): el usuario abre **su propio navegador** con el puerto de
+depuración (`/api/dian/launch-browser`), entra él, y el bot se engancha con
+`connect_over_cdp("http://127.0.0.1:9222")`. Cloudflare ve un navegador normal
+porque lo es. Con eso la descarga funcionó a la primera.
+
+> **Y no es parejo**: la *Descarga de listados* (el Excel del mes) **sí** funciona
+> con el navegador automatizado — se comprobó el 2026-09-28. Lo que Cloudflare
+> protege es la vista de documento. Así que la Fase 2 puede seguir como está, pero
+> **traer los XML exige el modo humano**.
 
 ## Lo que sigue sin resolver
 
-**No se vio dónde bajar el XML** de un documento. Ni el camino público (solo PDF)
-ni el listado lo ofrecen. Hasta que aparezca, la Fase 3 depende de conseguir los
-XML por el correo de recepción del cliente.
+~~No se vio dónde bajar el XML.~~ **Resuelto el 2026-10-01**: está en *Documentos
+recibidos*, uno por uno, con el modo humano. Lo que queda por decidir es **cómo
+encaja en el producto**: bajar N documentos exige que el contador abra su navegador
+y entre, así que no puede ser una corrida desatendida.
 
 ## Cómo se capturó esto
 
