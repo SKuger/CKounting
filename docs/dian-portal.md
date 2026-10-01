@@ -52,6 +52,42 @@ esperaba un archivo que no iba a salir y reventaba a los 60 s con un *timeout* d
 descarga. **Se culpó a Cloudflare, y no era.** El síntoma engaña porque el clic sí
 dispara una petición —el icono de advertencia del aviso— y parece que algo pasó.
 
+### La cadena entera sin navegador, y dónde está el techo (2026-10-01)
+
+Los cuatro pasos se pueden hacer por **HTTP plano**, sin conducir el navegador,
+porque el portero —el Turnstile— viaja como **campo del formulario**, no como
+cookie, y por tanto se puede trasplantar a un cliente HTTP.
+
+| Paso | Petición | Campos que importan |
+|---|---|---|
+| 1 | `GET /User/SearchDocument` | de aquí sale `__RequestVerificationToken` |
+| 2 | `POST /User/SearchDocument` | `DocumentKey`, `SearchDocumentNit`, `cf-turnstile-response`, rvt |
+| 3 | `POST /Document/ShowDocumentToPublic` | `Id`, `Token`, `Captcha`, `Nit`, rvt — **salen del paso 2**, que no devuelve el documento sino un formulario puente que el navegador reenvía solo |
+| 4 | `POST /Document/DownloadPDF` | `trackId` (el CUFE), `token`, `captcha`, rvt → el PDF |
+
+Un documento así tarda **2-3 s** en vez de los ~25 s a clics. Pero:
+
+1. **El token del Turnstile es de un solo uso.** `window.turnstile.reset()` da uno
+   nuevo en 2-9 s; es el verdadero techo, y por eso el navegador sigue abierto
+   aunque ya no descargue nada: solo fabrica tokens.
+2. **Cada documento necesita sesión propia.** Reusando cookies el acierto cae a
+   1 de 6; con un cliente nuevo por documento sube a 3 de 5 por intento.
+3. **El portal deja correr un rato y luego cierra la llave.** Medido con el
+   septiembre real (32 documentos): los **primeros 7 a 5,6 s cada uno**, y del
+   octavo en adelante aparece **«Un momento, estamos comprobando que no sea un
+   bot»** —el WAF de Microsoft, no Cloudflare— y todo se va al respaldo a clics.
+
+Esa tercera trampa tiene una consecuencia que costó una corrida entera entender:
+**sin cortacircuitos la optimización sale más lenta que no optimizar**, porque se
+paga el intento rápido Y los clics. Medido: 33 s por documento contra los 25 s del
+camino a clics. Con cortacircuitos —rendirse tras unos fallos seguidos— el mismo
+lote bajó a **7,5 s por documento**.
+
+> Y un defecto que firmaba sus propios duplicados: el resultado del camino rápido
+> se guardaba DENTRO del `try`, así que si cerrar el cliente HTTP reventaba con el
+> PDF ya en disco, el documento se daba por fallido y el respaldo lo bajaba otra
+> vez. Se vio como **17 archivos `_dian` en una corrida de 32**.
+
 ### Y sí se puede automatizar: tres seguidas, sin credenciales (2026-10-01)
 
 Comprobado con una factura real (SURAMERICANA → ALAGUNA HERNANDEZ, 71 KB), con el
