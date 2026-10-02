@@ -35,6 +35,7 @@ from typing import Any, Callable
 
 import httpx
 
+import dian_paths
 from citas import _navegador as navegador_del_sistema
 from playwright.async_api import async_playwright
 
@@ -350,6 +351,13 @@ _JS_RENOVAR = """() => {
 async def _cosechar_tokens(pagina, cola: asyncio.Queue, parar: asyncio.Event) -> None:
     """Mantiene la cola surtida de tokens del Turnstile. Muere cuando se le dice."""
     await pagina.goto(BUSCAR_URL, wait_until="domcontentloaded", timeout=60_000)
+    # Al frente a propósito: Chrome congela las pestañas de fondo y el Turnstile
+    # deja de resolverse, así que la corrida se queda esperando un token que no
+    # va a llegar.
+    try:
+        await pagina.bring_to_front()
+    except Exception:
+        pass
     while not parar.is_set():
         token = ""
         for _ in range(80):          # hasta 20 s: renovar tarda lo que tarda
@@ -478,8 +486,11 @@ async def descargar_soportes(
     hechos = 0
 
     async with async_playwright() as p:
+        # El perfil NO va dentro de la carpeta de soportes: ahí viven los PDF del
+        # contador, y el indexador y el renombrador recorren esa carpeta entera.
+        perfil = Path(dian_paths.BROWSER_PROFILE_DIR) / f"soportes-{int(time.time())}"
         contexto = await p.chromium.launch_persistent_context(
-            str(carpeta / ".perfil-soportes"),
+            str(perfil),
             executable_path=navegador_del_sistema(),   # D-058: no hay Chromium propio
             headless=False,          # sin ventana el portal bloquea
             accept_downloads=True,
@@ -488,12 +499,17 @@ async def descargar_soportes(
         )
         try:
             fabrica = contexto.pages[0] if contexto.pages else await contexto.new_page()
-            respaldo = await contexto.new_page()
+            # La pestaña de respaldo se crea SOLO si hace falta. Creándola de
+            # entrada quedaba en blanco y al frente, tapando a la que trabaja —y
+            # Chrome congela las pestañas de fondo, así que el Turnstile no se
+            # resolvía nunca y la corrida se quedaba muerta mirando una pestaña
+            # vacía. Es lo que vio el usuario en 0.4.4.
+            respaldo = None
             cola: asyncio.Queue = asyncio.Queue(maxsize=TOKENS_EN_COLA)
             parar = asyncio.Event()
-            # El User-Agent se lee de la pestaña quieta: la otra está navegando, y
-            # evaluar sobre una página en plena navegación destruye el contexto.
-            ua = await respaldo.evaluate("() => navigator.userAgent")
+            # El User-Agent se lee ANTES de lanzar la cosechadora: evaluar sobre
+            # una página en plena navegación destruye el contexto de ejecución.
+            ua = await fabrica.evaluate("() => navigator.userAgent")
             cosechadora = asyncio.create_task(_cosechar_tokens(fabrica, cola, parar))
             # El respaldo a clics es de uno en uno: comparte pestaña.
             turno_respaldo = asyncio.Lock()
@@ -502,7 +518,7 @@ async def descargar_soportes(
             rendido = False       # y, una vez cerrada la llave, no se reabre
 
             async def obrero() -> None:
-                nonlocal hechos, rendidos, rendido
+                nonlocal hechos, rendidos, rendido, respaldo
                 while True:
                     try:
                         doc = pendientes.get_nowait()
@@ -559,6 +575,8 @@ async def descargar_soportes(
                     # Agotados los intentos rápidos, se va a clics: es lento, pero
                     # es lo único que distingue «la DIAN no lo tiene» de un rechazo.
                     async with turno_respaldo:
+                        if respaldo is None:
+                            respaldo = await contexto.new_page()
                         fallo = None
                         for sobra in (True, False):
                             try:
@@ -582,5 +600,5 @@ async def descargar_soportes(
             cosechadora.cancel()
         finally:
             await contexto.close()
-            shutil.rmtree(carpeta / ".perfil-soportes", ignore_errors=True)
+            shutil.rmtree(perfil, ignore_errors=True)
     return res
