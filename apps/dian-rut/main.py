@@ -160,11 +160,16 @@ async def _correr_soportes(corrida_id: str, datos: dict):
         def avisa(mensaje: str):
             estado["mensaje"] = mensaje
         res = await portal_mod.descargar_soportes(
-            datos["documentos"], datos["carpeta"], progreso=avisa)
-        estado.update(estado="listo", mensaje="Listo", **res.como_dict())
+            datos["documentos"], datos["carpeta"], progreso=avisa,
+            parado=lambda: estado.get("parar", False))
+        final = "parado" if estado.get("parar") else "listo"
+        estado.update(estado=final, mensaje="Detenido" if final == "parado" else "Listo",
+                      **res.como_dict())
     except Exception as e:
         traceback.print_exc()
         detalle = f"{type(e).__name__}: {e}"[:200]
+        # Lo ya bajado está en la carpeta: decir solo «falló» obliga a empezar de
+        # cero una corrida que puede haber traído casi todo.
         estado.update(estado="error",
                       error=f"La descarga de soportes falló. {detalle}",
                       mensaje="La descarga de soportes falló.")
@@ -180,6 +185,17 @@ async def portal_soportes(payload: dict):
     _corridas[corrida_id] = {"estado": "corriendo", "mensaje": "Arrancando…", "error": None}
     asyncio.create_task(_correr_soportes(corrida_id, dict(payload)))
     return {"id": corrida_id, **_corridas[corrida_id]}
+
+
+@app.post("/portal/soportes/detener/{corrida_id}")
+async def portal_soportes_detener(corrida_id: str):
+    """Para la corrida. Lo bajado se queda donde está, y la siguiente lo salta."""
+    estado = _corridas.get(corrida_id)
+    if estado is None:
+        return JSONResponse(status_code=404, content={"error": "Esa corrida no existe."})
+    estado["parar"] = True
+    estado["mensaje"] = "Deteniendo…"
+    return {"id": corrida_id, "estado": estado["estado"], "mensaje": estado["mensaje"]}
 
 
 @app.get("/portal/estado/{corrida_id}")

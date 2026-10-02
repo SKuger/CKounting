@@ -304,6 +304,7 @@ def _nombre_empresa(cuerpo: str) -> str | None:
 BUSCAR_URL = f"{PORTAL}/User/SearchDocument"
 MOSTRAR_URL = f"{PORTAL}/Document/ShowDocumentToPublic"
 BAJAR_URL = f"{PORTAL}/Document/DownloadPDF"
+CDP_URL = "http://127.0.0.1:9222"   # el navegador del usuario, si está escuchando
 INTENTOS_POR_DOCUMENTO = 2
 OBREROS = 2
 TOKENS_EN_COLA = 3
@@ -316,12 +317,14 @@ class Soportes:
     bajados: list[str] = field(default_factory=list)
     sin_encontrar: list[str] = field(default_factory=list)
     fallidos: list[str] = field(default_factory=list)
+    ya_estaban: list[str] = field(default_factory=list)
 
     def como_dict(self) -> dict[str, Any]:
         return {
             "bajados": self.bajados,
             "sin_encontrar": self.sin_encontrar,
             "fallidos": self.fallidos,
+            "ya_estaban": self.ya_estaban,
             "total": len(self.bajados) + len(self.sin_encontrar) + len(self.fallidos),
         }
 
@@ -503,43 +506,103 @@ async def _un_soporte(pagina, cufe: str, nit: str, carpeta: Path) -> str | None:
     return destino.name
 
 
+async def _abrir_navegador(p, carpeta: Path, avisa):
+    """El navegador del usuario si está escuchando; si no, uno nuestro.
+
+    Cloudflare rechaza cada vez más al navegador que lanza Playwright, aunque se
+    le pase el Chrome del sistema: la verificación sale en rojo y la búsqueda no
+    pasa. Conectándose por CDP al navegador que el usuario ya tiene abierto —el
+    mismo «modo humano» que el scraper del RUT usa desde D-058— Cloudflare ve un
+    navegador normal, porque lo es.
+
+    Devuelve (contexto, cerrar), donde `cerrar` NO cierra el navegador del
+    usuario: solo lo que hayamos abierto nosotros.
+    """
+    try:
+        navegador = await p.chromium.connect_over_cdp(CDP_URL, timeout=4_000)
+        contexto = navegador.contexts[0] if navegador.contexts else await navegador.new_context()
+        avisa("Usando tu navegador (modo humano).")
+        mias: list = []
+
+        async def cerrar():
+            for pagina in mias:
+                try:
+                    await pagina.close()
+                except Exception:
+                    pass
+        return contexto, cerrar, mias
+    except Exception:
+        pass
+
+    # El perfil NO va dentro de la carpeta de soportes: ahí viven los PDF del
+    # contador, y el indexador y el renombrador recorren esa carpeta entera.
+    perfil = Path(dian_paths.BROWSER_PROFILE_DIR) / f"soportes-{int(time.time())}"
+    contexto = await p.chromium.launch_persistent_context(
+        str(perfil),
+        executable_path=navegador_del_sistema(),   # D-058: no hay Chromium propio
+        headless=False,          # sin ventana el portal bloquea
+        accept_downloads=True,
+        viewport={"width": 1400, "height": 900},
+        args=["--disable-blink-features=AutomationControlled"],
+    )
+    avisa("Abrimos un navegador propio: la DIAN puede pedir la verificación.")
+
+    async def cerrar():
+        try:
+            await contexto.close()
+        finally:
+            shutil.rmtree(perfil, ignore_errors=True)
+    return contexto, cerrar, None
+
+
+def ya_esta(carpeta: Path, cufe: str) -> bool:
+    """¿Este soporte ya está bajado? Es lo que permite retomar donde se quedó.
+
+    Se mira el disco y no el índice de CUFEs de la base, porque el índice solo se
+    refresca al terminar la corrida: si se para a la mitad —o se cae— el índice
+    todavía no sabe nada de lo bajado y volvería a pedirlo todo. El nombre del
+    archivo ES el CUFE, así que el disco ya lleva la cuenta.
+    """
+    return (carpeta / f"{cufe}.pdf").exists()
+
+
 async def descargar_soportes(
     documentos: list[dict[str, str]],
     carpeta: str | Path,
     *,
     progreso: Callable[[str], None] | None = None,
+    parado: Callable[[], bool] | None = None,
 ) -> Soportes:
-    """Baja el soporte oficial de cada documento. `documentos`: [{cufe, nit}, …]."""
+    """Baja el soporte oficial de cada documento. `documentos`: [{cufe, nit}, …].
+
+    Devuelve SIEMPRE lo conseguido, aunque algo reviente a mitad: los PDF ya
+    están en la carpeta, y decir «falló» sin decir cuáles se bajaron obliga a
+    empezar de cero.
+    """
     carpeta = Path(carpeta)
     carpeta.mkdir(parents=True, exist_ok=True)
     avisa = progreso or (lambda _m: None)
+    hay_que_parar = parado or (lambda: False)
     res = Soportes()
 
     pendientes: asyncio.Queue = asyncio.Queue()
     for doc in documentos:
+        cufe = (doc.get("cufe") or "").strip().lower()
+        if cufe and ya_esta(carpeta, cufe):
+            res.ya_estaban.append(f"{cufe}.pdf")
+            continue
         pendientes.put_nowait(doc)
     total = pendientes.qsize()
+    if res.ya_estaban:
+        avisa(f"{len(res.ya_estaban)} ya estaban; faltan {total}.")
     hechos = 0
 
     async with async_playwright() as p:
-        # El perfil NO va dentro de la carpeta de soportes: ahí viven los PDF del
-        # contador, y el indexador y el renombrador recorren esa carpeta entera.
-        perfil = Path(dian_paths.BROWSER_PROFILE_DIR) / f"soportes-{int(time.time())}"
-        contexto = await p.chromium.launch_persistent_context(
-            str(perfil),
-            executable_path=navegador_del_sistema(),   # D-058: no hay Chromium propio
-            headless=False,          # sin ventana el portal bloquea
-            accept_downloads=True,
-            viewport={"width": 1400, "height": 900},
-            args=["--disable-blink-features=AutomationControlled"],
-        )
+        contexto, cerrar, mias = await _abrir_navegador(p, carpeta, avisa)
         try:
             fabrica = contexto.pages[0] if contexto.pages else await contexto.new_page()
-            # La pestaña de respaldo se crea SOLO si hace falta. Creándola de
-            # entrada quedaba en blanco y al frente, tapando a la que trabaja —y
-            # Chrome congela las pestañas de fondo, así que el Turnstile no se
-            # resolvía nunca y la corrida se quedaba muerta mirando una pestaña
-            # vacía. Es lo que vio el usuario en 0.4.4.
+            if mias is not None and fabrica not in contexto.pages[:1]:
+                mias.append(fabrica)
             respaldo = None
             cola: asyncio.Queue = asyncio.Queue(maxsize=TOKENS_EN_COLA)
             parar = asyncio.Event()
@@ -556,6 +619,8 @@ async def descargar_soportes(
             async def obrero() -> None:
                 nonlocal hechos, rendidos, rendido, respaldo
                 while True:
+                    if hay_que_parar():
+                        return
                     try:
                         doc = pendientes.get_nowait()
                     except asyncio.QueueEmpty:
@@ -570,6 +635,8 @@ async def descargar_soportes(
                     nombre = None
                     intentos = 0 if rendido else INTENTOS_POR_DOCUMENTO
                     for _ in range(intentos):
+                        if hay_que_parar():
+                            return
                         try:
                             token = await asyncio.wait_for(
                                 cola.get(), timeout=ESPERA_MAXIMA_TOKEN)
@@ -609,11 +676,15 @@ async def descargar_soportes(
                     if nombre:
                         res.bajados.append(nombre)
                         continue
+                    if hay_que_parar():
+                        return
                     # Agotados los intentos rápidos, se va a clics: es lento, pero
                     # es lo único que distingue «la DIAN no lo tiene» de un rechazo.
                     async with turno_respaldo:
                         if respaldo is None:
                             respaldo = await contexto.new_page()
+                            if mias is not None:
+                                mias.append(respaldo)
                         fallo = None
                         for sobra in (True, False):
                             try:
@@ -632,10 +703,11 @@ async def descargar_soportes(
                             (res.bajados if nombre else res.sin_encontrar).append(
                                 nombre or cufe)
 
-            await asyncio.gather(*[obrero() for _ in range(OBREROS)])
-            parar.set()
-            cosechadora.cancel()
+            try:
+                await asyncio.gather(*[obrero() for _ in range(OBREROS)])
+            finally:
+                parar.set()
+                cosechadora.cancel()
         finally:
-            await contexto.close()
-            shutil.rmtree(perfil, ignore_errors=True)
+            await cerrar()
     return res
