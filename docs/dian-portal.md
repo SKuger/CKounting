@@ -8,6 +8,25 @@
 > Lo de abajo está **verificado contra el portal real**, no recordado ni supuesto.
 > Cada sección dice con qué fecha se comprobó.
 
+## Dos sistemas distintos, dos defensas distintas (2026-10-02)
+
+Esto se confunde una y otra vez, y lleva a pensar que «la DIAN empezó a
+detectarnos». No es lo mismo:
+
+| Pantalla | Dominio | Qué tiene delante |
+|---|---|---|
+| **Terceros** (consulta de RUT) | `muisca.dian.gov.co` | nada: responde `Server: DIAN`, sin WAF ni captcha |
+| **Soportes y listados** | `catalogo-vpfe.dian.gov.co` | **Azure Front Door** (cabecera `x-azure-ref`) **y** un Turnstile de Cloudflare en la página |
+
+Comprobado con las cabeceras el 2026-10-02. Terceros nunca tuvo que pasar ningún
+portero; por eso funcionó desde el primer día sin pelear. Al bajar soportes no es
+que nos hayan empezado a detectar: es que cambiamos de puerta, y esta sí tiene
+guardia.
+
+> El `CLAUDE.md` decía que el scraper de Terceros «sortea Cloudflare». No hay
+> Cloudflare que sortear en MUISCA; la frase mandaba a buscar el problema donde
+> no estaba.
+
 ## Resumen
 
 El portal expone **dos caminos distintos**, y confundirlos fue el error de partida
