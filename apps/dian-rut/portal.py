@@ -175,7 +175,7 @@ async def descargar_listado(
     carpeta.mkdir(parents=True, exist_ok=True)
     avisa = progreso or (lambda _m: None)
 
-    perfil = carpeta / f".perfil-{int(time.time())}"
+    perfil = Path(dian_paths.BROWSER_PROFILE_DIR) / f"listado-{int(time.time())}"
     async with async_playwright() as p:
         contexto = await p.chromium.launch_persistent_context(
             str(perfil),
@@ -348,7 +348,38 @@ _JS_RENOVAR = """() => {
 }"""
 
 
-async def _cosechar_tokens(pagina, cola: asyncio.Queue, parar: asyncio.Event) -> None:
+# El portal mete delante un muro del WAF de Azure —«Un momento, estamos
+# comprobando que no sea un bot»— que no es el Turnstile y no tiene su campo.
+# Sin reconocerlo, la cosechadora se queda mirando una página que nunca va a dar
+# un token, se rinde en silencio, y la corrida entera se va al respaldo a clics
+# sin que nadie entienda por qué. Es lo que vio el usuario.
+MUROS = ("comprobando que no sea un bot", "azure waf", "request blocked",
+         "solicitud bloqueada")
+
+
+async def _hay_muro(pagina) -> bool:
+    try:
+        return any(m in (await pagina.inner_text("body")).lower() for m in MUROS)
+    except Exception:
+        return False
+
+
+async def _esperar_muro(pagina, avisa) -> bool:
+    """Espera a que el WAF nos deje pasar. False si no cede."""
+    for intento in range(5):
+        if not await _hay_muro(pagina):
+            return True
+        avisa("La DIAN está comprobando que no somos un robot; esperando…")
+        await pagina.wait_for_timeout(6_000 * (intento + 1))
+        try:
+            await pagina.reload(wait_until="domcontentloaded", timeout=60_000)
+        except Exception:
+            return False
+    return not await _hay_muro(pagina)
+
+
+async def _cosechar_tokens(pagina, cola: asyncio.Queue, parar: asyncio.Event,
+                           avisa) -> None:
     """Mantiene la cola surtida de tokens del Turnstile. Muere cuando se le dice."""
     await pagina.goto(BUSCAR_URL, wait_until="domcontentloaded", timeout=60_000)
     # Al frente a propósito: Chrome congela las pestañas de fondo y el Turnstile
@@ -371,6 +402,11 @@ async def _cosechar_tokens(pagina, cola: asyncio.Queue, parar: asyncio.Event) ->
                 break
             await pagina.wait_for_timeout(250)
         if not token:
+            # Puede ser el muro del WAF, que no trae campo del Turnstile.
+            if await _hay_muro(pagina):
+                if not await _esperar_muro(pagina, avisa):
+                    return
+                continue
             return
         await cola.put(token)
         try:
@@ -510,7 +546,7 @@ async def descargar_soportes(
             # El User-Agent se lee ANTES de lanzar la cosechadora: evaluar sobre
             # una página en plena navegación destruye el contexto de ejecución.
             ua = await fabrica.evaluate("() => navigator.userAgent")
-            cosechadora = asyncio.create_task(_cosechar_tokens(fabrica, cola, parar))
+            cosechadora = asyncio.create_task(_cosechar_tokens(fabrica, cola, parar, avisa))
             # El respaldo a clics es de uno en uno: comparte pestaña.
             turno_respaldo = asyncio.Lock()
 
@@ -568,6 +604,7 @@ async def descargar_soportes(
                         # haya reabierto, y reintentar vuelve a pagarse dos veces.
                         if rendidos >= FALLOS_PARA_RENDIRSE:
                             rendido = True
+                            avisa("La DIAN nos frenó: seguimos, pero más despacio.")
                             break
                     if nombre:
                         res.bajados.append(nombre)

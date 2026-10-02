@@ -1,4 +1,5 @@
 import os
+import traceback
 import uuid
 import asyncio
 from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Form
@@ -161,8 +162,11 @@ async def _correr_soportes(corrida_id: str, datos: dict):
         res = await portal_mod.descargar_soportes(
             datos["documentos"], datos["carpeta"], progreso=avisa)
         estado.update(estado="listo", mensaje="Listo", **res.como_dict())
-    except Exception:
-        estado.update(estado="error", error="La descarga de soportes falló.",
+    except Exception as e:
+        traceback.print_exc()
+        detalle = f"{type(e).__name__}: {e}"[:200]
+        estado.update(estado="error",
+                      error=f"La descarga de soportes falló. {detalle}",
                       mensaje="La descarga de soportes falló.")
 
 
