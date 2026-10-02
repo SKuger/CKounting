@@ -729,6 +729,19 @@ def periodo_pdfs_folder(conn: sqlite3.Connection, periodo: str | None) -> str | 
     return row["pdfs_folder"] if row else None
 
 
+def periodo_folders(db_path: str | Path) -> dict[str, str | None]:
+    """{periodo: carpeta de soportes} de todos los meses conocidos."""
+    conn = connect(db_path)
+    try:
+        ensure_schema(conn)
+        return {
+            r["periodo"]: r["pdfs_folder"]
+            for r in conn.execute("SELECT periodo, pdfs_folder FROM periodo_folder").fetchall()
+        }
+    finally:
+        conn.close()
+
+
 def set_periodo_folder(db_path: str | Path, periodo: str, folder: str | None) -> dict:
     """Carpeta de soportes del mes. El mes queda creado aunque se limpie la carpeta."""
     p = _norm_periodo(periodo)
