@@ -145,7 +145,7 @@ const dianOpen = ref(false)
 const tercerosVerOpen = ref(false)
 const soportesEstado = ref<'inactivo' | 'corriendo' | 'listo'>('inactivo')
 const soportesMensaje = ref('')
-const soportesResumen = ref<{ bajados: number; sin_encontrar: number; fallidos: number } | null>(null)
+const soportesResumen = ref<{ bajados: number; sin_encontrar: number; fallidos: number; ya_estaban: number; parado: boolean } | null>(null)
 
 // ── terceros ──
 const terceros = ref<Tercero[]>([])
@@ -302,9 +302,38 @@ async function anotarFallo(mensaje: string) {
   } catch { /* que falle la anotación no puede tapar el fallo original */ }
 }
 
-// Baja de la DIAN el soporte oficial de los documentos que no lo tienen. Este
-// camino del portal es público —CUFE + NIT, sin credenciales— y el Cloudflare no
-// interrumpe entre búsquedas, así que puede correr solo.
+// Baja de la DIAN el soporte oficial de los documentos que no lo tienen. El
+// camino del portal es público —CUFE + NIT, sin credenciales—. Cada PDF se guarda
+// en cuanto llega, así que parar a la mitad no pierde nada: la siguiente corrida
+// salta lo que ya está en la carpeta.
+const soportesCorrida = ref<string | null>(null)
+// Cloudflare rechaza cada vez más al navegador que abrimos nosotros: la
+// verificación sale en rojo y la búsqueda no pasa. Con el navegador del propio
+// usuario escuchando en el puerto de depuración, el bot se engancha a él y
+// Cloudflare ve un navegador normal, porque lo es (lo mismo que hace Terceros).
+const abriendoNavegador = ref(false)
+async function abrirMiNavegador() {
+  if (abriendoNavegador.value) return
+  abriendoNavegador.value = true
+  try {
+    const r = await $fetch<{ status: string }>('/api/dian/launch-browser', { method: 'POST' })
+    if (r.status === 'not_found') {
+      toast.error('No encontramos el navegador', 'Hace falta Google Chrome o Microsoft Edge instalado.')
+      return
+    }
+    toast.success('Navegador listo', 'Déjalo abierto y pulsa «Bajar los de…».')
+  } catch {
+    toast.error('No se pudo abrir el navegador', 'Intenta desde Consultas DIAN → Terceros.')
+  } finally {
+    abriendoNavegador.value = false
+  }
+}
+async function detenerSoportes() {
+  if (!soportesCorrida.value) return
+  soportesMensaje.value = 'Deteniendo…'
+  await $fetch(`/api/dian/portal/soportes/detener/${soportesCorrida.value}`, { method: 'POST' })
+}
+
 async function bajarSoportes(periodo: string) {
   soportesEstado.value = 'corriendo'
   soportesMensaje.value = 'Viendo cuáles faltan…'
@@ -334,13 +363,14 @@ async function bajarSoportes(periodo: string) {
       method: 'POST',
       body: { documentos: faltantes.faltan, carpeta: faltantes.carpeta },
     })
+    soportesCorrida.value = inicio.id
     for (;;) {
       await new Promise((r) => setTimeout(r, 3000))
-      const e = await $fetch<{ estado: string; mensaje: string; bajados?: string[]; sin_encontrar?: string[]; fallidos?: string[]; error?: string }>(
+      const e = await $fetch<{ estado: string; mensaje: string; bajados?: string[]; sin_encontrar?: string[]; fallidos?: string[]; ya_estaban?: string[]; error?: string }>(
         `/api/dian/portal/estado/${inicio.id}`,
       )
       soportesMensaje.value = e.mensaje || ''
-      if (e.estado === 'listo') {
+      if (e.estado === 'listo' || e.estado === 'parado') {
         // Los PDF del portal vienen cifrados con el NIT: sin releerlos con la
         // contraseña quedarían marcados como protegidos y la validación diría
         // que no hay soporte.
@@ -350,7 +380,10 @@ async function bajarSoportes(periodo: string) {
           bajados: e.bajados?.length ?? 0,
           sin_encontrar: e.sin_encontrar?.length ?? 0,
           fallidos: e.fallidos?.length ?? 0,
+          ya_estaban: e.ya_estaban?.length ?? 0,
+          parado: e.estado === 'parado',
         }
+        soportesCorrida.value = null
         await reloadPeriodos()
         return
       }
@@ -849,15 +882,25 @@ watch(dbPath, refresh)
               <p class="mt-1 text-xs text-muted-foreground">
                 La DIAN entrega el soporte de cualquier documento con solo el CUFE y el NIT, sin
                 credenciales. En vez de esperar a que el cliente los mande, los bajamos nosotros.
+                Si la DIAN rechaza la verificación, abre tu navegador y vuelve a intentarlo: con él
+                abierto pasa. Cada PDF se guarda al llegar, así que puedes detener y seguir después.
               </p>
-              <Button variant="outline" size="sm" class="mt-2" :disabled="soportesEstado === 'corriendo' || !dianPeriodo" @click="bajarSoportes(dianPeriodo)">
-                <CloudDownload class="size-3.5" /> Bajar los de {{ dianPeriodo }}
-              </Button>
+              <div class="mt-2 flex flex-wrap gap-2">
+                <Button variant="outline" size="sm" :disabled="soportesEstado === 'corriendo' || !dianPeriodo" @click="bajarSoportes(dianPeriodo)">
+                  <CloudDownload class="size-3.5" /> Bajar los de {{ dianPeriodo }}
+                </Button>
+                <Button v-if="soportesEstado === 'corriendo'" variant="ghost" size="sm" @click="detenerSoportes()">
+                  Detener
+                </Button>
+                <Button variant="ghost" size="sm" :disabled="abriendoNavegador" @click="abrirMiNavegador()">
+                  Abrir mi navegador
+                </Button>
+              </div>
               <p v-if="soportesEstado === 'corriendo'" class="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 class="size-3.5 shrink-0 animate-spin" /> {{ soportesMensaje }}
               </p>
               <p v-else-if="soportesEstado === 'listo' && soportesResumen" class="mt-2 text-sm">
-                {{ soportesResumen.bajados }} bajados<template v-if="soportesResumen.sin_encontrar"> · {{ soportesResumen.sin_encontrar }} que la DIAN no tiene</template><template v-if="soportesResumen.fallidos"> · {{ soportesResumen.fallidos }} fallidos</template>.
+<template v-if="soportesResumen.parado">Detenido. </template>{{ soportesResumen.bajados }} bajados<template v-if="soportesResumen.ya_estaban"> · {{ soportesResumen.ya_estaban }} que ya estaban</template><template v-if="soportesResumen.sin_encontrar"> · {{ soportesResumen.sin_encontrar }} que la DIAN no tiene</template><template v-if="soportesResumen.fallidos"> · {{ soportesResumen.fallidos }} fallidos</template>.<template v-if="soportesResumen.parado"> Vuelve a pulsar «Bajar» para seguir donde quedó.</template>
               </p>
             </div>
           </div>
