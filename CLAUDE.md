@@ -164,6 +164,14 @@ Contab/
 4. Actualizar [`docs/session_log.md`](docs/session_log.md) con el resumen de la sesión.
 5. Preguntarle (opción múltiple) qué quiere abordar a continuación.
 
+### Antes de publicar un release
+
+Subir el instalador al **programa de whitelisting de Avast** antes de publicar, no
+después de que el usuario vea el cartel de «programa sospechoso». El instalador no
+va firmado (D-059) y lleva dos ejecutables de PyInstaller, así que cada versión
+nueva vuelve a saltar. Procedimiento y texto listo en
+[`docs/antivirus.md`](docs/antivirus.md).
+
 ## Cuando cierres una sub-fase del plan de automatización
 
 1. Marcar la tarea como `[x]` en [`plans/dian-siigo-automation-plan.md`](plans/dian-siigo-automation-plan.md).
