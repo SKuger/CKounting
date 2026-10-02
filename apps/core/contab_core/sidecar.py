@@ -28,6 +28,7 @@ from . import pdf_cufe as pdf_cufe_module
 from . import perfil_fiscal as perfil_module
 from . import program_db as program_db_module
 from . import puc as puc_module
+from . import carpetas as carpetas_module
 from . import rename_soportes as rename_module
 from . import storage as storage_module
 from . import tablero as tablero_module
@@ -426,7 +427,13 @@ def _h_preparar_descarga_dian(params: dict) -> dict:
     # La carpeta la decide Contab: el ZIP del portal es un intermedio, no un
     # documento del contador, y no hay por qué hacerle configurar nada.
     info = storage_module.read_empresa_info(Path(params["db_path"])) or {}
-    plan["carpeta"] = str(paths_module.descargas_dir(str(info.get("nit") or "")))
+    # El listado del portal cae en el mes del contador, no en una carpeta interna
+    # que él no ve. Si la empresa aún no tiene carpeta, sigue el sitio de antes.
+    raiz = (info.get("default_folder") or "").strip()
+    if raiz:
+        plan["carpeta"] = carpetas_module.preparar_mes(raiz, plan["periodo"])["mes"]
+    else:
+        plan["carpeta"] = str(paths_module.descargas_dir(str(info.get("nit") or "")))
     plan["nit_receptor"] = info.get("nit")
     return plan
 
@@ -924,11 +931,62 @@ def _h_export_missing_supports(params: dict) -> dict:
 # ---------- 0.1.4: MESES (periodos) — crear, soportes por mes, mover/borrar el Excel ----------
 
 def _h_create_periodo(params: dict) -> dict:
+    """Crea el mes y, si la empresa ya tiene carpeta, su sitio en el disco.
+
+    Crear el mes y crear su carpeta son el mismo gesto: si se separan, el mes
+    nace sin dónde guardar nada y alguien tiene que acordarse después.
+    """
     db_path = Path(params["db_path"])
     periodo = params.get("periodo")
     if not isinstance(periodo, str):
         raise ValueError("periodo requerido (string 'AAAA-MM')")
-    return storage_module.create_periodo(db_path, periodo)
+    res = storage_module.create_periodo(db_path, periodo)
+
+    info = storage_module.read_empresa_info(db_path) or {}
+    raiz = (info.get("default_folder") or "").strip()
+    if not raiz:
+        # Sin carpeta de empresa no hay dónde crearla. No es un error: la UI la
+        # pide en este momento, que es cuando se entiende para qué sirve.
+        res["falta_carpeta_empresa"] = True
+        return res
+    rutas = carpetas_module.preparar_mes(raiz, res["periodo"])
+    storage_module.set_periodo_folder(db_path, res["periodo"], rutas["soportes"])
+    res.update(carpeta_mes=rutas["mes"], pdfs_folder=rutas["soportes"])
+    return res
+
+
+def _h_carpeta_empresa(params: dict) -> dict:
+    """Fija la carpeta de la empresa y deja listos los meses que ya existan."""
+    db_path = Path(params["db_path"])
+    carpeta = params.get("carpeta")
+    if not isinstance(carpeta, str) or not carpeta.strip():
+        raise ValueError("carpeta requerida")
+    storage_module.set_default_folder(db_path, carpeta.strip())
+    for periodo in storage_module.periodo_folders(db_path):
+        rutas = carpetas_module.preparar_mes(carpeta.strip(), periodo)
+        storage_module.set_periodo_folder(db_path, periodo, rutas["soportes"])
+    return {"carpeta": carpeta.strip()}
+
+
+def _h_plan_mudanza(params: dict) -> dict:
+    """Qué se movería al reorganizar. No toca nada."""
+    db_path = Path(params["db_path"])
+    info = storage_module.read_empresa_info(db_path) or {}
+    raiz = (params.get("carpeta") or info.get("default_folder") or "").strip()
+    if not raiz:
+        raise ValueError("Esta empresa todavía no tiene carpeta.")
+    return carpetas_module.mudar(db_path, raiz, dry_run=True)
+
+
+def _h_mudar_carpetas(params: dict) -> dict:
+    """Mueve de verdad, y deja manifiesto de cada archivo movido."""
+    db_path = Path(params["db_path"])
+    info = storage_module.read_empresa_info(db_path) or {}
+    raiz = (params.get("carpeta") or info.get("default_folder") or "").strip()
+    if not raiz:
+        raise ValueError("Esta empresa todavía no tiene carpeta.")
+    storage_module.set_default_folder(db_path, raiz)
+    return carpetas_module.mudar(db_path, raiz, dry_run=False)
 
 
 def _h_list_periodos(params: dict) -> list[dict]:
@@ -1466,6 +1524,9 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "export_missing_supports": _h_export_missing_supports,
     # 0.1.4 — meses (periodos) + papelera del Excel
     "create_periodo": _h_create_periodo,
+    "carpeta_empresa": _h_carpeta_empresa,
+    "plan_mudanza": _h_plan_mudanza,
+    "mudar_carpetas": _h_mudar_carpetas,
     "list_periodos": _h_list_periodos,
     "set_periodo_pdfs_folder": _h_set_periodo_pdfs_folder,
     "delete_periodo": _h_delete_periodo,
