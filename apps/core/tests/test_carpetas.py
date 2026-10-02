@@ -97,3 +97,43 @@ def test_un_mes_con_ruta_rota_se_re_apunta_sin_romperse(empresa: Path, tmp_path:
     assert res["fallidos"] == 0
     assert storage.periodo_folders(empresa)["2026-07"] == str(raiz / "2026-07" / "soportes")
     assert (raiz / "2026-07" / "soportes").is_dir()
+
+
+def test_mudar_reindexa_donde_quedaron_los_pdf(empresa: Path, tmp_path: Path):
+    """El índice guarda la ruta de cada PDF: al moverlos apuntaría a la nada.
+
+    Sin reindexar, la validación diría que faltan soportes que están ahí mismo —y
+    el contador saldría a pedirle al cliente documentos que ya tiene.
+    """
+    from contab_core import pdf_cufe
+
+    vieja = tmp_path / "vieja"
+    vieja.mkdir()
+    muestra = Path(__file__).parent.parent.parent.parent / "docs" / "samples" / "pdfs"
+    pdfs = sorted(muestra.glob("*.pdf"))[:2] if muestra.is_dir() else []
+    if not pdfs:
+        pytest.skip("no hay PDFs de muestra en docs/samples/pdfs")
+    for src in pdfs:
+        (vieja / src.name).write_bytes(src.read_bytes())
+    storage.set_periodo_folder(empresa, "2026-09", str(vieja))
+
+    conn = storage.connect(empresa)
+    try:
+        storage.ensure_schema(conn)
+        pdf_cufe.index_folder(conn, str(vieja))
+        antes = pdf_cufe.get_indexed_cufes(conn, str(vieja))
+    finally:
+        conn.close()
+    assert antes, "la muestra tiene CUFEs que indexar"
+
+    raiz = tmp_path / "raiz"
+    res = HANDLERS["mudar_carpetas"]({"db_path": str(empresa), "carpeta": str(raiz)})
+
+    nueva = carpetas.carpeta_soportes(raiz, "2026-09")
+    assert "2026-09" in res["reindexados"], "la mudanza reindexa sola"
+    conn = storage.connect(empresa)
+    try:
+        despues = pdf_cufe.get_indexed_cufes(conn, str(nueva))
+    finally:
+        conn.close()
+    assert despues == antes, "los mismos CUFEs, ahora en la carpeta nueva"

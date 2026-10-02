@@ -979,14 +979,42 @@ def _h_plan_mudanza(params: dict) -> dict:
 
 
 def _h_mudar_carpetas(params: dict) -> dict:
-    """Mueve de verdad, y deja manifiesto de cada archivo movido."""
+    """Mueve de verdad, deja manifiesto, y vuelve a indexar donde quedaron.
+
+    Reindexar es parte de mudar, no un paso aparte: el índice de CUFEs guarda la
+    ruta de cada PDF, así que al moverlos queda apuntando a sitios que ya no
+    existen y la validación diría que faltan soportes que están ahí mismo. Pedirle
+    al contador que se acuerde de re-verificar mes por mes es trasladarle un
+    problema que creamos nosotros.
+    """
     db_path = Path(params["db_path"])
     info = storage_module.read_empresa_info(db_path) or {}
     raiz = (params.get("carpeta") or info.get("default_folder") or "").strip()
     if not raiz:
         raise ValueError("Esta empresa todavía no tiene carpeta.")
     storage_module.set_default_folder(db_path, raiz)
-    return carpetas_module.mudar(db_path, raiz, dry_run=False)
+    res = carpetas_module.mudar(db_path, raiz, dry_run=False)
+
+    # El NIT es la contraseña de los PDF que entrega el portal (vienen cifrados).
+    clave = str(info.get("nit") or "") or None
+    reindexados: dict[str, Any] = {}
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        for periodo, carpeta in storage_module.periodo_folders(db_path).items():
+            if not carpeta or not Path(carpeta).is_dir():
+                continue
+            try:
+                stats = pdf_cufe_module.index_folder(conn, carpeta, password=clave)
+                reindexados[periodo] = stats.to_dict()
+            except Exception as exc:      # noqa: BLE001
+                # Que falle un mes no puede tapar que la mudanza sí se hizo.
+                log.warn(f"mudanza: no se pudo reindexar {periodo}: {exc}")
+                reindexados[periodo] = {"error": f"{exc.__class__.__name__}: {exc}"}
+    finally:
+        conn.close()
+    res["reindexados"] = reindexados
+    return res
 
 
 def _h_list_periodos(params: dict) -> list[dict]:

@@ -140,12 +140,14 @@ async function confirmarMudanza() {
   if (mudando.value) return
   mudando.value = true
   try {
-    const r = await rpc<{ movidos: number; fallidos: number; manifiesto: string | null }>(
+    const r = await rpc<{ movidos: number; fallidos: number; manifiesto: string | null; reindexados: Record<string, unknown> }>(
       'mudar_carpetas', { db_path: dbPath.value, carpeta: carpetaElegida.value })
     cerrarPaneles()
+    const meses = Object.keys(r.reindexados || {}).length
     toast.success(`${r.movidos} archivos ordenados`,
-      r.fallidos ? `${r.fallidos} no se pudieron mover; quedaron donde estaban.`
-                 : 'Quedó registro de cada movimiento por si hay que deshacerlo.')
+      r.fallidos
+        ? `${r.fallidos} no se pudieron mover; quedaron donde estaban.`
+        : `${meses} ${meses === 1 ? 'mes revisado' : 'meses revisados'} de nuevo. Queda registro de cada movimiento por si hay que deshacerlo.`)
     await refresh()
   } catch (e: any) {
     toast.error('No se pudo ordenar', e?.message || String(e))
@@ -878,7 +880,8 @@ watch(dbPath, refresh)
           Se moverán <strong class="text-foreground">{{ mudanzaPlan.total }}</strong> archivos a
           <code class="rounded bg-muted px-1">{{ carpetaElegida }}</code>: los soportes a
           <code class="rounded bg-muted px-1">&lt;mes&gt;/soportes</code> y los Excel a la carpeta del mes.
-          Queda registro de cada movimiento por si hay que deshacerlo.
+          Al terminar se vuelven a revisar los soportes solo, y queda registro de cada
+          movimiento por si hay que deshacerlo.
         </p>
         <div class="max-h-64 overflow-y-auto rounded-md border border-border">
           <table class="w-full text-xs">
