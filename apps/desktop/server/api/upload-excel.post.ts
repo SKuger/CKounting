@@ -43,8 +43,11 @@ export default defineEventHandler(async (event) => {
   try {
     const info = await callSidecar<EmpresaInfo>('open_empresa', { db_path: dbPath })
     const folder = (info.default_folder || '').trim()
+    // El Excel vive DENTRO de su mes: <empresa>/<AAAA-MM>/. Antes caía en
+    // <empresa>/imports y la contabilidad del mes quedaba repartida en dos sitios
+    // que solo la base sabía unir.
     targetDir = folder
-      ? joinPath(folder, 'imports')
+      ? joinPath(folder, periodo)
       : joinPath(fallbackUploadsDir(), basename(dbPath, '.db'))
   } catch (err) {
     const msg = (err instanceof Error ? err.message : String(err)).replace(/^Error:\s*/, '')

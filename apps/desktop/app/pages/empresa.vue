@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowLeft, Pencil, FolderOpen, FileSpreadsheet, Trash2, Archive, Download, ChevronRight, EllipsisVertical, CalendarPlus, RotateCcw, UploadCloud, BookText, Landmark, Plus, X, Users, Search, Sparkles, CloudDownload, Loader2 } from 'lucide-vue-next'
+import { ArrowLeft, Pencil, FolderOpen, FileSpreadsheet, Trash2, Archive, Download, ChevronRight, EllipsisVertical, CalendarPlus, RotateCcw, UploadCloud, BookText, Landmark, Plus, X, Users, Search, Sparkles, CloudDownload, Loader2, FolderTree } from 'lucide-vue-next'
 import { Popover, PopoverContent, PopoverTrigger } from '~/components/ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '~/components/ui/select'
 
@@ -85,20 +85,22 @@ const panelActivo = computed(() => {
   if (deleteMonthTarget.value) return 'borrarMes'
   if (archiveModalOpen.value) return 'archivar'
   if (deleteModalOpen.value) return 'borrarEmpresa'
-  if (periodoPickerOpen.value || backupPickerOpen.value) return 'carpeta'
+  if (periodoPickerOpen.value || backupPickerOpen.value || carpetaEmpresaOpen.value) return 'carpeta'
+  if (mudanzaPlan.value) return 'mudanza'
   return null
 })
 const TITULOS_PANEL: Record<string, string> = {
   tercero: 'Tercero', terceros: 'Terceros', dian: 'Traer de la DIAN',
   mes: 'Crear mes', mover: 'Mover el Excel de mes', borrarMes: 'Borrar mes',
   archivar: 'Archivar empresa', borrarEmpresa: 'Enviar la empresa a la papelera',
-  carpeta: 'Elegir carpeta',
+  carpeta: 'Elegir carpeta', mudanza: 'Ordenar las carpetas',
 }
 function cerrarPaneles() {
   dianOpen.value = false; tercerosVerOpen.value = false; terceroOpen.value = false
   newMonthOpen.value = false; moveTarget.value = null; deleteMonthTarget.value = null
   archiveModalOpen.value = false; deleteModalOpen.value = false
   periodoPickerOpen.value = false; backupPickerOpen.value = false
+  carpetaEmpresaOpen.value = false; mudanzaPlan.value = null
 }
 function alternarPanel(cual: 'dian' | 'terceros' | 'mes') {
   const abierto = panelActivo.value === cual
@@ -107,6 +109,49 @@ function alternarPanel(cual: 'dian' | 'terceros' | 'mes') {
   if (cual === 'dian') dianOpen.value = true
   else if (cual === 'terceros') tercerosVerOpen.value = true
   else newMonthOpen.value = true
+}
+
+// ── La carpeta de la empresa ──
+// El contador elige UNA carpeta por empresa; dentro, Contab crea una por mes, y
+// en cada mes el Excel y una carpeta `soportes`. Antes cada mes podía apuntar a
+// cualquier sitio y los Excel caían aparte: la contabilidad de un cliente quedaba
+// repartida en tres lugares que solo la base de datos sabía unir.
+const carpetaEmpresaOpen = ref(false)
+const mudanzaPlan = ref<{ total: number; movimientos: { periodo: string; origen: string; destino: string; motivo: string }[] } | null>(null)
+const mudando = ref(false)
+const carpetaElegida = ref('')
+
+async function onCarpetaEmpresaPicked(ruta: string) {
+  carpetaElegida.value = ruta
+  carpetaEmpresaOpen.value = false
+  // Antes de mover un solo documento se enseña qué se va a mover: son papeles de
+  // un cliente, no archivos de trabajo.
+  const plan = await rpc<{ total: number; movimientos: any[] }>('plan_mudanza', { db_path: dbPath.value, carpeta: ruta })
+  if (!plan.total) {
+    await rpc('carpeta_empresa', { db_path: dbPath.value, carpeta: ruta })
+    toast.success('Carpeta guardada', 'Los meses nuevos se crearán dentro de ella.')
+    await refresh()
+    return
+  }
+  mudanzaPlan.value = plan as any
+}
+
+async function confirmarMudanza() {
+  if (mudando.value) return
+  mudando.value = true
+  try {
+    const r = await rpc<{ movidos: number; fallidos: number; manifiesto: string | null }>(
+      'mudar_carpetas', { db_path: dbPath.value, carpeta: carpetaElegida.value })
+    cerrarPaneles()
+    toast.success(`${r.movidos} archivos ordenados`,
+      r.fallidos ? `${r.fallidos} no se pudieron mover; quedaron donde estaban.`
+                 : 'Quedó registro de cada movimiento por si hay que deshacerlo.')
+    await refresh()
+  } catch (e: any) {
+    toast.error('No se pudo ordenar', e?.message || String(e))
+  } finally {
+    mudando.value = false
+  }
 }
 
 // El mes vigente es el que se trabaja; el resto es historial. Darles el mismo peso
@@ -570,9 +615,14 @@ async function createMonth() {
   if (!/^\d{4}-\d{2}$/.test(periodo)) { toast.warn('Elige mes y año'); return }
   creatingMonth.value = true
   try {
-    await rpc('create_periodo', { db_path: dbPath.value, periodo })
+    const r = await rpc<{ falta_carpeta_empresa?: boolean }>('create_periodo', { db_path: dbPath.value, periodo })
     newMonthOpen.value = false
     await reloadPeriodos()
+    if (r.falta_carpeta_empresa) {
+      // Se pide aquí y no antes: es el momento en que se entiende para qué sirve.
+      toast.info('Falta la carpeta de esta empresa', 'Elígela y Contab creará dentro una por mes.')
+      carpetaEmpresaOpen.value = true
+    }
   } catch (exc) {
     toast.error('No se pudo crear el mes', humanError(exc))
   } finally {
@@ -766,6 +816,13 @@ watch(dbPath, refresh)
       </div>
 
       <div class="ml-auto flex shrink-0 items-center gap-2">
+        <Button size="sm" variant="ghost" :title="info?.default_folder || 'Sin carpeta elegida'"
+          @click="cerrarPaneles(); carpetaEmpresaOpen = true">
+          <FolderTree class="size-3.5" />
+          <span :class="info?.default_folder ? '' : 'text-status-warning'">
+            {{ info?.default_folder ? 'Carpeta' : 'Elegir carpeta' }}
+          </span>
+        </Button>
         <Button size="sm" data-tour="empresa-crear-mes" :variant="panelActivo === 'mes' ? 'secondary' : 'outline'" @click="alternarPanel('mes')">
           <CalendarPlus class="size-4" /> Crear mes
         </Button>
@@ -800,16 +857,50 @@ watch(dbPath, refresh)
     <DirectoryPicker
       v-if="panelActivo === 'carpeta'"
       class="shrink-0"
-      :open="periodoPickerOpen || backupPickerOpen"
+      :open="periodoPickerOpen || backupPickerOpen || carpetaEmpresaOpen"
       :initial-path="''"
-      :title="periodoPickerOpen
-        ? (periodoPickerTarget ? `Carpeta de soportes de ${monthLabel(periodoPickerTarget)}` : 'Carpeta de soportes del mes')
-        : 'Carpeta donde se guardará el backup (.contab.zip)'"
-      @pick="(ruta: string) => periodoPickerOpen ? onPeriodoFolderPicked(ruta) : onBackupFolderPicked(ruta)"
+      :title="carpetaEmpresaOpen
+        ? 'Carpeta de esta empresa — dentro se creará una por mes'
+        : periodoPickerOpen
+          ? (periodoPickerTarget ? `Carpeta de soportes de ${monthLabel(periodoPickerTarget)}` : 'Carpeta de soportes del mes')
+          : 'Carpeta donde se guardará el backup (.contab.zip)'"
+      @pick="(ruta: string) => carpetaEmpresaOpen ? onCarpetaEmpresaPicked(ruta) : periodoPickerOpen ? onPeriodoFolderPicked(ruta) : onBackupFolderPicked(ruta)"
       @close="cerrarPaneles"
     />
 
-    <section v-if="panelActivo && panelActivo !== 'carpeta'" class="max-h-[62vh] shrink-0 overflow-y-auto rounded-lg border border-primary/40 bg-card">
+    <section v-if="panelActivo === 'mudanza' && mudanzaPlan" class="max-h-[62vh] shrink-0 overflow-y-auto rounded-lg border border-primary/40 bg-card">
+      <div class="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-border bg-card px-4 py-2.5">
+        <h2 class="text-sm font-semibold">Ordenar las carpetas</h2>
+        <Button variant="ghost" size="icon-sm" aria-label="Cerrar" @click="cerrarPaneles"><X class="size-4" /></Button>
+      </div>
+      <div class="space-y-3 p-4">
+        <p class="text-sm text-muted-foreground">
+          Se moverán <strong class="text-foreground">{{ mudanzaPlan.total }}</strong> archivos a
+          <code class="rounded bg-muted px-1">{{ carpetaElegida }}</code>: los soportes a
+          <code class="rounded bg-muted px-1">&lt;mes&gt;/soportes</code> y los Excel a la carpeta del mes.
+          Queda registro de cada movimiento por si hay que deshacerlo.
+        </p>
+        <div class="max-h-64 overflow-y-auto rounded-md border border-border">
+          <table class="w-full text-xs">
+            <tbody>
+              <tr v-for="(m, i) in mudanzaPlan.movimientos" :key="i" class="border-b border-border/60 last:border-0">
+                <td class="px-2 py-1 font-medium">{{ m.periodo }}</td>
+                <td class="px-2 py-1 text-muted-foreground">{{ m.motivo }}</td>
+                <td class="truncate px-2 py-1" :title="m.origen">{{ m.origen }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="flex gap-2">
+          <Button size="sm" :disabled="mudando" @click="confirmarMudanza()">
+            {{ mudando ? 'Moviendo…' : 'Mover y ordenar' }}
+          </Button>
+          <Button size="sm" variant="ghost" :disabled="mudando" @click="cerrarPaneles()">Cancelar</Button>
+        </div>
+      </div>
+    </section>
+
+    <section v-if="panelActivo && panelActivo !== 'carpeta' && panelActivo !== 'mudanza'" class="max-h-[62vh] shrink-0 overflow-y-auto rounded-lg border border-primary/40 bg-card">
       <div class="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-border bg-card px-4 py-2.5">
         <h2 class="text-sm font-semibold">{{ TITULOS_PANEL[panelActivo] }}</h2>
         <Button variant="ghost" size="icon-sm" aria-label="Cerrar" @click="cerrarPaneles"><X class="size-4" /></Button>
