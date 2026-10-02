@@ -183,7 +183,10 @@ async def descargar_listado(
             headless=False,          # sin ventana el portal bloquea la petición
             accept_downloads=True,
             viewport={"width": 1400, "height": 900},
-            args=["--disable-blink-features=AutomationControlled"],
+            # El banner «software automatizado está controlando Chrome» no es solo
+        # feo: es la señal que leen el reCAPTCHA y el Turnstile para rechazarnos.
+        args=["--disable-blink-features=AutomationControlled", "--disable-infobars"],
+        ignore_default_args=["--enable-automation"],
         )
         try:
             pagina = contexto.pages[0] if contexto.pages else await contexto.new_page()
@@ -543,7 +546,10 @@ async def _abrir_navegador(p, carpeta: Path, avisa):
         headless=False,          # sin ventana el portal bloquea
         accept_downloads=True,
         viewport={"width": 1400, "height": 900},
-        args=["--disable-blink-features=AutomationControlled"],
+        # El banner «software automatizado está controlando Chrome» no es solo
+        # feo: es la señal que leen el reCAPTCHA y el Turnstile para rechazarnos.
+        args=["--disable-blink-features=AutomationControlled", "--disable-infobars"],
+        ignore_default_args=["--enable-automation"],
     )
     avisa("Abrimos un navegador propio: la DIAN puede pedir la verificación.")
 
