@@ -550,8 +550,16 @@ class Vigia:
             with sync_playwright() as pw:
                 while not self._stop.is_set():
                     try:
+                        # Sin esto Chrome anuncia «Un software automatizado de
+                        # pruebas está controlando Chrome», y el reCAPTCHA de la
+                        # DIAN no deja pasar por más veces que se marque «No soy
+                        # un robot». `scraper.py` ya lo hacía; aquí faltaba.
                         ctx = pw.chromium.launch_persistent_context(
-                            str(PERFIL), executable_path=navegador, headless=False, viewport={"width": 1280, "height": 900}
+                            str(PERFIL), executable_path=navegador, headless=False,
+                            viewport={"width": 1280, "height": 900},
+                            args=["--disable-blink-features=AutomationControlled",
+                                  "--disable-infobars"],
+                            ignore_default_args=["--enable-automation"],
                         )
                     except Exception as e:  # noqa: BLE001
                         self._anotar("error", f"No pude abrir el navegador: {str(e).splitlines()[0][:200]}")
