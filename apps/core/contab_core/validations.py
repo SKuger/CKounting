@@ -64,11 +64,50 @@ def _v3_check_rate(valor_base: Decimal, iva: Decimal, rate: Decimal, tolerance: 
     return abs(iva - (valor_base * rate)) <= tolerance
 
 
-def evaluate_v3(row: dict[str, Any], tolerance: Decimal = V3_TOLERANCE_PESOS) -> str | None:
+def _iva_declarado(documento: dict[str, Any] | None) -> dict[str, Any] | None:
+    """El renglón de IVA del XML, si lo hay. Tipo 01 y sin ser retención."""
+    if not documento:
+        return None
+    for imp in documento.get("impuestos") or []:
+        if str(imp.get("tipo")) == "01" and not imp.get("es_retencion"):
+            return imp
+    return None
+
+
+def evaluate_v3(row: dict[str, Any], tolerance: Decimal = V3_TOLERANCE_PESOS,
+                documento: dict[str, Any] | None = None) -> str | None:
     """R-V3: tarifa de IVA.
+
+    **Con XML se contrasta; sin XML se infiere** (tarea 3.3). Inferir la tarifa
+    desde base e IVA obliga a adivinar entre 19% y 5%, y da por buena cualquier
+    combinación que cuadre con una de las dos: una factura con IVA del 8% mal
+    liquidado pasaba si el total casualmente encajaba. Cuando el XML declara la
+    tarifa, ya no hay nada que adivinar. La inferencia de D-093 se conserva para
+    las filas sin XML, que siguen siendo la mayoría.
+
     Returns None on pass, or a failure string. row must already have V2 applied."""
     iva = money.to_money(row.get("IVA") or 0)
     total = money.to_money(row.get("Total") or 0)
+
+    declarado = _iva_declarado(documento)
+    if declarado is not None and declarado.get("tarifa") is not None:
+        tarifa = Decimal(str(declarado["tarifa"]))
+        base = (Decimal(str(declarado["base"])) if declarado.get("base") is not None
+                else money.quantize(total - iva))
+        esperado = money.quantize(base * tarifa / Decimal("100"))
+        if abs(esperado - iva) <= tolerance:
+            return None
+        return (
+            f"El IVA no corresponde a la tarifa que declara el XML "
+            f"({tarifa:.2f}%): esperado {esperado:.2f} sobre base {base:.2f}, "
+            f"y el reporte trae {iva:.2f}"
+        )
+    if documento and declarado is None and iva != money.ZERO:
+        return (
+            f"El reporte trae IVA {iva:.2f}, pero el XML del documento "
+            f"no declara ningún IVA"
+        )
+
     if iva == money.ZERO:
         # D-E1-13 default: skip excluded/exempt rows.
         return None
@@ -122,6 +161,94 @@ def evaluate_v1(
     return V1_NO_SUPPORT_MESSAGE
 
 
+# ── Validaciones que solo el XML permite (tarea 3.4) ──────────────────────────
+# Cada una responde a algo que el Excel de la DIAN no puede contestar, porque sus
+# 32 columnas no traen ni la referencia de una nota ni la fecha real de emisión
+# separada de la de recepción.
+CODIGO_DUPLICADO = "V4"
+CODIGO_NOTA_SIN_ORIGEN = "V5"
+CODIGO_REZAGADO = "V6"
+CODIGO_RUT_CANCELADO = "V7"
+
+# El art. 496 ET da tres periodos para descontar el IVA, así que un documento
+# emitido antes del mes que se está cerrando no es un error: es un dato que el
+# contador tiene que ver para decidir. Pasados los tres, ya no es descontable.
+PERIODOS_DE_GRACIA = 3
+
+# Lo que el RUT puede decir y significa «este tercero ya no está activo». Se
+# compara en mayúsculas y sin tildes para no depender de cómo lo escriba el RUT.
+ESTADOS_RUT_MUERTOS = ("CANCELADO", "SUSPENDIDO", "INACTIVO")
+
+
+def _meses_entre(periodo_a: str, periodo_b: str) -> int | None:
+    """Cuántos meses hay de `periodo_a` a `periodo_b`, ambos 'AAAA-MM'."""
+    try:
+        aa, am = (int(x) for x in periodo_a.split("-")[:2])
+        ba, bm = (int(x) for x in periodo_b.split("-")[:2])
+    except (ValueError, AttributeError):
+        return None
+    return (ba - aa) * 12 + (bm - am)
+
+
+def evaluate_xml(
+    documento: dict[str, Any] | None,
+    *,
+    periodo: str | None = None,
+    cufes_repetidos: set[str] | None = None,
+    estados_rut: dict[str, str] | None = None,
+) -> list[tuple[str, str]]:
+    """Las validaciones de 3.4. Sin XML no devuelve nada — y eso es correcto:
+    una fila sin documento no es una fila con un problema."""
+    if not documento:
+        return []
+    out: list[tuple[str, str]] = []
+    cufe = (documento.get("cufe") or "").strip().lower()
+
+    if cufes_repetidos and cufe in cufes_repetidos:
+        out.append((CODIGO_DUPLICADO,
+                    f"El documento {documento.get('numero') or cufe[:12]} aparece "
+                    f"más de una vez en el mes con el mismo CUFE"))
+
+    if documento.get("tipo") == "nota_credito":
+        tiene_origen = any((r.get("cufe_referido") or r.get("numero_referido"))
+                           for r in documento.get("referencias") or [])
+        if not tiene_origen:
+            out.append((CODIGO_NOTA_SIN_ORIGEN,
+                        f"La nota crédito {documento.get('numero') or ''} no dice a qué "
+                        f"factura corresponde: no se puede imputar".strip()))
+
+    fecha = documento.get("fecha_emision") or ""
+    if periodo and len(fecha) >= 7:
+        meses = _meses_entre(fecha[:7], periodo)
+        if meses is not None and meses > 0:
+            dentro = meses < PERIODOS_DE_GRACIA
+            out.append((CODIGO_REZAGADO,
+                        f"Emitido en {fecha[:7]} y llega en {periodo} "
+                        f"({meses} {'mes' if meses == 1 else 'meses'} después): "
+                        + ("todavía descontable, art. 496 ET" if dentro
+                           else "fuera de los 3 periodos del art. 496 ET")))
+
+    nit = (documento.get("emisor_nit") or "").strip()
+    estado = (estados_rut or {}).get(nit, "")
+    if estado and estado.strip().upper() in ESTADOS_RUT_MUERTOS:
+        out.append((CODIGO_RUT_CANCELADO,
+                    f"El emisor {nit} figura con RUT {estado.strip().upper()} "
+                    f"en la última consulta"))
+    return out
+
+
+def cufes_repetidos_de(documentos_por_fila: list[dict[str, Any] | None]) -> set[str]:
+    """Los CUFE que aparecen más de una vez. Se calcula una vez por corrida."""
+    vistos: dict[str, int] = {}
+    for d in documentos_por_fila:
+        if not d:
+            continue
+        c = (d.get("cufe") or "").strip().lower()
+        if c:
+            vistos[c] = vistos.get(c, 0) + 1
+    return {c for c, n in vistos.items() if n > 1}
+
+
 def evaluate_row(
     row: dict[str, Any],
     *,
@@ -129,6 +256,10 @@ def evaluate_row(
     indexed_cufes: set[str] | None = None,
     overridden_codes: set[str] | None = None,
     self_nit: str | None = None,
+    documento: dict[str, Any] | None = None,
+    periodo: str | None = None,
+    cufes_repetidos: set[str] | None = None,
+    estados_rut: dict[str, str] | None = None,
 ) -> list[tuple[str, str]]:
     """Run the E1 validation pipeline against one row.
 
@@ -151,9 +282,16 @@ def evaluate_row(
         if v1:
             out.append(("V1", v1))
     if run_v3 and "V3" not in overrides:
-        v3 = evaluate_v3(transformed)
+        v3 = evaluate_v3(transformed, documento=documento)
         if v3:
             out.append(("V3", v3))
+    # Sin XML esto no añade nada, que es como se comportaba antes de la Fase 3.
+    for codigo, mensaje in evaluate_xml(
+        documento, periodo=periodo, cufes_repetidos=cufes_repetidos,
+        estados_rut=estados_rut,
+    ):
+        if codigo not in overrides:
+            out.append((codigo, mensaje))
     return out
 
 
@@ -164,10 +302,20 @@ def evaluate_rows(
     indexed_cufes: set[str] | None = None,
     overrides_by_row: dict[int, set[str]] | None = None,
     self_nit: str | None = None,
+    documentos_por_cufe: dict[str, dict[str, Any]] | None = None,
+    periodo: str | None = None,
+    estados_rut: dict[str, str] | None = None,
 ) -> list[list[tuple[str, str]]]:
     """Returns a list[list[(code, message)]] aligned with `rows`. Use
-    `failures_to_strings(...)` to get the legacy flat string view."""
+    `failures_to_strings(...)` to get the legacy flat string view.
+
+    `documentos_por_cufe` es la capa del XML. Si va vacía, el resultado es
+    idéntico al de antes de la Fase 3 — y la suite vieja en verde es la prueba.
+    """
     overrides_by_row = overrides_by_row or {}
+    docs = documentos_por_cufe or {}
+    por_fila = [docs.get(_cufe_de(r)) for r in rows]
+    repetidos = cufes_repetidos_de(por_fila) if docs else set()
     return [
         evaluate_row(
             r,
@@ -175,9 +323,21 @@ def evaluate_rows(
             indexed_cufes=indexed_cufes,
             overridden_codes=overrides_by_row.get(i),
             self_nit=self_nit,
+            documento=por_fila[i],
+            periodo=periodo,
+            cufes_repetidos=repetidos,
+            estados_rut=estados_rut,
         )
         for i, r in enumerate(rows)
     ]
+
+
+def _cufe_de(row: dict[str, Any]) -> str:
+    for clave in ("CUFE/CUDE", "CUFE", "cufe_cude"):
+        valor = row.get(clave)
+        if valor:
+            return str(valor).strip().lower()
+    return ""
 
 
 def failures_to_strings(tagged: list[list[tuple[str, str]]]) -> list[list[str]]:
