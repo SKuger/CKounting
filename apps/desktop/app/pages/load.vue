@@ -291,6 +291,22 @@ const {
   alReverificar: () => ejecutarValidaciones({ silent: true }),
 })
 
+// Fase 3.5 — el detalle del XML: líneas, impuestos y la factura de origen de una
+// nota. El Excel de la DIAN no trae nada de eso, y sin ello causar es adivinar
+// desde el total.
+const periodoDelMes = computed(() => soportes.value?.periodo ?? null)
+const {
+  resumen: xmlResumen, abierto: xmlAbierto, leyendo: xmlLeyendo,
+  documento: xmlDocumento, cufeAbierto: xmlCufeAbierto,
+  refrescar: refrescarXml, leerXml, verDocumento,
+} = useDetalleXml({
+  dbPath,
+  periodo: periodoDelMes,
+  // Un XML nuevo cambia lo que V3 contrasta: hay que revalidar.
+  alLeer: () => ejecutarValidaciones({ silent: true }),
+})
+watch(periodoDelMes, (p) => { if (p) refrescarXml() }, { immediate: true })
+
 async function toggleOverride(rowIndex: number) {
   const active = !v3Overrides.value.has(rowIndex)
   togglingOverride.value = rowIndex
@@ -443,6 +459,104 @@ watch(loadId, refresh)
       <p v-if="exportPath" class="break-all font-mono text-xs text-muted-foreground">
         Se guardará en: {{ exportPath }}
       </p>
+    </section>
+
+    <!-- Fase 3.5 — el detalle que el Excel no trae: líneas, impuestos y origen -->
+    <section v-if="data && xmlResumen" class="rounded-lg border border-border bg-card">
+      <div class="flex flex-wrap items-center gap-2 px-3 py-2">
+        <button
+          type="button"
+          class="inline-flex items-center gap-1.5 text-sm font-medium transition-colors hover:text-foreground"
+          @click="xmlAbierto = !xmlAbierto"
+        >
+          <ChevronRight class="size-4 text-muted-foreground transition-transform" :class="xmlAbierto ? 'rotate-90' : ''" />
+          🧾 Detalle del XML
+        </button>
+        <span class="text-xs text-muted-foreground">
+          · <strong class="text-foreground">{{ xmlResumen.con_xml }}</strong>
+          de {{ xmlResumen.total }} documentos del mes tienen XML
+        </span>
+        <span class="flex-1" />
+        <Button
+          variant="secondary" size="sm" :disabled="xmlLeyendo"
+          title="Lee los XML de la carpeta de soportes del mes. El portal los entrega junto al PDF en el ZIP de cada documento."
+          @click="leerXml"
+        >
+          <RefreshCw class="size-3.5" :class="xmlLeyendo ? 'animate-spin' : ''" />
+          {{ xmlLeyendo ? 'Leyendo…' : 'Leer los XML' }}
+        </Button>
+      </div>
+
+      <div v-if="xmlAbierto" class="border-t border-border">
+        <p v-if="!xmlResumen.con_xml" class="px-3 py-4 text-xs text-muted-foreground">
+          Todavía no hay ningún XML leído para este mes. Llegan dentro del ZIP de cada
+          documento cuando se bajan los soportes del portal; pulsa «Leer los XML» después.
+        </p>
+        <div v-else class="max-h-80 overflow-auto">
+          <table class="w-full text-xs">
+            <tbody>
+              <template v-for="c in xmlResumen.cufes" :key="c">
+                <tr class="cursor-pointer border-b border-border/60 hover:bg-accent/40" @click="verDocumento(c)">
+                  <td class="w-6 px-3 py-1.5 text-center">
+                    <ChevronRight class="size-3.5 text-muted-foreground transition-transform" :class="xmlCufeAbierto === c ? 'rotate-90' : ''" />
+                  </td>
+                  <td class="px-2 py-1.5 font-mono break-all">{{ c.slice(0, 16) }}…{{ c.slice(-8) }}</td>
+                </tr>
+                <tr v-if="xmlCufeAbierto === c" class="border-b border-border">
+                  <td colspan="2" class="bg-muted/40 px-3 py-3">
+                    <p v-if="!xmlDocumento" class="text-xs text-muted-foreground">Leyendo…</p>
+                    <div v-else class="space-y-3">
+                      <p class="text-xs">
+                        <strong>{{ xmlDocumento.numero || '(sin número)' }}</strong>
+                        · {{ xmlDocumento.tipo.replace('_', ' ') }}
+                        · {{ xmlDocumento.fecha_emision }}
+                        <span v-if="xmlDocumento.emisor_nombre"> · {{ xmlDocumento.emisor_nombre }}</span>
+                      </p>
+                      <p v-for="r in xmlDocumento.referencias" :key="r.cufe_referido || r.numero_referido || ''"
+                        class="text-xs text-muted-foreground">
+                        Corresponde a <strong class="text-foreground">{{ r.numero_referido || r.cufe_referido }}</strong>
+                        <span v-if="r.motivo"> · {{ r.motivo }}</span>
+                      </p>
+                      <table class="w-full">
+                        <thead>
+                          <tr class="text-left text-[10px] uppercase text-muted-foreground">
+                            <th class="py-1 font-normal">Línea</th>
+                            <th class="py-1 font-normal">Cantidad</th>
+                            <th class="py-1 text-right font-normal">Unitario</th>
+                            <th class="py-1 text-right font-normal">Total</th>
+                            <th class="py-1 text-right font-normal">Impuesto</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr v-for="ln in xmlDocumento.lineas" :key="ln.numero" class="border-t border-border/50">
+                            <td class="py-1 pr-2">{{ ln.descripcion || `Línea ${ln.numero}` }}</td>
+                            <td class="py-1 pr-2 font-mono">{{ ln.cantidad }}</td>
+                            <td class="py-1 text-right font-mono">{{ ln.valor_unitario }}</td>
+                            <td class="py-1 text-right font-mono">{{ ln.total }}</td>
+                            <td class="py-1 text-right font-mono">
+                              <span v-for="(im, k) in ln.impuestos" :key="k">{{ im.tarifa }}% · {{ im.valor }}</span>
+                              <span v-if="!ln.impuestos.length" class="text-muted-foreground">—</span>
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                      <div class="flex flex-wrap gap-4 border-t border-border pt-2 font-mono text-xs">
+                        <span>Subtotal <strong>{{ xmlDocumento.subtotal }}</strong></span>
+                        <span v-for="(im, k) in xmlDocumento.impuestos" :key="k"
+                          :class="im.es_retencion ? 'text-status-warning' : ''">
+                          {{ im.es_retencion ? 'Retención' : (im.nombre || 'Impuesto') }}
+                          {{ im.tarifa }}% <strong>{{ im.valor }}</strong>
+                        </span>
+                        <span>Total <strong>{{ xmlDocumento.total }}</strong></span>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
     </section>
 
     <section v-if="data && soportes" data-tour="load-soportes" class="rounded-lg border border-border bg-card">

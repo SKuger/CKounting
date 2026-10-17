@@ -1041,3 +1041,46 @@ Arreglos previos que salieron al integrarlo:
 - **D-E8-1** ⏸ Estrategia multiusuario (Postgres servidor vs sync nube vs file-share).
 - **D-E10-1** ⏸ Firma del instalador `.msi` (auto-signed dev vs Authenticode).
 - **D-E4-3** ⏸ OCR (Tesseract) para PDFs escaneados — solo si aparece un caso real con la muestra del usuario.
+
+## D-104 — El XML es una capa pegada al Excel, nunca su reemplazo ✅
+
+**Decisión**: el documento que se lee del XML UBL vive en tablas propias
+(`documento`, `documento_linea`, `documento_impuesto`, `documento_referencia`) y
+se engancha a las filas **por CUFE**. `excel_row.data_json` sigue siendo la fuente
+de la tabla que el contador ve (D-039, D-064).
+
+**Por qué**: si el XML reemplazara al Excel, cada columna que el contador
+reconoce cambiaría de sitio y de nombre, y la confianza que costó construir en E1
+se iría con ellas. Además el XML **no siempre está**: un mes sin XML tiene que
+comportarse exactamente igual que antes, y la suite vieja en verde es la prueba
+de que así es.
+
+## D-105 — Con XML se contrasta la tarifa; sin XML se sigue infiriendo ✅
+
+**Decisión**: V3 contrasta la tarifa **declarada** en el XML cuando existe, y
+conserva la inferencia de D-093 para las filas sin XML.
+
+**Por qué**: inferir obliga a adivinar entre 19% y 5%, y da por buena cualquier
+combinación que cuadre con una de las dos — una factura con IVA del 8% mal
+liquidado pasaba si el total casualmente encajaba. Cuando el XML declara la
+tarifa no hay nada que adivinar. No se retira la inferencia porque las filas sin
+XML siguen siendo la mayoría.
+
+## D-106 — Los importes del XML se guardan como TEXT ✅
+
+**Decisión**: `subtotal`, `total`, bases, tarifas y valores de impuesto se
+guardan en columnas `TEXT` y se leen con `Decimal(texto)`.
+
+**Por qué**: SQLite solo tiene `REAL`, y un `REAL` es un float. Guardar ahí un
+importe reintroduce por la puerta de atrás justo lo que D-075 prohíbe, y el
+céntimo que se pierde acaba en una retención que no cuadra con la del cliente.
+
+## D-107 — El rezagado se informa con su ventana, no se marca como error ✅
+
+**Decisión**: un documento emitido en un periodo anterior al que se está cerrando
+genera un aviso que **dice cuántos meses lleva** y si sigue dentro de los tres
+periodos del art. 496 ET.
+
+**Por qué**: un rezagado dentro de la ventana es descontable y no es un error;
+fuera de ella ya no lo es. Marcar los dos igual obliga al contador a ir a mirar
+la fecha uno por uno, que es exactamente el trabajo que esto venía a quitar.

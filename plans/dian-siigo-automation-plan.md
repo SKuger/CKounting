@@ -457,29 +457,35 @@ value**). Questions:
 >    crédito sin origen, rezagados y RUT cancelado.
 > 5. **3.5** — Mostrar el detalle por línea en la página de la carga.
 
-- [ ] **3.1** — `apps/core/contab_core/xml_ubl.py`: parser for `AttachedDocument`,
+- [x] **3.1** — `apps/core/contab_core/xml_ubl.py`: parser for `AttachedDocument`,
       `Invoice`, `CreditNote`, `DebitNote` and the documento soporte (UBL 2.1),
       cached by `(archivo, mtime, tamaño, parser_version)` — the same shape as
       [`pdf_cufe.py`](../apps/core/contab_core/pdf_cufe.py), including the version
       bump that re-reads old entries (D-067).
-- [ ] **3.2** — Migration 5: `documento`, `documento_linea`, `documento_impuesto`
+- [x] **3.2** — Migration 5: `documento`, `documento_linea`, `documento_impuesto`
       (tipo, tarifa, base, valor) and the document-to-document references.
   - **Why:** the Excel stays the source of the table the accountant sees (D-039,
     D-064). The XML is a **layer attached to it**, never a replacement for
     `data_json`. If you replace it, every column the accountant recognises moves,
     and the trust built in E1 goes with it.
-- [ ] **3.3** — V3 in [`apps/core/contab_core/validations.py`](../apps/core/contab_core/validations.py)
+- [x] **3.3** — V3 in [`apps/core/contab_core/validations.py`](../apps/core/contab_core/validations.py)
       contrasts the **declared** rate when XML exists; keep the D-093 inference
       for rows without XML.
-- [ ] **3.4** — New validations, each one only possible with the XML: duplicate
+- [x] **3.4** — New validations, each one only possible with the XML: duplicate
       document, credit note with no origin invoice, *rezagados* (issued in one
       period, received in another — relevant because of the three-period window of
       art. 496 ET, already noted in [`docs/glosario.md`](../docs/glosario.md)),
       and issuer with a cancelled RUT.
-- [ ] **3.5** — Show the line-level detail in [`apps/desktop/app/pages/load.vue`](../apps/desktop/app/pages/load.vue),
+- [x] **3.5** — Show the line-level detail in [`apps/desktop/app/pages/load.vue`](../apps/desktop/app/pages/load.vue),
       reusing the composable split from D-092.
 
-✅ **Done-when:**
+✅ **Done-when:** — cerrada el 2026-10-17, con **una reserva**.
+- ⚠ **Pendiente de un XML real.** Las muestras de `docs/samples/xml/` están
+  escritas a mano contra UBL 2.1 y contra la estructura que el reconocimiento
+  anotó del documento real (una póliza exenta, sin `TaxTotal`). **Nadie ha
+  corrido esto contra un XML real con IVA ni con retenciones.** Hasta entonces,
+  la forma de los impuestos está construida sobre el estándar, no sobre una
+  muestra.
 - The sample documents in `docs/samples/` parse into lines and taxes with their
   XML counterparts, and the totals match the Excel row to the cent.
 - A month **without** XML behaves exactly as today — run the existing suite and

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import log
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 # Cuánto espera una escritura a que se libere el lock antes de rendirse (ms).
 BUSY_TIMEOUT_MS = 5_000
@@ -118,6 +118,81 @@ CREATE TABLE IF NOT EXISTS validation_override (
 CREATE INDEX IF NOT EXISTS idx_validation_override_load ON validation_override(load_id);
 
 -- Empty in E1, populated in E4.
+-- ── Fase 3: el XML como fuente de verdad ──────────────────────────────────────
+-- El XML es una CAPA PEGADA al Excel, nunca su reemplazo (D-039, D-064). La tabla
+-- que el contador reconoce sigue saliendo de `excel_row.data_json`; esto se le
+-- añade por CUFE. Si se reemplazara, cada columna que él reconoce cambiaría de
+-- sitio, y con ella la confianza que costó construir en E1.
+CREATE TABLE IF NOT EXISTS xml_index (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  folder_path     TEXT NOT NULL,
+  xml_path        TEXT NOT NULL,
+  xml_mtime       INTEGER NOT NULL,
+  xml_size_bytes  INTEGER NOT NULL,
+  estado          TEXT NOT NULL,          -- ok | no_es_xml | sin_documento | error
+  error           TEXT,
+  parser_version  INTEGER NOT NULL DEFAULT 0,  -- al subirlo se re-lee lo viejo (D-067)
+  indexed_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(folder_path, xml_path)
+);
+
+CREATE TABLE IF NOT EXISTS documento (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  cufe            TEXT NOT NULL UNIQUE,
+  tipo            TEXT NOT NULL,          -- factura | nota_credito | nota_debito
+  numero          TEXT,
+  fecha_emision   TEXT,
+  hora_emision    TEXT,
+  moneda          TEXT,
+  emisor_nit      TEXT,
+  emisor_nombre   TEXT,
+  receptor_nit    TEXT,
+  receptor_nombre TEXT,
+  -- Los importes se guardan como TEXT a propósito: SQLite solo tiene REAL, y un
+  -- REAL es float. Los lee `Decimal(texto)` sin perder un céntimo (D-075).
+  subtotal        TEXT,
+  total_impuestos TEXT,
+  total           TEXT,
+  xml_path        TEXT,
+  parser_version  INTEGER NOT NULL DEFAULT 0,
+  leido_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS documento_linea (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  documento_id    INTEGER NOT NULL REFERENCES documento(id) ON DELETE CASCADE,
+  numero          INTEGER NOT NULL,
+  descripcion     TEXT,
+  cantidad        TEXT,
+  valor_unitario  TEXT,
+  total           TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_documento_linea_doc ON documento_linea(documento_id);
+
+CREATE TABLE IF NOT EXISTS documento_impuesto (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  documento_id    INTEGER NOT NULL REFERENCES documento(id) ON DELETE CASCADE,
+  linea_id        INTEGER REFERENCES documento_linea(id) ON DELETE CASCADE,
+  tipo            TEXT NOT NULL,          -- código DIAN: 01 IVA, 06 ReteFuente…
+  nombre          TEXT,
+  base            TEXT,
+  tarifa          TEXT,
+  valor           TEXT,
+  es_retencion    INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ix_documento_impuesto_doc ON documento_impuesto(documento_id);
+
+CREATE TABLE IF NOT EXISTS documento_referencia (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  documento_id    INTEGER NOT NULL REFERENCES documento(id) ON DELETE CASCADE,
+  cufe_referido   TEXT,
+  numero_referido TEXT,
+  fecha_referida  TEXT,
+  codigo_motivo   TEXT,
+  motivo          TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_documento_referencia_doc ON documento_referencia(documento_id);
+
 CREATE TABLE IF NOT EXISTS pdf_cufe_index (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
   folder_path       TEXT NOT NULL,
@@ -425,6 +500,20 @@ CREATE INDEX IF NOT EXISTS idx_excel_row_fecha ON excel_row(fecha_emision);
 """
 
 
+def _m007_documentos_xml(conn: sqlite3.Connection) -> None:
+    """Migración 7 — el documento del XML: líneas, impuestos y referencias (Fase 3.2).
+
+    Las cinco tablas se declaran en SCHEMA_SQL con `IF NOT EXISTS`, así que el
+    `executescript` las crea en cualquier BD y aquí no hay nada que mover.
+
+    **No se toca ni una tabla existente.** `excel_row` sigue siendo la fuente de lo
+    que el contador ve; el documento del XML se le engancha por CUFE. Un mes sin
+    XML tiene que comportarse exactamente igual que antes, y eso es lo que la
+    suite vieja en verde demuestra.
+    """
+    return None
+
+
 def _m006_bitacora_ingesta(conn: sqlite3.Connection) -> None:
     """Migración 6 — bitácora de las ingestas desde el portal (Fase 2.5).
 
@@ -522,6 +611,7 @@ MIGRACIONES: list[tuple[int, object]] = [
     (4, _m004_perfil_fiscal),
     (5, _m005_terceros),
     (6, _m006_bitacora_ingesta),
+    (7, _m007_documentos_xml),
 ]
 
 

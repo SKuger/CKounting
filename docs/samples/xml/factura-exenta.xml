@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- MUESTRA FALSA, con la forma del documento REAL que entregó el portal el
+     2026-10-01: una póliza de seguros, exenta, SIN cac:TaxTotal. -->
+<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
+         xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
+         xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
+  <cbc:UUID schemeName="CUFE-SHA384">22222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222bbbb</cbc:UUID>
+  <cbc:ID>2083-3763795</cbc:ID>
+  <cbc:IssueDate>2026-09-20</cbc:IssueDate>
+  <cbc:DocumentCurrencyCode>COP</cbc:DocumentCurrencyCode>
+  <cac:AccountingSupplierParty><cac:Party><cac:PartyTaxScheme>
+    <cbc:RegistrationName>ASEGURADORA FICTICIA S.A.</cbc:RegistrationName>
+    <cbc:CompanyID schemeName="31">890900900-1</cbc:CompanyID>
+    <cac:TaxScheme><cbc:ID>01</cbc:ID></cac:TaxScheme>
+  </cac:PartyTaxScheme></cac:Party></cac:AccountingSupplierParty>
+  <cac:AccountingCustomerParty><cac:Party><cac:PartyTaxScheme>
+    <cbc:RegistrationName>EMPRESA DE PRUEBA LTDA</cbc:RegistrationName>
+    <cbc:CompanyID schemeName="31">900181831-7</cbc:CompanyID>
+    <cac:TaxScheme><cbc:ID>01</cbc:ID></cac:TaxScheme>
+  </cac:PartyTaxScheme></cac:Party></cac:AccountingCustomerParty>
+  <cac:LegalMonetaryTotal>
+    <cbc:LineExtensionAmount currencyID="COP">143374.00</cbc:LineExtensionAmount>
+    <cbc:PayableAmount currencyID="COP">143374.00</cbc:PayableAmount>
+  </cac:LegalMonetaryTotal>
+  <cac:InvoiceLine>
+    <cbc:ID>1</cbc:ID>
+    <cbc:InvoicedQuantity unitCode="94">1.00</cbc:InvoicedQuantity>
+    <cbc:LineExtensionAmount currencyID="COP">143374.00</cbc:LineExtensionAmount>
+    <cac:Item><cbc:Description>Prima poliza de seguros</cbc:Description></cac:Item>
+    <cac:Price><cbc:PriceAmount currencyID="COP">143374.00</cbc:PriceAmount></cac:Price>
+  </cac:InvoiceLine>
+</Invoice>
