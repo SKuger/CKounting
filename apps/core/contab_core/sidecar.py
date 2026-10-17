@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from . import backup as backup_module
+from . import carpetas as carpetas_module
 from . import cita_personas as citas_module
 from . import dian_inconsistencias as dian_inc_module
 from . import dian_portal as dian_portal_module
@@ -28,7 +29,6 @@ from . import pdf_cufe as pdf_cufe_module
 from . import perfil_fiscal as perfil_module
 from . import program_db as program_db_module
 from . import puc as puc_module
-from . import carpetas as carpetas_module
 from . import rename_soportes as rename_module
 from . import storage as storage_module
 from . import tablero as tablero_module
@@ -1007,7 +1007,7 @@ def _h_mudar_carpetas(params: dict) -> dict:
             try:
                 stats = pdf_cufe_module.index_folder(conn, carpeta, password=clave)
                 reindexados[periodo] = stats.to_dict()
-            except Exception as exc:      # noqa: BLE001
+            except Exception as exc:
                 # Que falle un mes no puede tapar que la mudanza sí se hizo.
                 log.warn(f"mudanza: no se pudo reindexar {periodo}: {exc}")
                 reindexados[periodo] = {"error": f"{exc.__class__.__name__}: {exc}"}
