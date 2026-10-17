@@ -206,7 +206,30 @@ const consultandoNit = ref<string | null>(null)
 const rutMasivo = useJob()
 const terceroOpen = ref(false)
 const savingTercero = ref(false)
-const terceroDraft = reactive({ nit: '', razon_social: '', ciiu: '', municipio: '', responsabilidades: '', notas: '' })
+const terceroDraft = reactive({ nit: '', razon_social: '', ciiu: '', municipio: '', responsabilidades: '', notas: '', estado_rut: '' })
+
+// Los códigos los sirve el sidecar y no se copian aquí: la lista que esta
+// pantalla ofrece y la que lee el motor de retenciones tienen que ser la misma.
+const catalogoTercero = ref<{ responsabilidades: { codigo: string; etiqueta: string }[]; estados_rut: string[] }>(
+  { responsabilidades: [], estados_rut: [] },
+)
+onMounted(async () => {
+  try { catalogoTercero.value = await rpc('catalogo_tercero', {}) } catch { /* el panel sigue siendo usable a mano */ }
+})
+
+/** Las responsabilidades viven como texto; las casillas son una ayuda para no teclearlas con erratas. */
+function tieneResp(codigo: string) {
+  return terceroDraft.responsabilidades
+    .split(/[,\s]+/).filter(Boolean)
+    .some((x) => x.toUpperCase() === codigo.toUpperCase())
+}
+function alternarResp(codigo: string) {
+  const actuales = terceroDraft.responsabilidades.split(/[,\s]+/).filter(Boolean)
+  const i = actuales.findIndex((x) => x.toUpperCase() === codigo.toUpperCase())
+  if (i >= 0) actuales.splice(i, 1)
+  else actuales.push(codigo)
+  terceroDraft.responsabilidades = actuales.join(', ')
+}
 
 const BANDERAS_PERFIL = [
   { key: 'agente_retefuente', label: 'Agente de retefuente' },
@@ -585,6 +608,7 @@ function openTercero(t?: Tercero) {
     municipio: t?.municipio ?? '',
     responsabilidades: (t?.responsabilidades ?? []).join(', '),
     notas: t?.notas ?? '',
+    estado_rut: t?.estado_rut ?? '',
   })
   terceroOpen.value = true
 }
@@ -1034,8 +1058,11 @@ watch(dbPath, refresh)
             <p v-if="!terceros.length" class="px-3 py-4 text-sm text-muted-foreground">Ningún tercero coincide.</p>
           </div>
           <p class="mt-2 text-xs text-muted-foreground">
-            <strong>Consultar RUT</strong> trae hoy la razón social y el tipo. Las responsabilidades y
-            el CIIU se escriben a mano hasta que se confirme de dónde leerlos en el portal.
+            <strong>Consultar RUT</strong> trae la razón social y el tipo, que es todo lo que da la
+            consulta pública. Las responsabilidades, el CIIU y el estado están en el
+            <strong>certificado de RUT</strong> —el PDF que el cliente descarga autenticado— y se
+            escriben a mano con el lápiz de cada fila. Comprobado el 17-oct: la otra página de la
+            DIAN, <em>Consulta Estado RUT</em>, está fuera de servicio.
           </p>
         </template>
 
@@ -1046,8 +1073,36 @@ watch(dbPath, refresh)
             <div class="grid gap-1.5"><Label>Razón social</Label><Input v-model="terceroDraft.razon_social" /></div>
             <div class="grid gap-1.5"><Label>Actividad CIIU</Label><Input v-model="terceroDraft.ciiu" placeholder="4711" maxlength="4" /></div>
             <div class="grid gap-1.5"><Label>Municipio</Label><Input v-model="terceroDraft.municipio" placeholder="Medellín" /></div>
-            <div class="grid gap-1.5"><Label>Responsabilidades</Label><Input v-model="terceroDraft.responsabilidades" placeholder="O-13, O-15, O-23" /></div>
+            <div class="grid gap-1.5">
+              <Label>Estado del RUT</Label>
+              <select v-model="terceroDraft.estado_rut"
+                class="h-9 rounded-md border border-border bg-background px-2 text-sm">
+                <option value="">(sin dato)</option>
+                <option v-for="e in catalogoTercero.estados_rut" :key="e" :value="e">{{ e }}</option>
+              </select>
+            </div>
             <div class="grid gap-1.5"><Label>Notas</Label><Input v-model="terceroDraft.notas" placeholder="Opcional" /></div>
+          </div>
+
+          <div class="mt-4 max-w-3xl">
+            <Label>Responsabilidades</Label>
+            <p class="mt-0.5 text-xs text-muted-foreground">
+              Están en el <strong>certificado de RUT</strong> (casilla 53), que es el PDF que el
+              cliente descarga autenticado: la consulta pública de la DIAN no las trae. Abajo están
+              las que cambian el cálculo de una retención; cualquier otra se escribe en el campo.
+            </p>
+            <div class="mt-2 flex flex-wrap gap-2">
+              <button v-for="r in catalogoTercero.responsabilidades" :key="r.codigo" type="button"
+                class="rounded-md border px-2 py-1 text-xs transition-colors"
+                :class="tieneResp(r.codigo)
+                  ? 'border-primary bg-primary/10 text-foreground'
+                  : 'border-border text-muted-foreground hover:bg-accent'"
+                @click="alternarResp(r.codigo)">
+                <span class="font-mono">{{ r.codigo }}</span> · {{ r.etiqueta }}
+              </button>
+            </div>
+            <Input v-model="terceroDraft.responsabilidades" class="mt-2 font-mono text-xs"
+              placeholder="O-13, O-15, O-23" />
           </div>
           <div class="mt-3 flex gap-2">
             <Button :disabled="savingTercero" @click="saveTercero">Guardar</Button>

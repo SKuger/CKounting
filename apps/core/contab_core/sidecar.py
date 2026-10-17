@@ -1423,6 +1423,22 @@ def _h_tercero_save(params: dict) -> dict:
         conn.close()
 
 
+def _h_catalogo_tercero(_params: dict) -> dict:
+    """Los códigos y estados que la pantalla ofrece al editar un tercero.
+
+    Se sirven desde aquí y no se copian en el `.vue` para que la lista que la
+    pantalla muestra y la que el motor de retenciones lee sean **la misma**: dos
+    copias es cómo empiezan a divergir.
+    """
+    return {
+        "responsabilidades": [
+            {"codigo": c, "etiqueta": e}
+            for c, e in terceros_module.CODIGOS_RESPONSABILIDAD.items()
+        ],
+        "estados_rut": list(terceros_module.ESTADOS_RUT),
+    }
+
+
 def _h_tercero_consultar_rut(params: dict) -> dict:
     """Consulta el RUT de un tercero y vuelca lo que devuelva en el catálogo.
 
@@ -1684,6 +1700,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "terceros_list": _h_terceros_list,
     "terceros_sembrar": _h_terceros_sembrar,
     "tercero_save": _h_tercero_save,
+    "catalogo_tercero": _h_catalogo_tercero,
     "tercero_consultar_rut": _h_tercero_consultar_rut,
     "terceros_consultar_rut_todos": _h_terceros_consultar_rut_todos,
     # Tablero multiempresa (Fase 1.5)

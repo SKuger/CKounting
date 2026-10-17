@@ -200,6 +200,41 @@ def guardar(conn, data: dict[str, Any]) -> dict[str, Any]:
     return obtener(conn, nit)
 
 
+# ── Lo que hay que saber de un tercero para retenerle bien ────────────────────
+# La consulta pública de la DIAN devuelve razón social y tipo, y nada más: las
+# responsabilidades y el estado del RUT están en el **certificado de RUT**, que
+# es un PDF que el contribuyente descarga autenticado. No hay de dónde rasparlas,
+# así que se escriben a mano — y por eso tienen que ser fáciles de escribir bien.
+#
+# Esta lista NO es el catálogo completo de responsabilidades del RUT (casilla 53,
+# que pasa de cincuenta): son **las que cambian el cálculo de una retención**. Si
+# un tercero tiene otra, se escribe igual y se guarda; esto solo evita que las
+# importantes dependan de teclearlas sin una errata.
+CODIGOS_RESPONSABILIDAD: dict[str, str] = {
+    "O-13": "Gran contribuyente",
+    "O-15": "Autorretenedor",
+    "O-23": "Agente de retención de IVA",
+    "O-47": "Régimen simple de tributación",
+    "O-48": "Responsable de IVA",
+    "O-49": "No responsable de IVA",
+}
+
+# El estado del RUT decide si al tercero se le puede seguir comprando. Lo lee la
+# validación V7, que sin este campo lleno no se dispara nunca.
+ESTADOS_RUT: tuple[str, ...] = ("ACTIVO", "CANCELADO", "SUSPENDIDO", "INACTIVO")
+
+
+def tiene_responsabilidad(tercero: dict[str, Any] | None, codigo: str) -> bool:
+    """¿El tercero declara esta responsabilidad? Tolera el formato que sea."""
+    if not tercero:
+        return False
+    crudas = tercero.get("responsabilidades") or []
+    if isinstance(crudas, str):
+        crudas = [x for x in re.split(r"[,\s]+", crudas) if x]
+    objetivo = codigo.strip().upper().replace(" ", "")
+    return any(str(x).strip().upper().replace(" ", "") == objetivo for x in crudas)
+
+
 def actualizar_desde_rut(conn, nit: str, datos: dict[str, Any]) -> dict[str, Any] | None:
     """Vuelca en el tercero lo que devolvió la consulta del RUT y sella la fecha.
 
