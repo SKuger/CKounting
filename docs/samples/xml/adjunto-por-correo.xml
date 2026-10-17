@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- MUESTRA FALSA. Así llega por CORREO: la factura va dentro de un CDATA. -->
+<AttachedDocument xmlns="urn:oasis:names:specification:ubl:schema:xsd:AttachedDocument-2"
+                  xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
+                  xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
+  <cbc:ID>SETP990000009</cbc:ID>
+  <cbc:IssueDate>2026-09-15</cbc:IssueDate>
+  <cac:Attachment>
+    <cac:ExternalReference>
+      <cbc:Description><![CDATA[<!-- MUESTRA FALSA. Factura con IVA al 19% y retefuente al 2,5%.
+     Dos líneas: 1.000.000 + 500.000 = 1.500.000 · IVA 285.000 · total 1.785.000. -->
+<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
+         xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
+         xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
+  <cbc:UUID schemeName="CUFE-SHA384">44444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444dddd</cbc:UUID>
+  <cbc:ID>SETP990000009</cbc:ID>
+  <cbc:IssueDate>2026-09-15</cbc:IssueDate>
+  <cbc:IssueTime>10:30:00-05:00</cbc:IssueTime>
+  <cbc:DocumentCurrencyCode>COP</cbc:DocumentCurrencyCode>
+  <cac:AccountingSupplierParty>
+    <cac:Party>
+      <cac:PartyName><cbc:Name>PAPELERIA LA FICTICIA SAS</cbc:Name></cac:PartyName>
+      <cac:PartyTaxScheme>
+        <cbc:RegistrationName>PAPELERIA LA FICTICIA SAS</cbc:RegistrationName>
+        <cbc:CompanyID schemeName="31">800100200-3</cbc:CompanyID>
+        <cac:TaxScheme><cbc:ID>01</cbc:ID><cbc:Name>IVA</cbc:Name></cac:TaxScheme>
+      </cac:PartyTaxScheme>
+    </cac:Party>
+  </cac:AccountingSupplierParty>
+  <cac:AccountingCustomerParty>
+    <cac:Party>
+      <cac:PartyTaxScheme>
+        <cbc:RegistrationName>EMPRESA DE PRUEBA LTDA</cbc:RegistrationName>
+        <cbc:CompanyID schemeName="31">900181831-7</cbc:CompanyID>
+        <cac:TaxScheme><cbc:ID>01</cbc:ID><cbc:Name>IVA</cbc:Name></cac:TaxScheme>
+      </cac:PartyTaxScheme>
+    </cac:Party>
+  </cac:AccountingCustomerParty>
+  <cac:TaxTotal>
+    <cbc:TaxAmount currencyID="COP">285000.00</cbc:TaxAmount>
+    <cac:TaxSubtotal>
+      <cbc:TaxableAmount currencyID="COP">1500000.00</cbc:TaxableAmount>
+      <cbc:TaxAmount currencyID="COP">285000.00</cbc:TaxAmount>
+      <cac:TaxCategory>
+        <cbc:Percent>19.00</cbc:Percent>
+        <cac:TaxScheme><cbc:ID>01</cbc:ID><cbc:Name>IVA</cbc:Name></cac:TaxScheme>
+      </cac:TaxCategory>
+    </cac:TaxSubtotal>
+  </cac:TaxTotal>
+  <cac:WithholdingTaxTotal>
+    <cbc:TaxAmount currencyID="COP">37500.00</cbc:TaxAmount>
+    <cac:TaxSubtotal>
+      <cbc:TaxableAmount currencyID="COP">1500000.00</cbc:TaxableAmount>
+      <cbc:TaxAmount currencyID="COP">37500.00</cbc:TaxAmount>
+      <cac:TaxCategory>
+        <cbc:Percent>2.50</cbc:Percent>
+        <cac:TaxScheme><cbc:ID>06</cbc:ID><cbc:Name>ReteFuente</cbc:Name></cac:TaxScheme>
+      </cac:TaxCategory>
+    </cac:TaxSubtotal>
+  </cac:WithholdingTaxTotal>
+  <cac:LegalMonetaryTotal>
+    <cbc:LineExtensionAmount currencyID="COP">1500000.00</cbc:LineExtensionAmount>
+    <cbc:TaxInclusiveAmount currencyID="COP">1785000.00</cbc:TaxInclusiveAmount>
+    <cbc:PayableAmount currencyID="COP">1785000.00</cbc:PayableAmount>
+  </cac:LegalMonetaryTotal>
+  <cac:InvoiceLine>
+    <cbc:ID>1</cbc:ID>
+    <cbc:InvoicedQuantity unitCode="94">10.00</cbc:InvoicedQuantity>
+    <cbc:LineExtensionAmount currencyID="COP">1000000.00</cbc:LineExtensionAmount>
+    <cac:TaxTotal>
+      <cbc:TaxAmount currencyID="COP">190000.00</cbc:TaxAmount>
+      <cac:TaxSubtotal>
+        <cbc:TaxableAmount currencyID="COP">1000000.00</cbc:TaxableAmount>
+        <cbc:TaxAmount currencyID="COP">190000.00</cbc:TaxAmount>
+        <cac:TaxCategory>
+          <cbc:Percent>19.00</cbc:Percent>
+          <cac:TaxScheme><cbc:ID>01</cbc:ID><cbc:Name>IVA</cbc:Name></cac:TaxScheme>
+        </cac:TaxCategory>
+      </cac:TaxSubtotal>
+    </cac:TaxTotal>
+    <cac:Item><cbc:Description>Resma de papel carta</cbc:Description></cac:Item>
+    <cac:Price><cbc:PriceAmount currencyID="COP">100000.00</cbc:PriceAmount></cac:Price>
+  </cac:InvoiceLine>
+  <cac:InvoiceLine>
+    <cbc:ID>2</cbc:ID>
+    <cbc:InvoicedQuantity unitCode="94">5.00</cbc:InvoicedQuantity>
+    <cbc:LineExtensionAmount currencyID="COP">500000.00</cbc:LineExtensionAmount>
+    <cac:TaxTotal>
+      <cbc:TaxAmount currencyID="COP">95000.00</cbc:TaxAmount>
+      <cac:TaxSubtotal>
+        <cbc:TaxableAmount currencyID="COP">500000.00</cbc:TaxableAmount>
+        <cbc:TaxAmount currencyID="COP">95000.00</cbc:TaxAmount>
+        <cac:TaxCategory>
+          <cbc:Percent>19.00</cbc:Percent>
+          <cac:TaxScheme><cbc:ID>01</cbc:ID><cbc:Name>IVA</cbc:Name></cac:TaxScheme>
+        </cac:TaxCategory>
+      </cac:TaxSubtotal>
+    </cac:TaxTotal>
+    <cac:Item><cbc:Description>Tinta para impresora</cbc:Description></cac:Item>
+    <cac:Price><cbc:PriceAmount currencyID="COP">100000.00</cbc:PriceAmount></cac:Price>
+  </cac:InvoiceLine>
+</Invoice>
+]]></cbc:Description>
+    </cac:ExternalReference>
+  </cac:Attachment>
+</AttachedDocument>
