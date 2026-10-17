@@ -19,6 +19,7 @@ from . import carpetas as carpetas_module
 from . import cita_personas as citas_module
 from . import dian_inconsistencias as dian_inc_module
 from . import dian_portal as dian_portal_module
+from . import documentos as documentos_module
 from . import excel as excel_module
 from . import export as export_module
 from . import jobs as jobs_module
@@ -466,6 +467,64 @@ def _h_importar_descarga_dian(params: dict) -> dict:
     return {**resultado, "archivo": str(excel_path)}
 
 
+def _h_indexar_xml(params: dict, progress=None) -> dict:
+    """Lee los XML de la carpeta de soportes de un mes (Fase 3.1).
+
+    La carpeta es la misma de los PDF: el portal entrega los dos juntos en el ZIP
+    de cada documento, así que separarlos obligaría al contador a decidir dónde va
+    cada archivo de la misma descarga.
+    """
+    db_path = Path(params["db_path"])
+    carpeta = params.get("carpeta")
+    periodo = params.get("periodo")
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        if not carpeta:
+            if not periodo:
+                raise ValueError("Hace falta la carpeta o el mes.")
+            carpeta = storage_module.periodo_pdfs_folder(conn, periodo)
+            if not carpeta:
+                raise ValueError(f"El mes {periodo} no tiene carpeta de soportes.")
+        avisa = (lambda m: progress(0, 0, m)) if progress is not None else None
+        return documentos_module.indexar_carpeta(conn, carpeta, progreso=avisa).como_dict()
+    finally:
+        conn.close()
+
+
+def _h_documento_xml(params: dict) -> dict:
+    """El documento de un CUFE, con líneas, impuestos y referencias (Fase 3.5)."""
+    db_path = Path(params["db_path"])
+    cufe = str(params.get("cufe") or "").strip().lower()
+    if not cufe:
+        raise ValueError("Hace falta el CUFE.")
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        doc = documentos_module.documento_por_cufe(conn, cufe)
+        return {"cufe": cufe, "documento": doc}
+    finally:
+        conn.close()
+
+
+def _h_documentos_del_mes(params: dict) -> dict:
+    """Cuántas filas del mes tienen XML, para saber si vale la pena mirarlo."""
+    db_path = Path(params["db_path"])
+    periodo = storage_module._norm_periodo(params.get("periodo") or "")
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        docs = documentos_module.documentos_del_periodo(conn, periodo)
+        total = conn.execute(
+            "SELECT COUNT(DISTINCT cufe_cude) FROM excel_row"
+            " WHERE periodo = ? AND cufe_cude IS NOT NULL", (periodo,)
+        ).fetchone()[0]
+        return {"periodo": periodo, "con_xml": len(docs), "total": total,
+                "cufes": [d["cufe"] for d in docs]}
+    finally:
+        conn.close()
+
+
 TIPO_EVENTO_RADIAN = "Application response"
 
 
@@ -770,6 +829,29 @@ def _resolve_load_cufes(conn, load_id: int, progress=None) -> tuple[set[str] | N
     return _index_folder_cufes(conn, folder, progress=progress)
 
 
+def _capa_xml(conn, load_id: int) -> tuple[dict, str | None, dict]:
+    """La capa que el XML añade a las filas: documentos, mes y estados del RUT.
+
+    Si no hay XML leído, vuelve vacía — y entonces las validaciones se comportan
+    exactamente como antes de la Fase 3 (D-039, D-064: el XML se PEGA al Excel,
+    no lo reemplaza).
+    """
+    fila = conn.execute("SELECT periodo FROM excel_load WHERE id = ?", (load_id,)).fetchone()
+    periodo = fila["periodo"] if fila else None
+    docs: dict[str, dict] = {}
+    for cufe in documentos_module.cufes_con_documento(conn):
+        doc = documentos_module.documento_por_cufe(conn, cufe)
+        if doc:
+            docs[cufe] = doc
+    estados = {
+        r["nit"]: r["estado_rut"]
+        for r in conn.execute(
+            "SELECT nit, estado_rut FROM tercero WHERE estado_rut IS NOT NULL"
+        ).fetchall()
+    }
+    return docs, periodo, estados
+
+
 def _h_run_validations(params: dict, progress=None) -> dict:
     db_path = Path(params["db_path"])
     load_id = int(params["load_id"])
@@ -786,12 +868,16 @@ def _h_run_validations(params: dict, progress=None) -> dict:
         rows = excel_module.fetch_load_rows(conn, load_id)
         v3_overrides = storage_module.list_overrides(conn, load_id, "V3")
         overrides_by_row = {i: {"V3"} for i in v3_overrides}
+        docs_xml, periodo_lote, estados_rut = _capa_xml(conn, load_id)
         tagged = validations_module.evaluate_rows(
             rows,
             run_v3=run_v3,
             indexed_cufes=indexed_cufes,
             overrides_by_row=overrides_by_row,
             self_nit=self_nit,
+            documentos_por_cufe=docs_xml,
+            periodo=periodo_lote,
+            estados_rut=estados_rut,
         )
         failing = sum(1 for r in tagged if r)
         notes = None
@@ -1552,6 +1638,9 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "export_missing_supports": _h_export_missing_supports,
     # 0.1.4 — meses (periodos) + papelera del Excel
     "create_periodo": _h_create_periodo,
+    "indexar_xml": lambda p, progress: _h_indexar_xml(p, progress=progress),
+    "documento_xml": _h_documento_xml,
+    "documentos_del_mes": _h_documentos_del_mes,
     "carpeta_empresa": _h_carpeta_empresa,
     "plan_mudanza": _h_plan_mudanza,
     "mudar_carpetas": _h_mudar_carpetas,
