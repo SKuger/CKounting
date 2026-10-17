@@ -151,7 +151,7 @@ def mudar(db_path: str | Path, raiz: str | Path, *, dry_run: bool = True) -> dic
             shutil.move(mov.origen, str(destino))
             mov.destino = str(destino)
             mov.hecho = True
-        except Exception as exc:          # noqa: BLE001
+        except Exception as exc:
             mov.error = f"{exc.__class__.__name__}: {exc}"
             warn(f"mudanza: no se pudo mover {mov.origen}: {mov.error}")
 
@@ -174,6 +174,6 @@ def mudar(db_path: str | Path, raiz: str | Path, *, dry_run: bool = True) -> dic
                     escritor.writerow([cuando, mov.periodo, mov.motivo,
                                        mov.origen, mov.destino, mov.error or ""])
             plan.manifiesto = str(destino_manifiesto)
-        except Exception as exc:          # noqa: BLE001
+        except Exception as exc:
             warn(f"mudanza: no se pudo escribir el manifiesto: {exc}")
     return plan.como_dict()

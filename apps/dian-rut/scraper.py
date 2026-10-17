@@ -124,6 +124,16 @@ def _parsear_resultados_dian(body_text: str) -> dict:
 
     return registro
 
+def _necesita_sin_sandbox() -> bool:
+    """¿Estamos donde Chrome se niega a arrancar con sandbox?"""
+    if os.environ.get("DIAN_NO_SANDBOX") == "1":
+        return True
+    try:
+        return os.geteuid() == 0        # root: Chrome no arranca con sandbox
+    except AttributeError:
+        return False                    # Windows no tiene geteuid
+
+
 async def perform_scraping(nits: list[int | str | float], results: list[dict], client_id: str, send_log, save_callback=None):
     async with async_playwright() as p:
         mode = "automated"
@@ -170,7 +180,13 @@ async def perform_scraping(nits: list[int | str | float], results: list[dict], c
                 args=[
                     "--disable-blink-features=AutomationControlled",
                     "--disable-infobars",
-                    "--no-sandbox"
+                    # `--no-sandbox` solo donde Chrome no arranca sin él (root o
+                    # contenedor, como el Dockerfile de este sidecar). En el
+                    # escritorio apaga una defensa real del navegador Y enseña al
+                    # usuario un cartel rojo —«No se admite el indicador
+                    # --no-sandbox… afecta a la estabilidad y a la seguridad»—
+                    # justo mientras maneja documentos fiscales de sus clientes.
+                    *(["--no-sandbox"] if _necesita_sin_sandbox() else []),
                 ],
                 ignore_default_args=["--enable-automation"],
                 viewport={'width': 1280, 'height': 800},
