@@ -139,3 +139,70 @@ def export_missing_supports(
     workbook.close()
 
     return {"path": str(output_path), "rows_written": written}
+
+
+# ── Los asientos aprobados, para llevarlos a Siigo ────────────────────────────
+# Sin esto la bandeja era un callejón sin salida: el contador aprobaba y tenía
+# que teclear en Siigo mirando la pantalla. Una fila por línea de asiento, que
+# es la forma que entiende el importador de Siigo y cualquier otro.
+ASIENTO_COLUMNS: list[str] = [
+    "Fecha", "NIT proveedor", "Cuenta PUC", "Descripción", "Débito", "Crédito", "CUFE",
+]
+
+
+def export_asientos(conn, periodo: str, output_dir: str | Path) -> dict[str, Any]:
+    """Escribe `asientos-<periodo>.xlsx` con los asientos APROBADOS del mes.
+
+    Solo los aprobados: lo que está «por decidir» no es un asiento todavía, es una
+    propuesta, y mezclarlos en el mismo archivo es cómo acaba contabilizado algo
+    que nadie aprobó.
+    """
+    from . import asiento as asiento_module  # local: evita el import circular
+
+    aprobados = [a for a in asiento_module.listar(conn, periodo) if a["aprobado"]]
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out = output_dir / f"asientos-{periodo}.xlsx"
+
+    wb = xlsxwriter.Workbook(str(out))
+    ws = wb.add_worksheet("Asientos")
+    negrita = wb.add_format({"bold": True})
+    pesos = wb.add_format({"num_format": "#,##0"})
+    for c, h in enumerate(ASIENTO_COLUMNS):
+        ws.write(0, c, h, negrita)
+
+    fila = 1
+    total_debito = money.ZERO
+    total_credito = money.ZERO
+    lineas = 0
+    for a in aprobados:
+        for ln in a["lineas"]:
+            debito = money.to_money(ln["debito"] or 0)
+            credito = money.to_money(ln["credito"] or 0)
+            valores = [a["fecha"], a["tercero_nit"], ln["cuenta_puc"],
+                       ln["descripcion"], debito, credito, a["cufe"]]
+            for c, v in enumerate(valores):
+                ws.write(fila, c, _coerce_cell(v), pesos if c in (4, 5) else None)
+            total_debito += debito
+            total_credito += credito
+            fila += 1
+            lineas += 1
+        fila += 1   # un renglón en blanco entre asientos, para leerlo
+
+    ws.write(fila, 3, "TOTAL", negrita)
+    ws.write(fila, 4, _coerce_cell(total_debito), pesos)
+    ws.write(fila, 5, _coerce_cell(total_credito), pesos)
+    ws.set_column(0, 0, 12)
+    ws.set_column(1, 2, 14)
+    ws.set_column(3, 3, 36)
+    ws.set_column(4, 5, 14)
+    ws.set_column(6, 6, 24)
+    wb.close()
+
+    return {
+        "path": str(out), "asientos": len(aprobados), "lineas": lineas,
+        "total_debito": str(total_debito), "total_credito": str(total_credito),
+        # Que cuadre el archivo entero es la comprobación más barata que existe
+        # antes de llevarlo a Siigo.
+        "cuadra": total_debito == total_credito,
+    }

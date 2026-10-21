@@ -242,11 +242,17 @@ def _desde_la_fila(fila: sqlite3.Row) -> dict[str, Any] | None:
 
     total = num("Total")
     iva = num("IVA")
+    # Una nota crédito recibida RESTA. Va con signo negativo, igual que hace V2
+    # con el reporte (D-045); sin esto se causaría como una compra más, al revés.
+    from .excel import is_nota_credito
+    es_nc = is_nota_credito(fila["tipo_doc"])
+    if es_nc:
+        total, iva = -total, -iva
     numero = " ".join(str(datos.get(k) or "").strip()
                       for k in ("Prefijo", "Folio")).strip()
     return {
         "cufe": fila["cufe_cude"],
-        "tipo": "factura",
+        "tipo": "nota_credito" if es_nc else "factura",
         "numero": numero or None,
         "fecha_emision": str(datos.get("Fecha Emisión") or "")[:10] or None,
         "emisor_nit": str(datos.get("NIT Emisor") or "").strip() or None,
@@ -286,7 +292,7 @@ def documentos_a_causar(conn: sqlite3.Connection, periodo: str) -> list[dict[str
     # eran ventas y nóminas que no tenían nada que hacer en la bandeja.
     propio = (conn.execute("SELECT nit FROM empresa_info").fetchone() or [""])[0] or ""
     filas = conn.execute(
-        "SELECT DISTINCT cufe_cude, data_json FROM excel_row"
+        "SELECT DISTINCT cufe_cude, data_json, tipo_doc FROM excel_row"
         " WHERE periodo = ? AND cufe_cude IS NOT NULL"
         " AND COALESCE(tipo_doc, '') <> ?"
         " AND COALESCE(json_extract(data_json, '$.Grupo'), '') <> 'Emitido'",

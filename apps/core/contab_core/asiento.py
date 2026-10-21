@@ -298,6 +298,7 @@ def aprobar(
     concepto_retencion_id: int | None = None,
     cuenta_proveedores: str | None = None,
     cuenta_iva_descontable: str | None = None,
+    sin_retencion: bool = False,
     aprender_regla: bool = True,
 ) -> dict[str, Any]:
     """Da por bueno un asiento, con las correcciones que él haya hecho.
@@ -327,7 +328,10 @@ def aprobar(
         causacion_module.aprender(
             conn, cuenta_puc=cuenta_puc, tercero_nit=a["tercero_nit"],
             patron=(patron or "").strip() or None,
-            concepto_retencion_id=concepto_retencion_id)
+            concepto_retencion_id=concepto_retencion_id,
+            # «A este proveedor no se le retiene», dicho por él. Va a la regla
+            # para que las siguientes facturas no vuelvan a preguntarlo.
+            sin_retencion=sin_retencion)
 
     # Se rehace el asiento con lo corregido y se marca aprobado.
     # El documento puede venir del XML o del Excel: `aprobar` tiene que mirar en
@@ -347,7 +351,8 @@ def aprobar(
         calculo = retenciones_module.calcular(
             conn, perfil=perfil, documento=documento, tercero=tercero,
             concepto_id=concepto_retencion_id or propuesta.concepto_retencion_id,
-            sin_retencion=propuesta.sin_retencion and not concepto_retencion_id,
+            sin_retencion=sin_retencion
+            or (propuesta.sin_retencion and not concepto_retencion_id),
             tercero_decidido=True)   # la está aprobando una persona
         lineas, avisos = _lineas_de(
             documento, propuesta, calculo,
