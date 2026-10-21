@@ -1,0 +1,217 @@
+"""A qué cuenta va cada factura, y cómo se aprende — tarea 4.3.
+
+Las dos formas de regla salen de dos respuestas del contador el 2026-10-20:
+
+> «¿Qué mira para decidir la cuenta del PUC?» → **«LA FACTURA»**
+>
+> «¿Hay proveedores a los que SIEMPRE les causa en la misma cuenta, pase lo que
+> pase?» → Telesentinel, Todo en Artes, Ultragas.
+
+Así que hay **reglas por proveedor** y **reglas por lo que dice la factura**, y
+cuando las dos aplican **gana la del proveedor**: «pase lo que pase» significa
+exactamente eso.
+
+## Lo que hace que el segundo mes sea barato
+
+Cada decisión que el contador toma en la bandeja (4.5) **escribe o afina una
+regla**. Sin esa vuelta atrás, él vuelve a decidir el mismo proveedor cada mes y
+el producto es una hoja de cálculo más bonita.
+
+**Sin centro de costo** (D-112): respondió que no los usa.
+"""
+from __future__ import annotations
+
+import re
+import unicodedata
+from dataclasses import dataclass
+from typing import Any
+
+# Cuánto «vale» cada forma de regla. La del proveedor gana a la del texto, y una
+# que acierte las dos cosas gana a las dos.
+PESO_TERCERO = 2
+PESO_PATRON = 1
+
+ORIGEN_MANUAL = "manual"
+ORIGEN_APRENDIDA = "aprendida"
+
+
+@dataclass
+class Propuesta:
+    cuenta_puc: str | None = None
+    concepto_retencion_id: int | None = None
+    regla_id: int | None = None
+    por_que: str = ""
+    seguro: bool = False      # False → el contador tiene que decidirlo
+
+    def como_dict(self) -> dict[str, Any]:
+        return {
+            "cuenta_puc": self.cuenta_puc,
+            "concepto_retencion_id": self.concepto_retencion_id,
+            "regla_id": self.regla_id, "por_que": self.por_que, "seguro": self.seguro,
+        }
+
+
+def _plano(texto: str | None) -> str:
+    """Sin tildes, sin mayúsculas y sin dobles espacios, para poder comparar.
+
+    «Vigilancia» y «VIGILANCIA» son el mismo concepto, y una factura escrita sin
+    tildes no puede dejar de casar con una regla escrita con ellas.
+    """
+    if not texto:
+        return ""
+    sin = unicodedata.normalize("NFKD", str(texto))
+    sin = "".join(c for c in sin if not unicodedata.combining(c))
+    return re.sub(r"\s+", " ", sin).strip().lower()
+
+
+def texto_del_documento(documento: dict[str, Any]) -> str:
+    """Todo lo que la factura dice y sirve para reconocerla."""
+    partes = [documento.get("emisor_nombre") or ""]
+    for ln in documento.get("lineas") or []:
+        partes.append(ln.get("descripcion") or "")
+    return _plano(" · ".join(p for p in partes if p))
+
+
+def proponer(conn, documento: dict[str, Any]) -> Propuesta:
+    """La cuenta y el concepto que corresponden, según las reglas que haya.
+
+    Si ninguna regla aplica no se inventa una cuenta: se devuelve vacío y
+    `seguro=False`, que es lo que la bandeja usa para separar «apruebe en lote»
+    de «decida usted».
+    """
+    nit = (documento.get("emisor_nit") or "").strip()
+    texto = texto_del_documento(documento)
+
+    mejor: dict[str, Any] | None = None
+    mejor_peso = 0
+    for fila in conn.execute(
+        "SELECT * FROM regla_causacion WHERE archivada = 0 ORDER BY id"
+    ).fetchall():
+        regla = dict(fila)
+        peso = 0
+        if regla["tercero_nit"]:
+            if regla["tercero_nit"].strip() != nit:
+                continue
+            peso += PESO_TERCERO
+        if regla["patron"]:
+            if _plano(regla["patron"]) not in texto:
+                continue
+            peso += PESO_PATRON
+        if peso == 0:
+            continue          # una regla sin tercero ni patrón no aplica a nada
+        if peso > mejor_peso:
+            mejor, mejor_peso = regla, peso
+
+    if mejor is None:
+        return Propuesta(por_que="Ninguna regla aplica todavía a este documento.")
+
+    if mejor["tercero_nit"] and mejor["patron"]:
+        por_que = f"Regla para {mejor['tercero_nit']} cuando dice «{mejor['patron']}»."
+    elif mejor["tercero_nit"]:
+        por_que = f"Este proveedor siempre va a {mejor['cuenta_puc']}."
+    else:
+        por_que = f"La factura dice «{mejor['patron']}»."
+
+    return Propuesta(
+        cuenta_puc=mejor["cuenta_puc"],
+        concepto_retencion_id=mejor["concepto_retencion_id"],
+        regla_id=mejor["id"], por_que=por_que, seguro=True,
+    )
+
+
+def aprender(
+    conn,
+    *,
+    cuenta_puc: str,
+    tercero_nit: str | None = None,
+    patron: str | None = None,
+    concepto_retencion_id: int | None = None,
+    vigencia_desde: str | None = None,
+) -> dict[str, Any]:
+    """Guarda lo que el contador decidió, para no volvérselo a preguntar.
+
+    Es la vuelta atrás que hace barato el segundo mes. Si ya existe una regla
+    con la misma llave, **se afina** en vez de duplicarse.
+    """
+    if not cuenta_puc:
+        raise ValueError("Una regla sin cuenta no sirve de nada.")
+    if not tercero_nit and not patron:
+        raise ValueError(
+            "Una regla tiene que decir a qué proveedor o a qué texto se aplica; "
+            "si no, se aplicaría a todo.")
+
+    ya = conn.execute(
+        "SELECT id FROM regla_causacion WHERE IFNULL(tercero_nit,'') = IFNULL(?,'')"
+        " AND IFNULL(patron,'') = IFNULL(?,'')"
+        " AND IFNULL(vigencia_desde,'') = IFNULL(?,'')",
+        (tercero_nit, patron, vigencia_desde)).fetchone()
+    if ya:
+        conn.execute(
+            "UPDATE regla_causacion SET cuenta_puc = ?, concepto_retencion_id = ?,"
+            " archivada = 0, updated_at = datetime('now') WHERE id = ?",
+            (cuenta_puc, concepto_retencion_id, ya[0]))
+        rid = ya[0]
+    else:
+        cur = conn.execute(
+            "INSERT INTO regla_causacion(tercero_nit, patron, cuenta_puc,"
+            " concepto_retencion_id, vigencia_desde, origen)"
+            " VALUES (?,?,?,?,?,?)",
+            (tercero_nit, patron, cuenta_puc, concepto_retencion_id,
+             vigencia_desde, ORIGEN_APRENDIDA))
+        rid = int(cur.lastrowid)
+    conn.commit()
+    return dict(conn.execute(
+        "SELECT * FROM regla_causacion WHERE id = ?", (rid,)).fetchone())
+
+
+def marcar_usada(conn, regla_id: int) -> None:
+    """Cuántas veces sirvió. Una regla que nunca se usa sobra, y conviene verlo."""
+    conn.execute(
+        "UPDATE regla_causacion SET veces_usada = veces_usada + 1 WHERE id = ?",
+        (int(regla_id),))
+
+
+def listar(conn, *, incluir_archivadas: bool = False) -> list[dict[str, Any]]:
+    sql = "SELECT * FROM regla_causacion"
+    if not incluir_archivadas:
+        sql += " WHERE archivada = 0"
+    sql += " ORDER BY tercero_nit IS NULL, tercero_nit, patron"
+    return [dict(r) for r in conn.execute(sql)]
+
+
+def guardar(conn, data: dict[str, Any]) -> dict[str, Any]:
+    """Crear o editar una regla a mano."""
+    rid = data.get("id")
+    if not (data.get("tercero_nit") or data.get("patron")):
+        raise ValueError(
+            "Una regla tiene que decir a qué proveedor o a qué texto se aplica.")
+    if not data.get("cuenta_puc"):
+        raise ValueError("Una regla sin cuenta no sirve de nada.")
+    valores = (
+        (data.get("tercero_nit") or "").strip() or None,
+        (data.get("patron") or "").strip() or None,
+        str(data["cuenta_puc"]).strip(),
+        int(data["concepto_retencion_id"]) if data.get("concepto_retencion_id") else None,
+        (data.get("vigencia_desde") or "").strip() or None,
+    )
+    if rid:
+        conn.execute(
+            "UPDATE regla_causacion SET tercero_nit = ?, patron = ?, cuenta_puc = ?,"
+            " concepto_retencion_id = ?, vigencia_desde = ?, updated_at = datetime('now')"
+            " WHERE id = ?", (*valores, int(rid)))
+    else:
+        cur = conn.execute(
+            "INSERT INTO regla_causacion(tercero_nit, patron, cuenta_puc,"
+            " concepto_retencion_id, vigencia_desde, origen)"
+            " VALUES (?,?,?,?,?, 'manual')", valores)
+        rid = int(cur.lastrowid)
+    conn.commit()
+    return dict(conn.execute(
+        "SELECT * FROM regla_causacion WHERE id = ?", (int(rid),)).fetchone())
+
+
+def archivar(conn, regla_id: int, archivada: bool = True) -> None:
+    conn.execute(
+        "UPDATE regla_causacion SET archivada = ?, updated_at = datetime('now')"
+        " WHERE id = ?", (1 if archivada else 0, int(regla_id)))
+    conn.commit()
