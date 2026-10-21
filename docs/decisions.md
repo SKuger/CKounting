@@ -1084,3 +1084,49 @@ periodos del art. 496 ET.
 **Por qué**: un rezagado dentro de la ventana es descontable y no es un error;
 fuera de ella ya no lo es. Marcar los dos igual obliga al contador a ir a mirar
 la fecha uno por uno, que es exactamente el trabajo que esto venía a quitar.
+
+## D-108 — Sin tabla de tarifas de ICA ✅
+
+**Decisión**: no se construye `ica_tarifa`. La Fase 4.1 entrega UVT y conceptos
+de retención, y nada más.
+
+**Por qué**: ninguna de las cinco empresas que lleva el contador es agente de
+retención de ICA —lo dijo por escrito el 2026-10-20 y lo confirman las cinco
+filas de su Excel con «NO»—. Construirla sería esquema muerto desde el primer
+día, que es lo que D-085 prohíbe. Cuando alguna empresa pase a ser agente, se
+añade; `empresa_municipio_ica`, que ya existe, se queda sin uso hasta entonces.
+
+## D-109 — La tarifa se lee mirando el formato de la celda ✅
+
+**Decisión**: el importador decide si `0.11` son 11% o 0,11% **mirando
+`number_format`**, y acepta las dos formas.
+
+**Por qué**: el Excel real trae las tarifas como celdas de porcentaje, que
+guardan `0.11` y muestran `11%`. Leer el número a secas liquida al 0,11% —cien
+veces menos retención, en todas las filas, sin que nada falle ni avise—. Y no se
+puede asumir siempre la fracción, porque el siguiente contador puede escribir
+`11` en una celda normal.
+
+## D-110 — «Sin mínimo» no es un dato que falte ✅
+
+**Decisión**: `N/A` en la base mínima significa que **se retiene desde el primer
+peso**, y se guarda como `NULL` con ese significado explícito.
+
+**Por qué**: tratarlo como dato faltante dejaría sin retener honorarios,
+comisiones y arrendamientos de muebles, que son justo los conceptos que no
+tienen mínimo.
+
+## D-111 — Hay dos familias de retención: sobre la base y sobre el IVA ✅
+
+**Decisión**: `retencion_concepto.sobre` distingue `base` de `iva`.
+
+**Por qué**: las dos filas de ReteIVA del Excel real dicen «15% del IVA», no un
+porcentaje de la base gravable. Sin la marca, el motor las calcularía sobre la
+base y el valor saldría mal sin que nada lo delate.
+
+## D-112 — Sin centros de costo ✅
+
+**Decisión**: la regla de causación mapea a **cuenta PUC** y nada más.
+
+**Por qué**: el contador respondió «NO» a si los usa. Una tabla, un campo y una
+pantalla que no existen no se pueden llenar mal.
