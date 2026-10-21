@@ -141,6 +141,9 @@ class Documento:
     moneda: str | None = None
     emisor_nit: str | None = None
     emisor_nombre: str | None = None
+    # Lo que la FACTURA dice del emisor. Es lo que el contador mira cuando no
+    # tiene el RUT del proveedor delante.
+    emisor_responsabilidades: list[str] = field(default_factory=list)
     receptor_nit: str | None = None
     receptor_nombre: str | None = None
     subtotal: Decimal | None = None
@@ -156,6 +159,7 @@ class Documento:
             "fecha_emision": self.fecha_emision, "hora_emision": self.hora_emision,
             "moneda": self.moneda,
             "emisor_nit": self.emisor_nit, "emisor_nombre": self.emisor_nombre,
+            "emisor_responsabilidades": self.emisor_responsabilidades,
             "receptor_nit": self.receptor_nit, "receptor_nombre": self.receptor_nombre,
             "subtotal": _str_o_none(self.subtotal),
             "total_impuestos": _str_o_none(self.total_impuestos),
@@ -294,14 +298,40 @@ def _lineas_de(raiz: ET.Element) -> list[Linea]:
 
 # ───────────────────────────────── participantes ───────────────────────────────
 
-def _parte(raiz: ET.Element, etiqueta: str) -> tuple[str | None, str | None]:
-    """(NIT, nombre) del emisor o del receptor."""
+_RE_RESP = re.compile(r"O-?\s?(\d{1,3})", re.I)
+
+
+def responsabilidades_de(texto: str | None) -> list[str]:
+    """Los códigos de responsabilidad que vengan en un texto del XML.
+
+    El anexo técnico de la DIAN los pone en `cbc:TaxLevelCode`, separados por
+    `;` —«O-13;O-15»— pero se han visto con coma, con espacio y sin guion. Se
+    normalizan a `O-13`.
+    """
+    if not texto:
+        return []
+    vistos: list[str] = []
+    for n in _RE_RESP.findall(texto):
+        codigo = f"O-{int(n)}"
+        if codigo not in vistos:
+            vistos.append(codigo)
+    return vistos
+
+
+def _parte(raiz: ET.Element, etiqueta: str) -> tuple[str | None, str | None, list[str]]:
+    """(NIT, nombre, responsabilidades) del emisor o del receptor.
+
+    Las responsabilidades salen de `cbc:TaxLevelCode` **de la propia factura**.
+    Importa porque es lo que el contador hace a mano: cuando no sabe si a un
+    proveedor se le retiene, *mira la factura*. Si el documento lo dice, Contab
+    no tiene que esperar a que alguien teclee el catálogo de terceros.
+    """
     cont = raiz.find(f"cac:{etiqueta}", NS)
     if cont is None:
-        return None, None
+        return None, None, []
     parte = cont.find("cac:Party", NS)
     if parte is None:
-        return None, None
+        return None, None, []
     nit = None
     ident = parte.find("cac:PartyTaxScheme/cbc:CompanyID", NS)
     if ident is None:
@@ -312,7 +342,8 @@ def _parte(raiz: ET.Element, etiqueta: str) -> tuple[str | None, str | None]:
     nombre = (_txt(parte, "cac:PartyTaxScheme/cbc:RegistrationName")
               or _txt(parte, "cac:PartyName/cbc:Name")
               or _txt(parte, "cac:PartyLegalEntity/cbc:RegistrationName"))
-    return nit, nombre
+    resp = responsabilidades_de(_txt(parte, "cac:PartyTaxScheme/cbc:TaxLevelCode"))
+    return nit, nombre, resp
 
 
 # ───────────────────────────────── referencias ─────────────────────────────────
@@ -379,8 +410,8 @@ def parsear_texto(texto: str | bytes) -> Documento:
     suma_impuestos = sum((i.valor for i in impuestos if i.valor is not None
                           and not i.es_retencion), Decimal("0"))
 
-    nit_e, nombre_e = _parte(raiz, "AccountingSupplierParty")
-    nit_r, nombre_r = _parte(raiz, "AccountingCustomerParty")
+    nit_e, nombre_e, resp_e = _parte(raiz, "AccountingSupplierParty")
+    nit_r, nombre_r, _resp_r = _parte(raiz, "AccountingCustomerParty")
 
     return Documento(
         tipo=tipo,
@@ -390,6 +421,7 @@ def parsear_texto(texto: str | bytes) -> Documento:
         hora_emision=_txt(raiz, "cbc:IssueTime"),
         moneda=_txt(raiz, "cbc:DocumentCurrencyCode"),
         emisor_nit=nit_e, emisor_nombre=nombre_e,
+        emisor_responsabilidades=resp_e,
         receptor_nit=nit_r, receptor_nombre=nombre_r,
         subtotal=subtotal,
         total_impuestos=suma_impuestos if impuestos else None,

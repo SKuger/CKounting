@@ -58,10 +58,11 @@ def guardar(conn: sqlite3.Connection, doc: xml_ubl.Documento, xml_path: str | Pa
     cur = conn.execute(
         "INSERT INTO documento(cufe, tipo, numero, fecha_emision, hora_emision, moneda,"
         " emisor_nit, emisor_nombre, receptor_nit, receptor_nombre,"
-        " subtotal, total_impuestos, total, xml_path, parser_version)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " emisor_responsabilidades, subtotal, total_impuestos, total, xml_path,"
+        " parser_version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (doc.cufe, doc.tipo, doc.numero, doc.fecha_emision, doc.hora_emision, doc.moneda,
          doc.emisor_nit, doc.emisor_nombre, doc.receptor_nit, doc.receptor_nombre,
+         ",".join(doc.emisor_responsabilidades) or None,
          _t(doc.subtotal), _t(doc.total_impuestos), _t(doc.total),
          str(xml_path), xml_ubl.PARSER_VERSION),
     )
