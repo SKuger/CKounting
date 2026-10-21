@@ -550,7 +550,15 @@ es volver a subir el archivo, no publicar una versión.)*
     a number, and every client on an older version would be computing last year's
     tax. *(ES: las tarifas son datos, no código; si un decreto obliga a desplegar,
     el diseño está mal.)*
-- [ ] **4.2** — `apps/core/contab_core/retenciones.py`: company profile (1.1) +
+- [x] **4.2** — ✅ 2026-10-21. `retenciones.py`. Dos respuestas del contador la
+      definieron: ReteIVA **solo frente a proveedores del régimen simple**, y
+      cuando no tiene el RUT de un proveedor **mira la factura**. Lo segundo
+      resultó ser automatizable: el anexo DIAN pone las responsabilidades en
+      `cbc:TaxLevelCode`, así que el motor lee el catálogo primero, la factura
+      después, y si ninguno dice nada propone lo ordinario y **marca la fila**
+      en vez de decidir en silencio. Eso es lo que lo hace útil con 21 de 25
+      terceros en blanco.
+- [ ] ~~4.2 original~~ — `apps/core/contab_core/retenciones.py`: company profile (1.1) +
       tercero profile (1.3/1.4) + document (Phase 3) → retención en la fuente,
       ReteIVA, ReteICA and autorretención where they apply.
 - [ ] **4.3** — `regla_causacion` (tercero · concepto · pattern → cuenta PUC +

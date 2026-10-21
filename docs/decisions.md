@@ -1130,3 +1130,39 @@ base y el valor saldría mal sin que nada lo delate.
 
 **Por qué**: el contador respondió «NO» a si los usa. Una tabla, un campo y una
 pantalla que no existen no se pueden llenar mal.
+
+## D-113 — ReteIVA solo frente a proveedores del régimen simple ✅
+
+**Decisión**: `agente_reteiva` del perfil solo entra en juego si el tercero
+tiene la responsabilidad `O-47` (régimen simple).
+
+**Por qué**: las cinco empresas del contador escribieron «SOLO AL RÉGIMEN SIMPLE
+DE TRIB» en esa casilla del formulario, y él lo confirmó el 2026-10-21. Leer el
+campo como un sí a secas haría que se practicara ReteIVA a todos los
+proveedores. No hizo falta cambiar el esquema: la condición vive en el motor.
+
+## D-114 — Las responsabilidades se leen de la factura cuando no están en el catálogo ✅
+
+**Decisión**: el motor busca las responsabilidades del proveedor en este orden —
+catálogo de terceros, luego `cbc:TaxLevelCode` del XML, y si ninguno dice nada
+propone la retención ordinaria y **marca la fila para revisar**.
+
+**Por qué**: se le preguntó al contador qué hace sin el RUT de un proveedor y
+respondió «verifico la información en la factura». El anexo técnico de la DIAN
+declara ahí las responsabilidades, así que lo que él hace a mano se puede leer.
+Y el tercer caso es el que importa: con 21 de 25 terceros en blanco, exigir el
+catálogo lleno dejaría la Fase 4 inservible hasta terminar un trabajo manual de
+meses.
+
+> ⚠ `TaxLevelCode` se implementó contra el anexo técnico, **no contra un XML
+> real**: los dos que teníamos se perdieron. Si el campo no viniera, el motor
+> cae al tercer caso y marca para revisar — no rompe, pero tampoco ayuda.
+
+## D-115 — Sin perfil fiscal no se calcula ninguna retención ✅
+
+**Decisión**: si la empresa no tiene perfil fiscal configurado, el motor
+devuelve cero retenciones y lo dice.
+
+**Por qué**: el mismo criterio de la Fase 1 con `perfil_vigente`. Una retención
+calculada sobre un supuesto hace más daño que una no calculada: la primera se
+contabiliza y se paga, la segunda se nota.
