@@ -7,9 +7,19 @@ Las dos formas de regla salen de dos respuestas del contador el 2026-10-20:
 > «¿Hay proveedores a los que SIEMPRE les causa en la misma cuenta, pase lo que
 > pase?» → Telesentinel, Todo en Artes, Ultragas.
 
-Así que hay **reglas por proveedor** y **reglas por lo que dice la factura**, y
-cuando las dos aplican **gana la del proveedor**: «pase lo que pase» significa
-exactamente eso.
+Así que hay **reglas por proveedor** y **reglas por lo que dice la factura**.
+
+El 2026-10-22 lo precisó, y corrige lo que se había entendido antes:
+
+> «Como por lo general el concepto que factura el proveedor es el mismo, las
+> siguientes facturas se registrarían de esa forma. Pero si en otra factura el
+> concepto cambia, me presentas la nueva propuesta y le doy el visto bueno.»
+
+Es decir: lo aprendido de un proveedor vale **mientras el concepto sea el
+mismo**. Si ese proveedor factura otra cosa, no se da por buena la cuenta de
+siempre — se vuelve a preguntar. Solo las reglas **sin patrón** son el «pase lo
+que pase», y ésas se escriben a propósito para los pocos proveedores que lo
+merecen.
 
 ## Lo que hace que el segundo mes sea barato
 
@@ -42,12 +52,17 @@ class Propuesta:
     regla_id: int | None = None
     por_que: str = ""
     seguro: bool = False      # False → el contador tiene que decidirlo
+    # True cuando del proveedor se sabe, pero factura algo distinto a lo de
+    # siempre. No es lo mismo que un proveedor nuevo, y la bandeja lo dice
+    # distinto: «factura algo distinto a lo de siempre».
+    concepto_nuevo: bool = False
 
     def como_dict(self) -> dict[str, Any]:
         return {
             "cuenta_puc": self.cuenta_puc,
             "concepto_retencion_id": self.concepto_retencion_id,
             "regla_id": self.regla_id, "por_que": self.por_que, "seguro": self.seguro,
+            "concepto_nuevo": self.concepto_nuevo,
         }
 
 
@@ -103,6 +118,17 @@ def proponer(conn, documento: dict[str, Any]) -> Propuesta:
             mejor, mejor_peso = regla, peso
 
     if mejor is None:
+        # ¿Es un proveedor nuevo, o uno conocido facturando otra cosa? No es lo
+        # mismo, y el contador quiere que se le diga distinto.
+        conocido = conn.execute(
+            "SELECT patron FROM regla_causacion WHERE archivada = 0"
+            " AND tercero_nit = ? AND patron IS NOT NULL", (nit,)).fetchall()
+        if conocido:
+            de_siempre = ", ".join(f"«{r[0]}»" for r in conocido[:3])
+            return Propuesta(
+                concepto_nuevo=True,
+                por_que=(f"Este proveedor suele facturar {de_siempre}, y esta "
+                         f"factura dice otra cosa."))
         return Propuesta(por_que="Ninguna regla aplica todavía a este documento.")
 
     if mejor["tercero_nit"] and mejor["patron"]:

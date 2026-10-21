@@ -576,7 +576,13 @@ es volver a subir el archivo, no publicar una versión.)*
       si faltan, el asiento sale marcado diciendo cuál.
 - [ ] ~~4.4 original~~ — Generate `asiento_propuesto` for a whole month as a background job
       (same `jobs.py` pattern — this one has no duration ceiling either).
-- [ ] **4.5** — The approval tray in the frontend: known documents approved in
+- [x] **4.5** — ✅ 2026-10-22. La bandeja, descrita por el propio contador: ve
+      el asiento entero del primer documento de cada proveedor, lo corrige si
+      hace falta, y al aprobar **se aprende**. Lo aprendido vale mientras el
+      concepto sea el mismo; si ese proveedor factura otra cosa, se le vuelve a
+      preguntar (D-120). Las dos cuentas de la empresa se escriben ahí mismo,
+      en el primer asiento, y quedan guardadas **para esa empresa**.
+- [ ] ~~4.5 original~~ — The approval tray in the frontend: known documents approved in
       bulk, new ones decided one by one, and **every new decision writes or
       refines a rule**.
   - **Why:** this is the loop that makes month two cheap. Without the

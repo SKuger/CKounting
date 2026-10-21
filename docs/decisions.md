@@ -1202,3 +1202,33 @@ por defecto en algo que se contabiliza.
 **Por qué**: rehacer la propuesta después de que el contador aprobó media mañana
 de trabajo le borraría esa mañana. Y la propuesta se rehace a menudo —cada vez
 que llega un XML nuevo o cambia una regla—.
+
+## D-120 — Lo aprendido de un proveedor vale mientras el concepto sea el mismo ✅
+
+**Decisión**: una regla aprendida se guarda con el **patrón del concepto**. Si
+ese proveedor factura algo que no casa con ninguno de sus patrones, la propuesta
+sale marcada como «factura algo distinto a lo de siempre» y vuelve a pasar por
+él. Solo las reglas **sin patrón** son el «siempre a la misma cuenta».
+
+**Por qué**: el contador lo precisó el 2026-10-22 — «como por lo general el
+concepto que factura el proveedor es el mismo, las siguientes se registrarían de
+esa forma; pero si el concepto cambia, me presentas la nueva propuesta». Esto
+**corrige a D-116**: lo que allí se leyó como «la regla del proveedor gana pase
+lo que pase» era en realidad la excepción de tres proveedores concretos, no la
+regla general.
+
+**Y la pantalla lo dice distinto**: «no conozco a este proveedor» y «lo conozco
+y está facturando otra cosa» son dos situaciones diferentes para quien revisa.
+
+## D-121 — Las cuentas de la empresa se aprenden en el primer asiento ✅
+
+**Decisión**: `cuenta_proveedores` y `cuenta_iva_descontable` no se piden en una
+pantalla de configuración: se escriben **en la bandeja, sobre el primer asiento
+de esa empresa**, y se guardan al aprobarlo.
+
+**Por qué**: es lo que pidió — «para cada empresa me gustaría ver la sugerencia
+del primer registro». Preguntar una cuenta en abstracto obliga a imaginarse el
+asiento; preguntarla con el asiento delante es la misma pregunta con la
+respuesta a la vista. Y como cada empresa tiene su propia base (D-003), que «las
+cuentas varíen por empresa» sale gratis: no hay una tabla común que pudiera
+mezclarlas.
