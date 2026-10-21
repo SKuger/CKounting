@@ -1271,3 +1271,24 @@ siempre. Es justo la promesa que el contador pidió: «como por lo general el
 concepto que factura el proveedor es el mismo, las siguientes se registrarían de
 esa forma». Comprobado sobre su julio real: aprobar una de las cuatro facturas
 de un proveedor dejó **las cuatro** listas.
+
+## D-125 — Solo se exporta lo aprobado ✅
+
+**Decisión**: `export_asientos` saca a Excel únicamente los asientos con
+`aprobado = 1`. Lo que está «por decidir» no entra aunque tenga todas sus
+líneas.
+
+**Por qué**: una propuesta no es un asiento todavía. Mezclarlas en el mismo
+archivo es exactamente cómo acaba contabilizado en Siigo algo que nadie aprobó
+— y el archivo es lo que él va a importar. El archivo además dice si cuadra,
+que es la comprobación más barata que existe antes de llevarlo.
+
+## D-126 — Lo que se pasa de 30 segundos va en segundo plano ✅
+
+**Decisión**: armar la propuesta del mes, mudar las carpetas y leer los XML
+corren como trabajos con progreso (D-076), no como RPC síncronos.
+
+**Por qué**: la mudanza reindexa cada PDF con `pdftotext` y lector de QR; con
+cien soportes se pasa del tope de 30 s, la pantalla dice «error» y el sidecar
+sigue trabajando. Un error falso mientras se mueven documentos de un cliente es
+la peor combinación: el contador no sabe si parar, repetir o esperar.
