@@ -15,6 +15,7 @@
       <cac:PartyTaxScheme>
         <cbc:RegistrationName>PAPELERIA LA FICTICIA SAS</cbc:RegistrationName>
         <cbc:CompanyID schemeName="31">800100200-3</cbc:CompanyID>
+        <cbc:TaxLevelCode listName="05">O-13;O-48</cbc:TaxLevelCode>
         <cac:TaxScheme><cbc:ID>01</cbc:ID><cbc:Name>IVA</cbc:Name></cac:TaxScheme>
       </cac:PartyTaxScheme>
     </cac:Party>

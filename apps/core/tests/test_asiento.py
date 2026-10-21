@@ -1,0 +1,198 @@
+"""La propuesta de asiento del mes — tarea 4.4.
+
+Junta las tres tareas anteriores. Lo que estas pruebas vigilan, por orden de
+importancia:
+
+1. **Que el asiento cuadre.** Un asiento descuadrado contabilizado es trabajo
+   que alguien deshace a mano.
+2. **Que no se invente las cuentas que no sabe.** El pasivo con el proveedor y
+   el IVA descontable son del PUC de cada empresa.
+3. **Que volver a generar no borre lo aprobado.** Rehacer la propuesta después
+   de que el contador aprobó media mañana le borraría esa mañana.
+"""
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+
+from contab_core import asiento, causacion, documentos, perfil_fiscal, storage, tarifas, xml_ubl
+
+CUFE = "1" * 92 + "aaaa"
+MUESTRAS = Path(__file__).resolve().parents[3] / "docs" / "samples" / "xml"
+
+
+@pytest.fixture
+def conn(tmp_path: Path):
+    db = tmp_path / "e.db"
+    storage.init_empresa_db(db, nit="900181831", dv="4", razon_social="REAL")
+    c = storage.connect(db)
+    storage.ensure_schema(c)
+
+    perfil_fiscal.guardar_perfil(c, {
+        "vigencia_desde": "2026-01-01", "regimen": "ordinario", "responsable_iva": 1,
+        "periodicidad_iva": "cuatrimestral",   # la de REAL Seguros
+        "agente_retefuente": 1, "agente_reteiva": 1})
+    tarifas.guardar_uvt(c, 2026, "52374")
+    tarifas.guardar_concepto(c, {
+        "concepto": "Compras.", "aplica_a": "ambos", "sobre": "base",
+        "tarifa": "2.5", "base_minima_uvt": "10", "cuenta_puc": "23654001",
+        "vigencia_desde": "2026-01-01"})
+
+    # La factura de muestra: 1.500.000 + IVA 285.000 = 1.785.000
+    lectura = xml_ubl.leer(MUESTRAS / "factura-con-iva.xml")
+    documentos.guardar(c, lectura.documento, MUESTRAS / "factura-con-iva.xml")
+    c.execute("INSERT INTO excel_load(id, source_path, source_name, total_rows, periodo)"
+              " VALUES (1,'x.xlsx','x.xlsx',1,'2026-09')")
+    c.execute("INSERT INTO excel_row(load_id,row_index,cufe_cude,data_json,periodo)"
+              " VALUES (1,0,?,'{}','2026-09')", (CUFE,))
+    c.commit()
+    yield c
+    c.close()
+
+
+def _cuentas(conn, proveedores="220505", iva="240810"):
+    conn.execute("UPDATE empresa_info SET cuenta_proveedores = ?,"
+                 " cuenta_iva_descontable = ?", (proveedores, iva))
+    conn.commit()
+
+
+def _regla(conn):
+    concepto = tarifas.listar_conceptos(conn)[0]["id"]
+    causacion.guardar(conn, {"tercero_nit": "800100200", "cuenta_puc": "519530",
+                             "concepto_retencion_id": concepto})
+
+
+# ─────────────────────────── el asiento cuadra ────────────────────────────────
+
+def test_el_asiento_cuadra_al_peso(conn):
+    _cuentas(conn)
+    _regla(conn)
+    asiento.generar(conn, "2026-09")
+
+    a = asiento.listar(conn, "2026-09")[0]
+    debitos = sum(Decimal(x["debito"]) for x in a["lineas"])
+    creditos = sum(Decimal(x["credito"]) for x in a["lineas"])
+    assert debitos == creditos, a["avisos"]
+    assert debitos == Decimal("1785000")
+
+
+def test_las_lineas_son_las_que_debe_ser(conn):
+    _cuentas(conn)
+    _regla(conn)
+    asiento.generar(conn, "2026-09")
+    lineas = {x["cuenta_puc"]: x for x in asiento.listar(conn, "2026-09")[0]["lineas"]}
+
+    assert Decimal(lineas["519530"]["debito"]) == Decimal("1500000"), "el gasto"
+    assert Decimal(lineas["240810"]["debito"]) == Decimal("285000"), "el IVA descontable"
+    assert Decimal(lineas["23654001"]["credito"]) == Decimal("37500"), "2,5% de 1.500.000"
+    assert Decimal(lineas["220505"]["credito"]) == Decimal("1747500"), \
+        "1.785.000 menos lo retenido"
+
+
+def test_el_credito_al_proveedor_es_el_resto(conn):
+    """Así cuadra por construcción y no por una suma que pueda salir mal."""
+    _cuentas(conn)
+    _regla(conn)
+    asiento.generar(conn, "2026-09")
+    lineas = asiento.listar(conn, "2026-09")[0]["lineas"]
+    proveedor = next(x for x in lineas if x["descripcion"] == "Proveedores")
+    otros_creditos = sum(Decimal(x["credito"]) for x in lineas
+                         if x["descripcion"] != "Proveedores")
+    assert Decimal(proveedor["credito"]) + otros_creditos == Decimal("1785000")
+
+
+# ─────────────────── lo que no se sabe no se inventa ──────────────────────────
+
+def test_sin_la_cuenta_del_proveedor_el_asiento_queda_marcado(conn):
+    _regla(conn)
+    r = asiento.generar(conn, "2026-09")
+    assert r["completos"] == 0 and r["revisar"] == 1
+    assert any("pasivo con el proveedor" in a for a in r["avisos"])
+    assert asiento.listar(conn, "2026-09")[0]["estado"] == asiento.ESTADO_REVISAR
+
+
+def test_sin_la_cuenta_del_iva_se_dice_cual_falta(conn):
+    _cuentas(conn, iva="")
+    _regla(conn)
+    asiento.generar(conn, "2026-09")
+    a = asiento.listar(conn, "2026-09")[0]
+    assert any("IVA descontable" in x for x in a["avisos"])
+
+
+def test_sin_regla_el_documento_queda_para_decidir(conn):
+    """«380 con regla conocida [aprobar todos] · 32 nuevos [decidir]»."""
+    _cuentas(conn)
+    r = asiento.generar(conn, "2026-09")
+    assert r["completos"] == 0 and r["revisar"] == 1
+    a = asiento.listar(conn, "2026-09")[0]
+    assert a["lineas"][0]["cuenta_puc"] is None
+    assert any("Ninguna regla" in x for x in a["avisos"])
+
+
+def test_sin_saber_nada_del_proveedor_queda_para_revisar(conn):
+    """Con 21 de 25 terceros en blanco, esto es el caso corriente — y es
+    correcto: propone la retención ordinaria pero no la da por buena."""
+    _cuentas(conn)
+    _regla(conn)
+    conn.execute("UPDATE documento SET emisor_responsabilidades = NULL")
+    conn.commit()
+    r = asiento.generar(conn, "2026-09")
+    assert r["revisar"] == 1
+    assert any("no se sabe" in x.lower()
+               for x in asiento.listar(conn, "2026-09")[0]["avisos"])
+
+
+def test_con_regla_el_documento_se_puede_aprobar_en_lote(conn):
+    """La factura declara las responsabilidades del emisor, así que no hay nada
+    que preguntarle al contador."""
+    _cuentas(conn)
+    _regla(conn)
+    r = asiento.generar(conn, "2026-09")
+    assert r["completos"] == 1 and r["revisar"] == 0
+    assert r["porcentaje_completo"] == 100
+
+
+# ───────────────────────── volver a generar ───────────────────────────────────
+
+def test_volver_a_generar_no_duplica(conn):
+    _cuentas(conn)
+    _regla(conn)
+    asiento.generar(conn, "2026-09")
+    asiento.generar(conn, "2026-09")
+    assert len(asiento.listar(conn, "2026-09")) == 1
+    assert len(asiento.listar(conn, "2026-09")[0]["lineas"]) == 4
+
+
+def test_lo_aprobado_no_se_rehace(conn):
+    """Rehacer después de que aprobó media mañana le borraría esa mañana."""
+    _cuentas(conn)
+    _regla(conn)
+    asiento.generar(conn, "2026-09")
+    conn.execute("UPDATE asiento_propuesto SET aprobado = 1,"
+                 " avisos = '[\"lo tocó una persona\"]'")
+    conn.commit()
+
+    asiento.generar(conn, "2026-09")
+    a = asiento.listar(conn, "2026-09")[0]
+    assert a["aprobado"] == 1
+    assert a["avisos"] == ["lo tocó una persona"], "no se regeneró encima"
+
+
+# ─────────────────────────────── el resumen ───────────────────────────────────
+
+def test_el_resumen_cuenta_lo_que_la_pantalla_necesita(conn):
+    _cuentas(conn)
+    _regla(conn)
+    asiento.generar(conn, "2026-09")
+    r = asiento.resumen(conn, "2026-09")
+    assert r == {"periodo": "2026-09", "total": 1, "completos": 1, "revisar": 0,
+                 "aprobados": 0, "porcentaje_completo": 100}
+
+
+def test_se_cuentan_las_filas_del_mes_que_no_tienen_xml(conn):
+    """Sin XML no hay propuesta, y el contador tiene que saber cuántas son."""
+    conn.execute("INSERT INTO excel_row(load_id,row_index,cufe_cude,data_json,periodo)"
+                 " VALUES (1,1,?,'{}','2026-09')", ("9" * 96,))
+    conn.commit()
+    r = asiento.generar(conn, "2026-09")
+    assert r["sin_xml"] == 1
