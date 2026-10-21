@@ -58,8 +58,9 @@ def test_el_patron_no_depende_de_tildes_ni_mayusculas(conn):
     assert p.cuenta_puc == "513535"
 
 
-def test_el_proveedor_gana_al_texto(conn):
-    """«Pase lo que pase» significa exactamente eso."""
+def test_una_regla_sin_patron_es_el_pase_lo_que_pase(conn):
+    """Las reglas SIN patrón son el «siempre a la misma cuenta», y se escriben
+    a propósito para los pocos proveedores que lo merecen."""
     causacion.guardar(conn, {"patron": "monitoreo", "cuenta_puc": "519595"})
     causacion.guardar(conn, {"tercero_nit": "800144355", "cuenta_puc": "513535"})
     p = causacion.proponer(conn, doc())
@@ -141,3 +142,38 @@ def test_se_cuenta_cuantas_veces_sirvio_cada_regla(conn):
     causacion.marcar_usada(conn, r["id"])
     conn.commit()
     assert causacion.listar(conn)[0]["veces_usada"] == 2
+
+
+# ───── «si el concepto cambia, me presentas la nueva propuesta» (22-oct) ──────
+
+def test_un_proveedor_conocido_que_factura_otra_cosa_se_vuelve_a_preguntar(conn):
+    """Lo precisó el contador: lo aprendido vale mientras el concepto sea el
+    mismo. Si cambia, quiere ver la propuesta nueva antes de aprobarla."""
+    causacion.aprender(conn, cuenta_puc="513535", tercero_nit="800144355",
+                       patron="monitoreo de alarma")
+
+    igual = causacion.proponer(conn, doc(desc="Monitoreo de alarma octubre"))
+    assert igual.seguro is True and igual.cuenta_puc == "513535"
+
+    distinto = causacion.proponer(conn, doc(desc="Instalación de cámaras"))
+    assert distinto.seguro is False
+    assert distinto.concepto_nuevo is True, "no es un proveedor nuevo"
+    assert "suele facturar" in distinto.por_que
+    assert "monitoreo de alarma" in distinto.por_que
+
+
+def test_un_proveedor_nuevo_se_dice_distinto_que_un_concepto_nuevo(conn):
+    """Son dos cosas y la bandeja las separa: «no lo conozco» no es lo mismo
+    que «lo conozco y está facturando otra cosa»."""
+    nuevo = causacion.proponer(conn, doc(nit="999999999", nombre="DESCONOCIDA SAS"))
+    assert nuevo.concepto_nuevo is False
+    assert "Ninguna regla" in nuevo.por_que
+
+
+def test_el_pase_lo_que_pase_gana_aunque_el_concepto_cambie(conn):
+    """Los tres proveedores que él nombró: siempre a la misma cuenta."""
+    causacion.guardar(conn, {"tercero_nit": "800144355", "cuenta_puc": "513535"})
+    causacion.aprender(conn, cuenta_puc="519510", tercero_nit="800144355",
+                       patron="monitoreo")
+    p = causacion.proponer(conn, doc(desc="Cualquier otra cosa"))
+    assert p.seguro is True and p.cuenta_puc == "513535"
