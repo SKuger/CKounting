@@ -14,8 +14,10 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from . import asiento as asiento_module
 from . import backup as backup_module
 from . import carpetas as carpetas_module
+from . import causacion as causacion_module
 from . import cita_personas as citas_module
 from . import dian_inconsistencias as dian_inc_module
 from . import dian_portal as dian_portal_module
@@ -1291,6 +1293,82 @@ def _digits(s: Any) -> str:
     return "".join(c for c in str(s or "") if c.isdigit())
 
 
+def _con(db_path):
+    conn = storage_module.connect(Path(db_path))
+    storage_module.ensure_schema(conn)
+    return conn
+
+
+def _h_reglas_list(params: dict) -> dict:
+    conn = _con(params["db_path"])
+    try:
+        return {"reglas": causacion_module.listar(
+            conn, incluir_archivadas=bool(params.get("incluir_archivadas")))}
+    finally:
+        conn.close()
+
+
+def _h_regla_guardar(params: dict) -> dict:
+    conn = _con(params["db_path"])
+    try:
+        return causacion_module.guardar(conn, params.get("regla") or {})
+    finally:
+        conn.close()
+
+
+def _h_regla_archivar(params: dict) -> dict:
+    conn = _con(params["db_path"])
+    try:
+        causacion_module.archivar(conn, int(params["id"]),
+                                  bool(params.get("archivada", True)))
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+def _h_asiento_generar(params: dict, progress=None) -> dict:
+    """Rehace la propuesta del mes. Trabajo largo: va en segundo plano (D-076)."""
+    periodo = storage_module._norm_periodo(params.get("periodo") or "")
+    conn = _con(params["db_path"])
+    try:
+        avisa = (lambda m: progress(0, 0, m)) if progress is not None else None
+        return asiento_module.generar(conn, periodo, progreso=avisa)
+    finally:
+        conn.close()
+
+
+def _h_asiento_list(params: dict) -> dict:
+    periodo = storage_module._norm_periodo(params.get("periodo") or "")
+    conn = _con(params["db_path"])
+    try:
+        return {
+            "asientos": asiento_module.listar(conn, periodo,
+                                              estado=params.get("estado") or None),
+            "resumen": asiento_module.resumen(conn, periodo),
+        }
+    finally:
+        conn.close()
+
+
+def _h_cuentas_empresa(params: dict) -> dict:
+    """Las dos cuentas que Contab no puede deducir: proveedores e IVA descontable."""
+    conn = _con(params["db_path"])
+    try:
+        if "cuenta_proveedores" in params or "cuenta_iva_descontable" in params:
+            conn.execute(
+                "UPDATE empresa_info SET cuenta_proveedores = ?,"
+                " cuenta_iva_descontable = ?",
+                ((params.get("cuenta_proveedores") or "").strip() or None,
+                 (params.get("cuenta_iva_descontable") or "").strip() or None))
+            conn.commit()
+        fila = conn.execute(
+            "SELECT cuenta_proveedores, cuenta_iva_descontable FROM empresa_info"
+        ).fetchone()
+        return dict(fila) if fila else {}
+    finally:
+        conn.close()
+
+
 def _h_tarifas_import(params: dict) -> dict:
     """Sube el Excel de tarifas del contador (4.1). `dry_run` enseña sin escribir.
 
@@ -1787,6 +1865,12 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     # Plan Único de Cuentas (PUC) por empresa (D-070)
     "puc_import": _h_puc_import,
     "tarifas_import": _h_tarifas_import,
+    "reglas_list": _h_reglas_list,
+    "regla_guardar": _h_regla_guardar,
+    "regla_archivar": _h_regla_archivar,
+    "asiento_generar": lambda p, progress: _h_asiento_generar(p, progress=progress),
+    "asiento_list": _h_asiento_list,
+    "cuentas_empresa": _h_cuentas_empresa,
     "tarifas_list": _h_tarifas_list,
     "tarifas_guardar_concepto": _h_tarifas_guardar_concepto,
     "tarifas_guardar_uvt": _h_tarifas_guardar_uvt,
