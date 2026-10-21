@@ -196,3 +196,93 @@ def test_se_cuentan_las_filas_del_mes_que_no_tienen_xml(conn):
     conn.commit()
     r = asiento.generar(conn, "2026-09")
     assert r["sin_xml"] == 1
+
+
+# ───────── 4.5 · aprobar es enseñarle a Contab lo que acaba de decidir ────────
+# «Para el primer registro de un proveedor me muestras cómo sería, yo lo valido
+# y en caso de un cambio lo pueda realizar yo; y como por lo general el concepto
+# que factura es el mismo, las siguientes se registrarían de esa forma.»
+
+def test_al_aprobar_corrigiendo_la_cuenta_se_aprende_la_regla(conn):
+    _cuentas(conn)
+    asiento.generar(conn, "2026-09")
+    a = asiento.listar(conn, "2026-09")[0]
+    assert a["estado"] == asiento.ESTADO_REVISAR, "sin regla, él decide"
+
+    asiento.aprobar(conn, a["id"], cuenta_puc="519530", patron="resma de papel")
+
+    reglas = causacion.listar(conn)
+    assert len(reglas) == 1
+    assert reglas[0]["cuenta_puc"] == "519530"
+    assert reglas[0]["tercero_nit"] == "800100200"
+    assert reglas[0]["origen"] == causacion.ORIGEN_APRENDIDA
+
+
+def test_la_siguiente_factura_del_mismo_proveedor_ya_sale_sola(conn):
+    """Es el punto entero del producto: que el segundo mes sea barato."""
+    _cuentas(conn)
+    asiento.generar(conn, "2026-09")
+    a = asiento.listar(conn, "2026-09")[0]
+    asiento.aprobar(conn, a["id"], cuenta_puc="519530", patron="resma de papel")
+
+    documento = documentos.documento_por_cufe(conn, CUFE)
+    p = causacion.proponer(conn, documento)
+    assert p.seguro is True and p.cuenta_puc == "519530"
+
+
+def test_al_aprobar_se_guardan_las_cuentas_de_esa_empresa(conn):
+    """«Las cuentas pueden variar por cada una de las empresas» — y como cada
+    empresa tiene su propia base (D-003), no hay forma de mezclarlas."""
+    asiento.generar(conn, "2026-09")
+    a = asiento.listar(conn, "2026-09")[0]
+    asiento.aprobar(conn, a["id"], cuenta_puc="519530",
+                    cuenta_proveedores="220510", cuenta_iva_descontable="240820")
+
+    info = dict(conn.execute(
+        "SELECT cuenta_proveedores, cuenta_iva_descontable FROM empresa_info").fetchone())
+    assert info["cuenta_proveedores"] == "220510"
+    assert info["cuenta_iva_descontable"] == "240820"
+
+
+def test_el_asiento_aprobado_se_rehace_con_lo_corregido(conn):
+    asiento.generar(conn, "2026-09")
+    a = asiento.listar(conn, "2026-09")[0]
+    r = asiento.aprobar(conn, a["id"], cuenta_puc="519530",
+                        cuenta_proveedores="220510", cuenta_iva_descontable="240820")
+    cuentas = {x["cuenta_puc"] for x in r["lineas"]}
+    assert "519530" in cuentas and "220510" in cuentas and "240820" in cuentas
+    assert r["aprobado"] == 1 and r["estado"] == asiento.ESTADO_COMPLETO
+
+
+def test_aprobar_en_lote_solo_toca_lo_completo(conn):
+    _cuentas(conn)
+    _regla(conn)
+    asiento.generar(conn, "2026-09")
+    r = asiento.aprobar_lote(conn, "2026-09")
+    assert r["aprobados"] == 1 and r["aprobados"] == r["total"]
+
+
+def test_lo_marcado_no_se_aprueba_en_lote(conn):
+    _cuentas(conn)
+    asiento.generar(conn, "2026-09")          # sin regla → queda en revisar
+    r = asiento.aprobar_lote(conn, "2026-09")
+    assert r["aprobados"] == 0
+
+
+def test_aprobar_por_error_se_puede_deshacer(conn):
+    _cuentas(conn)
+    _regla(conn)
+    asiento.generar(conn, "2026-09")
+    a = asiento.listar(conn, "2026-09")[0]
+    asiento.aprobar(conn, a["id"])
+    vuelto = asiento.desaprobar(conn, a["id"])
+    assert vuelto["aprobado"] == 0
+
+
+def test_se_puede_aprobar_sin_aprender_nada(conn):
+    """Una factura rara de un proveedor no tiene por qué volverse su regla."""
+    _cuentas(conn)
+    asiento.generar(conn, "2026-09")
+    a = asiento.listar(conn, "2026-09")[0]
+    asiento.aprobar(conn, a["id"], cuenta_puc="519530", aprender_regla=False)
+    assert causacion.listar(conn) == []

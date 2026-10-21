@@ -1350,6 +1350,41 @@ def _h_asiento_list(params: dict) -> dict:
         conn.close()
 
 
+def _h_asiento_aprobar(params: dict) -> dict:
+    """Aprueba un asiento con las correcciones del contador, y aprende de ellas."""
+    conn = _con(params["db_path"])
+    try:
+        return asiento_module.aprobar(
+            conn, int(params["id"]),
+            cuenta_puc=(params.get("cuenta_puc") or "").strip() or None,
+            patron=(params.get("patron") or "").strip() or None,
+            concepto_retencion_id=(int(params["concepto_retencion_id"])
+                                   if params.get("concepto_retencion_id") else None),
+            cuenta_proveedores=(params.get("cuenta_proveedores") or "").strip() or None,
+            cuenta_iva_descontable=(params.get("cuenta_iva_descontable") or "").strip() or None,
+            aprender_regla=bool(params.get("aprender_regla", True)),
+        )
+    finally:
+        conn.close()
+
+
+def _h_asiento_aprobar_lote(params: dict) -> dict:
+    periodo = storage_module._norm_periodo(params.get("periodo") or "")
+    conn = _con(params["db_path"])
+    try:
+        return asiento_module.aprobar_lote(conn, periodo)
+    finally:
+        conn.close()
+
+
+def _h_asiento_desaprobar(params: dict) -> dict:
+    conn = _con(params["db_path"])
+    try:
+        return asiento_module.desaprobar(conn, int(params["id"]))
+    finally:
+        conn.close()
+
+
 def _h_cuentas_empresa(params: dict) -> dict:
     """Las dos cuentas que Contab no puede deducir: proveedores e IVA descontable."""
     conn = _con(params["db_path"])
@@ -1870,6 +1905,9 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "regla_archivar": _h_regla_archivar,
     "asiento_generar": lambda p, progress: _h_asiento_generar(p, progress=progress),
     "asiento_list": _h_asiento_list,
+    "asiento_aprobar": _h_asiento_aprobar,
+    "asiento_aprobar_lote": _h_asiento_aprobar_lote,
+    "asiento_desaprobar": _h_asiento_desaprobar,
     "cuentas_empresa": _h_cuentas_empresa,
     "tarifas_list": _h_tarifas_list,
     "tarifas_guardar_concepto": _h_tarifas_guardar_concepto,

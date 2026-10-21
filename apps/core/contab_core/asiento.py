@@ -261,3 +261,126 @@ def resumen(conn, periodo: str) -> dict[str, Any]:
         "revisar": total - completos, "aprobados": fila["aprobados"] or 0,
         "porcentaje_completo": round(completos * 100 / total) if total else 0,
     }
+
+
+# ─────────────────────── aprobar, que es donde se aprende ──────────────────────
+# Lo pidió así el contador el 2026-10-22:
+#
+# > «Para el primer registro de una factura de un proveedor me muestras en
+# > pantalla cómo sería el registro, yo lo valido y en caso de un cambio lo pueda
+# > realizar yo; y como por lo general el concepto que factura el proveedor es el
+# > mismo, las siguientes facturas se registrarían de esa forma.»
+#
+# Así que aprobar no es marcar una casilla: es **enseñarle a Contab** lo que
+# acaba de decidir, para no volvérselo a preguntar.
+
+def aprobar(
+    conn,
+    asiento_id: int,
+    *,
+    cuenta_puc: str | None = None,
+    patron: str | None = None,
+    concepto_retencion_id: int | None = None,
+    cuenta_proveedores: str | None = None,
+    cuenta_iva_descontable: str | None = None,
+    aprender_regla: bool = True,
+) -> dict[str, Any]:
+    """Da por bueno un asiento, con las correcciones que él haya hecho.
+
+    Lo que corrija se guarda **para esta empresa**: las cuentas viven en su
+    propia base (D-003), así que «las cuentas pueden variar por cada empresa»
+    sale gratis — no hay una tabla común que pudiera mezclarlas.
+    """
+    fila = conn.execute(
+        "SELECT * FROM asiento_propuesto WHERE id = ?", (int(asiento_id),)).fetchone()
+    if fila is None:
+        raise ValueError(f"El asiento {asiento_id} no existe.")
+    a = dict(fila)
+
+    # Las dos cuentas de la empresa, si las acaba de escribir en esta pantalla.
+    if cuenta_proveedores or cuenta_iva_descontable:
+        actual = dict(conn.execute(
+            "SELECT cuenta_proveedores, cuenta_iva_descontable FROM empresa_info"
+        ).fetchone() or {})
+        conn.execute(
+            "UPDATE empresa_info SET cuenta_proveedores = ?, cuenta_iva_descontable = ?",
+            ((cuenta_proveedores or actual.get("cuenta_proveedores") or "").strip() or None,
+             (cuenta_iva_descontable or actual.get("cuenta_iva_descontable") or "").strip() or None))
+
+    # La regla, para que la próxima factura de este proveedor salga sola.
+    if aprender_regla and cuenta_puc and a.get("tercero_nit"):
+        causacion_module.aprender(
+            conn, cuenta_puc=cuenta_puc, tercero_nit=a["tercero_nit"],
+            patron=(patron or "").strip() or None,
+            concepto_retencion_id=concepto_retencion_id)
+
+    # Se rehace el asiento con lo corregido y se marca aprobado.
+    documento = documentos_module.documento_por_cufe(conn, a["cufe"])
+    if documento is not None:
+        info = dict(conn.execute("SELECT * FROM empresa_info").fetchone() or {})
+        perfil = perfil_module.perfil_vigente(conn, fecha=f"{a['periodo']}-01")
+        propuesta = causacion_module.proponer(conn, documento)
+        if cuenta_puc:
+            propuesta.cuenta_puc = cuenta_puc
+            propuesta.seguro = True
+        tercero = terceros_module.obtener(conn, documento.get("emisor_nit") or "")
+        calculo = retenciones_module.calcular(
+            conn, perfil=perfil, documento=documento, tercero=tercero,
+            concepto_id=concepto_retencion_id or propuesta.concepto_retencion_id)
+        lineas, avisos = _lineas_de(
+            documento, propuesta, calculo,
+            cuenta_proveedores=(info.get("cuenta_proveedores") or "").strip(),
+            cuenta_iva=(info.get("cuenta_iva_descontable") or "").strip(),
+            responsable_iva=bool(perfil and perfil.get("responsable_iva")))
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("DELETE FROM asiento_linea WHERE asiento_id = ?", (a["id"],))
+        for orden, ln in enumerate(lineas):
+            conn.execute(
+                "INSERT INTO asiento_linea(asiento_id, orden, cuenta_puc, descripcion,"
+                " debito, credito) VALUES (?,?,?,?,?,?)",
+                (a["id"], orden, ln.cuenta_puc, ln.descripcion,
+                 str(ln.debito), str(ln.credito)))
+        conn.execute(
+            "UPDATE asiento_propuesto SET avisos = ? WHERE id = ?",
+            (json.dumps(avisos, ensure_ascii=False) if avisos else None, a["id"]))
+
+    conn.execute(
+        "UPDATE asiento_propuesto SET aprobado = 1, estado = ?,"
+        " aprobado_at = datetime('now') WHERE id = ?", (ESTADO_COMPLETO, a["id"]))
+    conn.commit()
+    return listar_uno(conn, a["id"])
+
+
+def aprobar_lote(conn, periodo: str) -> dict[str, Any]:
+    """Aprueba de un golpe lo que ya estaba completo. Lo marcado NO se toca."""
+    ids = [r["id"] for r in conn.execute(
+        "SELECT id FROM asiento_propuesto WHERE periodo = ? AND estado = ?"
+        " AND aprobado = 0", (periodo, ESTADO_COMPLETO)).fetchall()]
+    for i in ids:
+        conn.execute(
+            "UPDATE asiento_propuesto SET aprobado = 1, aprobado_at = datetime('now')"
+            " WHERE id = ?", (i,))
+    conn.commit()
+    return {"aprobados": len(ids), **resumen(conn, periodo)}
+
+
+def desaprobar(conn, asiento_id: int) -> dict[str, Any]:
+    """Volver atrás. Aprobar por error no puede ser irreversible."""
+    conn.execute(
+        "UPDATE asiento_propuesto SET aprobado = 0, aprobado_at = NULL WHERE id = ?",
+        (int(asiento_id),))
+    conn.commit()
+    return listar_uno(conn, asiento_id)
+
+
+def listar_uno(conn, asiento_id: int) -> dict[str, Any]:
+    fila = conn.execute(
+        "SELECT * FROM asiento_propuesto WHERE id = ?", (int(asiento_id),)).fetchone()
+    if fila is None:
+        raise ValueError(f"El asiento {asiento_id} no existe.")
+    a = dict(fila)
+    a["avisos"] = json.loads(a["avisos"]) if a["avisos"] else []
+    a["lineas"] = [dict(r) for r in conn.execute(
+        "SELECT * FROM asiento_linea WHERE asiento_id = ? ORDER BY orden",
+        (a["id"],)).fetchall()]
+    return a
