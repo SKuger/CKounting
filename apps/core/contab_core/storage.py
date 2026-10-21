@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import log
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # Cuánto espera una escritura a que se libere el lock antes de rendirse (ms).
 BUSY_TIMEOUT_MS = 5_000
@@ -148,6 +148,9 @@ CREATE TABLE IF NOT EXISTS documento (
   emisor_nombre   TEXT,
   receptor_nit    TEXT,
   receptor_nombre TEXT,
+  -- Lo que la FACTURA declara del emisor (cbc:TaxLevelCode del anexo DIAN).
+  -- Es lo que el contador mira cuando no tiene el RUT del proveedor.
+  emisor_responsabilidades TEXT,
   -- Los importes se guardan como TEXT a propósito: SQLite solo tiene REAL, y un
   -- REAL es float. Los lee `Decimal(texto)` sin perder un céntimo (D-075).
   subtotal        TEXT,
@@ -545,6 +548,17 @@ CREATE INDEX IF NOT EXISTS idx_excel_row_fecha ON excel_row(fecha_emision);
 """
 
 
+def _m009_responsabilidades_del_xml(conn: sqlite3.Connection) -> None:
+    """Migración 9 — lo que la factura declara del emisor (Fase 4.2).
+
+    `documento` ya existe en las bases creadas con el esquema 7, así que la
+    columna hay que añadirla aquí y no basta con declararla en SCHEMA_SQL.
+    """
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(documento)").fetchall()}
+    if "emisor_responsabilidades" not in cols:
+        conn.execute("ALTER TABLE documento ADD COLUMN emisor_responsabilidades TEXT")
+
+
 def _m008_tarifas(conn: sqlite3.Connection) -> None:
     """Migración 8 — UVT y conceptos de retención (Fase 4.1).
 
@@ -670,6 +684,7 @@ MIGRACIONES: list[tuple[int, object]] = [
     (6, _m006_bitacora_ingesta),
     (7, _m007_documentos_xml),
     (8, _m008_tarifas),
+    (9, _m009_responsabilidades_del_xml),
 ]
 
 
