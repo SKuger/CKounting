@@ -19,12 +19,29 @@ El portal entregó un `Invoice` directo —comprobado el 2026-10-01, ver
 [`docs/dian-portal.md`](../../../docs/dian-portal.md)—, pero el que llega por
 correo viene envuelto, y los dos caminos siguen vivos (D-097). Se aceptan ambos.
 
-> ⚠ **Lo que falta comprobar.** Esta implementación se escribió contra el estándar
-> UBL 2.1 y contra la estructura que el reconocimiento anotó de un documento real
-> (una póliza exenta: sin `TaxTotal`). **No se ha corrido contra un XML real con
-> IVA ni con retenciones**, así que la forma de los impuestos está construida
-> sobre el estándar, no sobre una muestra. Hasta que eso pase, no cantar la tarea
-> como verificada.
+## Lo comprobado contra XML reales (2026-10-22)
+
+Se pasaron por aquí **cinco `AttachedDocument` reales y firmados** de la DIAN
+—los que vienen en los paquetes RIPS—, y salió bien todo esto:
+
+| Qué | Resultado |
+|---|---|
+| Desenvolver el `AttachedDocument` del correo | ✅ la factura sale del CDATA |
+| CUFE, número, fechas, moneda | ✅ |
+| NIT y nombre de emisor y receptor | ✅ el NIT llega sin DV |
+| **`cbc:TaxLevelCode`** | ✅ **viene de verdad** — declaró `O-23` |
+| Totales y líneas | ✅ |
+
+Lo de `TaxLevelCode` importa más de lo que parece: de ahí depende que el motor
+de retenciones sepa del proveedor sin que nadie teclee el catálogo (D-114), y
+hasta esa fecha estaba implementado **contra el anexo técnico, sin haberlo visto
+nunca**.
+
+> ⚠ **Lo que sigue sin comprobarse: los impuestos.** Las cinco facturas reales
+> son de servicios de salud, **exentos de IVA**, así que ninguna trae `TaxTotal`.
+> La forma de `TaxSubtotal`, `Percent` y `WithholdingTaxTotal` sigue construida
+> sobre el estándar y no sobre una muestra. Hace falta **una factura real con
+> IVA** para cerrarlo.
 
 ## Por qué los importes nunca pasan por float
 
