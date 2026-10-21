@@ -3,6 +3,7 @@
 // Vive en su propio composable, como los otros paneles de `load.vue` (D-092).
 import { ref, type Ref } from 'vue'
 import { rpc } from './useRpc'
+import { useJob } from './useJob'
 
 export type ImpuestoXml = {
   tipo: string
@@ -46,6 +47,8 @@ type Opciones = {
 
 export function useDetalleXml({ dbPath, periodo, alLeer }: Opciones) {
   const toast = useToast()
+  // Leer una carpeta grande de XML se pasaba del tope de 30 s: va como trabajo.
+  const trabajo = useJob()
 
   const resumen = ref<{ con_xml: number; total: number; cufes: string[] } | null>(null)
   const abierto = ref(false)
@@ -70,7 +73,7 @@ export function useDetalleXml({ dbPath, periodo, alLeer }: Opciones) {
     if (leyendo.value || !dbPath.value || !periodo.value) return
     leyendo.value = true
     try {
-      const r = await rpc<{ leidos: number; desde_cache: number; fallidos: number; errores: { archivo: string; error: string }[] }>(
+      const r = await trabajo.correr<{ leidos: number; desde_cache: number; fallidos: number; errores: { archivo: string; error: string }[] }>(
         'indexar_xml', { db_path: dbPath.value, periodo: periodo.value },
       )
       await refrescar()

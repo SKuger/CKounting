@@ -11,7 +11,7 @@
 // De ahí las tres cosas que manda esta pantalla: se ve el asiento ENTERO antes
 // de aprobar, se puede corregir, y al aprobar **se aprende** — aprobar no es
 // marcar una casilla, es enseñarle a Contab lo que él acaba de decidir.
-import { ArrowLeft, RefreshCw, Check, Undo2, ChevronRight } from 'lucide-vue-next'
+import { ArrowLeft, RefreshCw, Check, Undo2, ChevronRight, Download } from 'lucide-vue-next'
 
 type Linea = { id: number; cuenta_puc: string | null; descripcion: string; debito: string; credito: string }
 type Asiento = {
@@ -33,9 +33,22 @@ const razonSocial = ref('')
 const cuentas = reactive({ cuenta_proveedores: '', cuenta_iva_descontable: '' })
 const abierto = ref<number | null>(null)
 const guardando = ref(false)
+// Armar la propuesta se pasaba de los 30 s en meses grandes: va como trabajo
+// en segundo plano con progreso (D-076).
+const trabajo = useJob()
 
-// Lo que él corrige de un asiento antes de darle el visto bueno.
-const correccion = reactive({ cuenta_puc: '', patron: '', aprender_regla: true })
+// Los conceptos de retención de la empresa, para elegir uno al aprobar.
+type Concepto = { id: number; concepto: string; aplica_a: string; sobre: string }
+const conceptos = ref<Concepto[]>([])
+
+// Lo que él corrige de un asiento antes de darle el visto bueno. `retencion`
+// es '' (no ha dicho), 'ninguna' (dijo que no se retiene) o el id del concepto.
+// Sin esto la regla aprendida no contaba como decisión, y aprobar la primera
+// factura de un proveedor no liberaba las siguientes.
+const correccion = reactive({ cuenta_puc: '', patron: '', retencion: '' as string, aprender_regla: true })
+
+const exportOpen = ref(false)
+const exportando = ref(false)
 
 function humanError(e: unknown): string {
   const anyE = e as { data?: { error?: string }; message?: string }
@@ -57,6 +70,8 @@ async function cargar() {
     })
     asientos.value = r.asientos
     resumen.value = r.resumen
+    const t = await rpc<{ conceptos: Concepto[] }>('tarifas_list', { db_path: dbPath.value })
+    conceptos.value = t.conceptos.filter((c) => c.sobre !== 'iva')
     const c = await rpc<typeof cuentas>('cuentas_empresa', { db_path: dbPath.value })
     cuentas.cuenta_proveedores = c.cuenta_proveedores || ''
     cuentas.cuenta_iva_descontable = c.cuenta_iva_descontable || ''
@@ -72,7 +87,7 @@ async function cargar() {
 async function generar() {
   generando.value = true
   try {
-    const r = await rpc<{ total: number; completos: number; revisar: number; sin_xml: number }>(
+    const r = await trabajo.correr<{ total: number; completos: number; revisar: number; sin_xml: number }>(
       'asiento_generar', { db_path: dbPath.value, periodo: periodo.value })
     await cargar()
     toast.success(`${r.total} documentos`,
@@ -91,6 +106,7 @@ function abrir(a: Asiento) {
   const gasto = a.lineas[0]
   correccion.cuenta_puc = gasto?.cuenta_puc || ''
   correccion.patron = ''
+  correccion.retencion = ''
   correccion.aprender_regla = true
 }
 
@@ -101,6 +117,8 @@ async function aprobar(a: Asiento) {
       db_path: dbPath.value, id: a.id,
       cuenta_puc: correccion.cuenta_puc,
       patron: correccion.patron,
+      concepto_retencion_id: correccion.retencion && correccion.retencion !== 'ninguna' ? correccion.retencion : '',
+      sin_retencion: correccion.retencion === 'ninguna',
       aprender_regla: correccion.aprender_regla,
       cuenta_proveedores: cuentas.cuenta_proveedores,
       cuenta_iva_descontable: cuentas.cuenta_iva_descontable,
@@ -128,6 +146,21 @@ async function aprobarTodos() {
   }
 }
 
+async function onExportFolder(ruta: string) {
+  exportOpen.value = false
+  exportando.value = true
+  try {
+    const r = await rpc<{ path: string; asientos: number; lineas: number; cuadra: boolean }>(
+      'asiento_exportar', { db_path: dbPath.value, periodo: periodo.value, output_dir: ruta })
+    toast.success(`${r.asientos} asientos exportados`,
+      (r.cuadra ? 'El archivo cuadra. ' : 'OJO: el archivo NO cuadra. ') + r.path)
+  } catch (e) {
+    toast.error('No se pudo exportar', humanError(e))
+  } finally {
+    exportando.value = false
+  }
+}
+
 async function deshacer(a: Asiento) {
   await rpc('asiento_desaprobar', { db_path: dbPath.value, id: a.id })
   await cargar()
@@ -139,6 +172,9 @@ onMounted(cargar)
 
 <template>
   <div class="flex h-full min-h-0 flex-col gap-3 p-4">
+    <DirectoryPicker v-if="exportOpen" :open="exportOpen" :initial-path="''"
+      title="Carpeta donde guardar el Excel de asientos"
+      @pick="onExportFolder" @close="exportOpen = false" />
     <header class="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
       <NuxtLink :to="{ path: '/empresa', query: { db: dbPath } }"
         class="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground">
@@ -162,6 +198,12 @@ onMounted(cargar)
       <Button size="sm" :disabled="guardando || !listos.length" @click="aprobarTodos">
         <Check class="size-3.5" /> Aprobar los {{ listos.length }} listos
       </Button>
+      <Button size="sm" variant="outline" :disabled="exportando || !aprobados.length"
+        title="Los asientos aprobados a un Excel, una fila por línea, para llevarlos a Siigo"
+        @click="exportOpen = true">
+        <Download class="size-3.5" /> Exportar {{ aprobados.length }} aprobados
+      </Button>
+      <span v-if="trabajo.corriendo.value" class="text-xs text-muted-foreground">{{ trabajo.etiqueta.value }}</span>
       <span class="flex-1" />
       <label class="flex items-center gap-1.5 text-xs text-muted-foreground">
         Cuenta de proveedores
@@ -238,6 +280,16 @@ onMounted(cargar)
                   <Input v-model="correccion.cuenta_puc" class="h-8 w-32 font-mono" placeholder="519530" />
                 </div>
                 <div class="grid gap-1">
+                  <Label class="text-xs">Retención en la fuente</Label>
+                  <select v-model="correccion.retencion" class="h-8 rounded-md border border-border bg-background px-2 text-xs">
+                    <option value="">— elegir —</option>
+                    <option value="ninguna">Ninguna: a este proveedor no se le retiene</option>
+                    <option v-for="c in conceptos" :key="c.id" :value="String(c.id)">
+                      {{ c.concepto }}<template v-if="c.aplica_a && c.aplica_a !== 'ambos'"> · {{ c.aplica_a === 'declarantes' ? 'declarantes' : 'no declarantes' }}</template>
+                    </option>
+                  </select>
+                </div>
+                <div class="grid gap-1">
                   <Label class="text-xs">Recordarlo cuando la factura diga…</Label>
                   <Input v-model="correccion.patron" class="h-8 w-56" placeholder="monitoreo de alarma" />
                 </div>
@@ -248,6 +300,10 @@ onMounted(cargar)
                   <Check class="size-3.5" /> Aprobar
                 </Button>
               </div>
+              <p v-if="!a.aprobado && !correccion.retencion" class="mt-2 text-xs text-status-warning">
+                Elige la retención —o «ninguna»—: sin eso, las próximas facturas de este proveedor
+                volverán a pedir revisión aunque apruebes esta.
+              </p>
               <p v-if="!a.aprobado" class="mt-2 text-xs text-muted-foreground">
                 Si dejas vacío «recordarlo cuando la factura diga», la regla se guarda para
                 <strong>todo</strong> lo que facture este proveedor. Si lo llenas, solo para
