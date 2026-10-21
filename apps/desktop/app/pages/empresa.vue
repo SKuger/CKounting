@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowLeft, Pencil, FolderOpen, FileSpreadsheet, Trash2, Archive, Download, ChevronRight, EllipsisVertical, CalendarPlus, RotateCcw, UploadCloud, BookText, Landmark, Plus, X, Users, Search, Sparkles, CloudDownload, Loader2, FolderTree, Percent } from 'lucide-vue-next'
+import { ArrowLeft, Pencil, FolderOpen, FileSpreadsheet, Trash2, Archive, Download, ChevronRight, EllipsisVertical, CalendarPlus, RotateCcw, UploadCloud, BookText, Landmark, Plus, X, Users, Search, Sparkles, CloudDownload, Loader2, FolderTree, Percent, Check } from 'lucide-vue-next'
 import { Popover, PopoverContent, PopoverTrigger } from '~/components/ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '~/components/ui/select'
 
@@ -1463,6 +1463,18 @@ watch(dbPath, refresh)
             <p class="text-xs text-muted-foreground">El catálogo contable de esta empresa.</p>
           </div>
           <Button variant="outline" size="sm" @click="navigateTo({ path: '/puc', query: { db: dbPath } })">Abrir <ChevronRight class="size-3.5" /></Button>
+        </div>
+
+        <!-- causación del mes -->
+        <div v-if="mesVigente" class="flex items-center justify-between gap-2 rounded-lg border border-border bg-card p-3">
+          <div class="min-w-0">
+            <h3 class="flex items-center gap-1.5 text-sm font-semibold"><Check class="size-3.5 text-muted-foreground" /> Causación de {{ mesVigente.periodo }}</h3>
+            <p class="text-xs text-muted-foreground">
+              La propuesta de asiento de cada factura. Apruebas en lote lo conocido y decides
+              lo nuevo; lo que decides se recuerda.
+            </p>
+          </div>
+          <Button variant="outline" size="sm" @click="navigateTo({ path: '/causacion', query: { db: dbPath, periodo: mesVigente.periodo } })">Abrir <ChevronRight class="size-3.5" /></Button>
         </div>
 
         <!-- tarifas y UVT -->
