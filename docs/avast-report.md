@@ -13,10 +13,10 @@
 **Detection name:** `<DETECTION NAME>`
 **Alert ID:** `<ALERT ID>`
 
-**File:** `Contab-Setup-0.4.6.exe` (200,390,846 bytes)
-**Download URL:** https://github.com/SKuger/CKounting-releases/releases/download/v0.4.6/Contab-Setup-0.4.6.exe
+**File:** `Contab-Setup-0.11.0.exe` (200,568,751 bytes)
+**Download URL:** https://github.com/SKuger/CKounting-releases/releases/download/v0.11.0/Contab-Setup-0.11.0.exe
 **SHA-512 (base64, as published in `latest.yml`):**
-`062vZ+/Oxg3XMAeLf/H0U/ODo4cd3QnGeFuqHRS85Zl0o2kVyCF54FFa8N+QODCJax9hq29YkhshzlBcgtCVAA==`
+`c4PLvEdYLmPNpnFiffCh5MU4q487YU3kP08yHVbulLFKhuLf5/Itbz/svaa6jcGs/I3iyzkKvLMBDHIBVEGNOQ==`
 
 **What the software is**
 
