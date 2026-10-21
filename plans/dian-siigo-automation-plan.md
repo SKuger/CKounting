@@ -480,12 +480,14 @@ value**). Questions:
       reusing the composable split from D-092.
 
 ✅ **Done-when:** — cerrada el 2026-10-17, con **una reserva**.
-- ⚠ **Pendiente de un XML real.** Las muestras de `docs/samples/xml/` están
-  escritas a mano contra UBL 2.1 y contra la estructura que el reconocimiento
-  anotó del documento real (una póliza exenta, sin `TaxTotal`). **Nadie ha
-  corrido esto contra un XML real con IVA ni con retenciones.** Hasta entonces,
-  la forma de los impuestos está construida sobre el estándar, no sobre una
-  muestra.
+- ✅ **Comprobado contra XML reales el 2026-10-22**: cinco `AttachedDocument`
+  firmados de la DIAN. Se desenvuelven del CDATA, y salen bien CUFE, número,
+  fechas, NIT sin DV, nombres, totales y líneas. **`cbc:TaxLevelCode` viene de
+  verdad** —declaró `O-23`—, que es de lo que depende D-114.
+- ⚠ **Los impuestos siguen sin comprobarse.** Las cinco son de servicios de
+  salud, exentos, así que ninguna trae `TaxTotal`. La forma de `TaxSubtotal`,
+  `Percent` y `WithholdingTaxTotal` está construida sobre el estándar. Falta
+  **una factura real con IVA**.
 - The sample documents in `docs/samples/` parse into lines and taxes with their
   XML counterparts, and the totals match the Excel row to the cent.
 - A month **without** XML behaves exactly as today — run the existing suite and

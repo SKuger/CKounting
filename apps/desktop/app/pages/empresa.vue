@@ -120,6 +120,10 @@ const carpetaEmpresaOpen = ref(false)
 const mudanzaPlan = ref<{ total: number; movimientos: { periodo: string; origen: string; destino: string; motivo: string }[] } | null>(null)
 const mudando = ref(false)
 const carpetaElegida = ref('')
+// La mudanza reindexa los PDF al final —pdftotext y QR por archivo— y con cien
+// soportes se pasaba del tope de 30 s: la pantalla decía error mientras el
+// sidecar seguía moviendo. Va como trabajo en segundo plano (D-076).
+const mudanzaJob = useJob()
 
 async function onCarpetaEmpresaPicked(ruta: string) {
   carpetaElegida.value = ruta
@@ -140,7 +144,7 @@ async function confirmarMudanza() {
   if (mudando.value) return
   mudando.value = true
   try {
-    const r = await rpc<{ movidos: number; fallidos: number; manifiesto: string | null; reindexados: Record<string, unknown> }>(
+    const r = await mudanzaJob.correr<{ movidos: number; fallidos: number; manifiesto: string | null; reindexados: Record<string, unknown> }>(
       'mudar_carpetas', { db_path: dbPath.value, carpeta: carpetaElegida.value })
     cerrarPaneles()
     const meses = Object.keys(r.reindexados || {}).length
@@ -920,7 +924,7 @@ watch(dbPath, refresh)
         </div>
         <div class="flex gap-2">
           <Button size="sm" :disabled="mudando" @click="confirmarMudanza()">
-            {{ mudando ? 'Moviendo…' : 'Mover y ordenar' }}
+            {{ mudando ? mudanzaJob.etiqueta.value : 'Mover y ordenar' }}
           </Button>
           <Button size="sm" variant="ghost" :disabled="mudando" @click="cerrarPaneles()">Cancelar</Button>
         </div>

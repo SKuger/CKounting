@@ -123,3 +123,20 @@ def test_sin_xml_la_base_queda_exactamente_igual(conn, tmp_path: Path):
     res = documentos.indexar_carpeta(conn, vacia)
     assert res.leidos == 0 and res.fallidos == 0
     assert documentos.cufes_con_documento(conn) == set()
+
+
+def test_una_nota_credito_recibida_sale_con_signo_negativo(conn):
+    """Sin esto se causaría como una compra más, al revés (D-045)."""
+    conn.execute(
+        "INSERT INTO excel_load(id, source_path, source_name, total_rows, periodo)"
+        " VALUES (7, 'x.xlsx', 'x.xlsx', 1, '2026-10')")
+    conn.execute(
+        "INSERT INTO excel_row(load_id, row_index, cufe_cude, tipo_doc, data_json, periodo)"
+        " VALUES (7, 0, ?, 'Nota de crédito electrónica', ?, '2026-10')",
+        ("c" * 96, '{"Grupo":"Recibido","NIT Emisor":"800100200","Total":"119000","IVA":"19000"}'))
+    conn.commit()
+    doc = next(d for d in documentos.documentos_a_causar(conn, "2026-10") if d["cufe"] == "c" * 96)
+    assert doc["tipo"] == "nota_credito"
+    assert Decimal(doc["total"]) == Decimal("-119000")
+    assert Decimal(doc["subtotal"]) == Decimal("-100000")
+    assert doc["origen"] == documentos.ORIGEN_EXCEL

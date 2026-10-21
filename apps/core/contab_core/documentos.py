@@ -14,6 +14,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -199,6 +200,124 @@ def documento_por_cufe(conn: sqlite3.Connection, cufe: str) -> dict[str, Any] | 
     doc["referencias"] = [dict(r) for r in conn.execute(
         "SELECT * FROM documento_referencia WHERE documento_id = ? ORDER BY id", (doc_id,))]
     return doc
+
+
+# Los «Application response» son acuses y aceptaciones: no son documentos y no
+# se causan. Mismo criterio que en `documentos_sin_soporte`.
+TIPO_EVENTO_RADIAN = "Application response"
+
+# De dónde salió lo que sabemos del documento. La pantalla lo dice, porque no es
+# lo mismo proponer con el detalle por línea delante que con solo el total.
+ORIGEN_XML = "xml"
+ORIGEN_EXCEL = "excel"
+
+
+def _desde_la_fila(fila: sqlite3.Row) -> dict[str, Any] | None:
+    """Un documento armado con lo que el Excel de la DIAN ya trae.
+
+    **El XML es una capa pegada al Excel, nunca su reemplazo** (D-104). Si la
+    propuesta solo mirara los documentos con XML, un mes sin XML no produciría
+    nada — y los XML hay que bajarlos uno por uno del portal, con el navegador
+    abierto. Es decir: la Fase 4 no serviría hasta que alguien hiciera un trabajo
+    manual de horas.
+
+    Lo que el Excel SÍ trae: NIT y nombre del emisor, fecha, IVA y total. Con eso
+    se propone el asiento completo. Lo que NO trae es el detalle por línea ni las
+    responsabilidades del emisor — por eso el documento se marca con su origen.
+    """
+    import json as _json
+    try:
+        datos = _json.loads(fila["data_json"] or "{}")
+    except Exception:
+        datos = {}
+
+    def num(clave: str) -> Decimal:
+        bruto = datos.get(clave)
+        if bruto in (None, ""):
+            return Decimal("0")
+        try:
+            return Decimal(str(bruto).replace(",", ""))
+        except Exception:
+            return Decimal("0")
+
+    total = num("Total")
+    iva = num("IVA")
+    # Una nota crédito recibida RESTA. Va con signo negativo, igual que hace V2
+    # con el reporte (D-045); sin esto se causaría como una compra más, al revés.
+    from .excel import is_nota_credito
+    es_nc = is_nota_credito(fila["tipo_doc"])
+    if es_nc:
+        total, iva = -total, -iva
+    numero = " ".join(str(datos.get(k) or "").strip()
+                      for k in ("Prefijo", "Folio")).strip()
+    return {
+        "cufe": fila["cufe_cude"],
+        "tipo": "nota_credito" if es_nc else "factura",
+        "numero": numero or None,
+        "fecha_emision": str(datos.get("Fecha Emisión") or "")[:10] or None,
+        "emisor_nit": str(datos.get("NIT Emisor") or "").strip() or None,
+        "emisor_nombre": str(datos.get("Nombre Emisor") or "").strip() or None,
+        "receptor_nit": str(datos.get("NIT Receptor") or "").strip() or None,
+        "subtotal": str(total - iva),
+        "total_impuestos": str(iva) if iva else None,
+        "total": str(total),
+        "emisor_responsabilidades": None,
+        "lineas": [],
+        "impuestos": ([{"tipo": "01", "nombre": "IVA", "base": str(total - iva),
+                        "tarifa": None, "valor": str(iva), "es_retencion": False}]
+                      if iva else []),
+        "referencias": [],
+        "origen": ORIGEN_EXCEL,
+    }
+
+
+def documentos_a_causar(conn: sqlite3.Connection, periodo: str) -> list[dict[str, Any]]:
+    """Todos los documentos del mes, con XML si lo hay y con el Excel si no.
+
+    Devuelve el documento completo —líneas e impuestos incluidos— listo para que
+    el motor y las reglas trabajen con él, sin que ninguno de los dos tenga que
+    saber de dónde salió.
+    """
+    salida: list[dict[str, Any]] = []
+    # Solo se causan COMPRAS. La columna «Grupo» del reporte de la DIAN dice
+    # `Emitido` (ventas) o `Recibido` (compras) — ver `docs/excel-structure.md`—,
+    # y las ventas no se causan desde aquí.
+    #
+    # Las filas SIN grupo sí entran: esconder una compra significa que nunca se
+    # causa y nadie se entera; colar una venta se ve y se salta. Y como red de
+    # seguridad se descarta también lo que emitió la propia empresa, que es el
+    # mismo criterio de D-048 para V1.
+    #
+    # En el julio real del usuario esto baja de 55 documentos a 24: las otras 31
+    # eran ventas y nóminas que no tenían nada que hacer en la bandeja.
+    propio = (conn.execute("SELECT nit FROM empresa_info").fetchone() or [""])[0] or ""
+    filas = conn.execute(
+        "SELECT DISTINCT cufe_cude, data_json, tipo_doc FROM excel_row"
+        " WHERE periodo = ? AND cufe_cude IS NOT NULL"
+        " AND COALESCE(tipo_doc, '') <> ?"
+        " AND COALESCE(json_extract(data_json, '$.Grupo'), '') <> 'Emitido'",
+        (periodo, TIPO_EVENTO_RADIAN),
+    ).fetchall()
+    for fila in filas:
+        doc = documento_por_cufe(conn, fila["cufe_cude"])
+        emisor = (doc or {}).get("emisor_nit") or ""
+        if not emisor:
+            import json as _j
+            try:
+                emisor = str(_j.loads(fila["data_json"] or "{}").get("NIT Emisor") or "")
+            except Exception:
+                emisor = ""
+        if propio and emisor.strip() == propio.strip():
+            continue
+        if doc is not None:
+            doc["origen"] = ORIGEN_XML
+            salida.append(doc)
+            continue
+        desde_excel = _desde_la_fila(fila)
+        if desde_excel:
+            salida.append(desde_excel)
+    salida.sort(key=lambda d: (d.get("fecha_emision") or "", d.get("numero") or ""))
+    return salida
 
 
 def documentos_del_periodo(conn: sqlite3.Connection, periodo: str) -> list[dict[str, Any]]:

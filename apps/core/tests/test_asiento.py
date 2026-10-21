@@ -129,17 +129,31 @@ def test_sin_regla_el_documento_queda_para_decidir(conn):
     assert any("Ninguna regla" in x for x in a["avisos"])
 
 
-def test_sin_saber_nada_del_proveedor_queda_para_revisar(conn):
-    """Con 21 de 25 terceros en blanco, esto es el caso corriente — y es
-    correcto: propone la retención ordinaria pero no la da por buena."""
+def test_sin_regla_y_sin_saber_del_proveedor_queda_para_revisar(conn):
+    """Con 21 de 25 terceros en blanco, esto es el caso corriente la primera
+    vez: propone la retención ordinaria pero no la da por buena."""
     _cuentas(conn)
-    _regla(conn)
     conn.execute("UPDATE documento SET emisor_responsabilidades = NULL")
     conn.commit()
     r = asiento.generar(conn, "2026-09")
     assert r["revisar"] == 1
     assert any("no se sabe" in x.lower()
                for x in asiento.listar(conn, "2026-09")[0]["avisos"])
+
+
+def test_si_ya_hay_regla_no_se_vuelve_a_preguntar_por_el_tercero(conn):
+    """La promesa central: aprobar la primera factura de un proveedor sirve
+    para las siguientes. Si el motor siguiera pidiendo revisión por no conocer
+    sus responsabilidades, aprobar la primera no habría servido de nada."""
+    _cuentas(conn)
+    _regla(conn)
+    conn.execute("UPDATE documento SET emisor_responsabilidades = NULL")
+    conn.commit()
+    r = asiento.generar(conn, "2026-09")
+    assert r["completos"] == 1 and r["revisar"] == 0
+    avisos = asiento.listar(conn, "2026-09")[0]["avisos"]
+    assert any("se decidió la primera vez" in x for x in avisos), \
+        "sigue diciéndolo, pero ya no bloquea"
 
 
 def test_con_regla_el_documento_se_puede_aprobar_en_lote(conn):
@@ -286,3 +300,29 @@ def test_se_puede_aprobar_sin_aprender_nada(conn):
     a = asiento.listar(conn, "2026-09")[0]
     asiento.aprobar(conn, a["id"], cuenta_puc="519530", aprender_regla=False)
     assert causacion.listar(conn) == []
+
+
+# ──────── lo que la revisión adversarial destapó: la UI no podía decidir ───────
+
+def test_aprobar_diciendo_sin_retencion_libera_a_los_hermanos(conn):
+    """Desde la pantalla no se podía elegir retención ni «ninguna», así que la
+    regla aprendida no contaba como decisión y aprobar la primera factura no
+    liberaba las siguientes. Es la promesa central, y estaba rota en la UI."""
+    _cuentas(conn)
+    conn.execute("UPDATE documento SET emisor_responsabilidades = NULL")
+    conn.commit()
+    asiento.generar(conn, "2026-09")
+    a = asiento.listar(conn, "2026-09")[0]
+    assert a["estado"] == asiento.ESTADO_REVISAR
+
+    asiento.aprobar(conn, a["id"], cuenta_puc="519530", sin_retencion=True)
+
+    regla = causacion.listar(conn)[0]
+    assert regla["sin_retencion"] == 1, "la decisión queda en la regla"
+    # Otra factura del mismo proveedor: tiene que salir lista, sin retención.
+    conn.execute("UPDATE asiento_propuesto SET aprobado = 0")
+    conn.commit()
+    r = asiento.generar(conn, "2026-09")
+    assert r["completos"] == 1 and r["revisar"] == 0
+    lineas = asiento.listar(conn, "2026-09")[0]["lineas"]
+    assert not any("%" in ln["descripcion"] for ln in lineas), "ninguna línea de retención"

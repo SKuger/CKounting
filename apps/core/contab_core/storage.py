@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import log
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 # Cuánto espera una escritura a que se libere el lock antes de rendirse (ms).
 BUSY_TIMEOUT_MS = 5_000
@@ -311,6 +311,11 @@ CREATE TABLE IF NOT EXISTS regla_causacion (
   patron                TEXT,              -- texto a buscar en la factura; NULL = cualquiera
   cuenta_puc            TEXT NOT NULL,     -- a dónde va el gasto
   concepto_retencion_id INTEGER REFERENCES retencion_concepto(id),
+  -- 1 = «a este proveedor NO se le retiene», dicho a propósito. Hay que poder
+  -- distinguirlo de «nadie lo ha dicho todavía»: lo primero se puede aprobar en
+  -- lote, lo segundo hay que preguntarlo. Con un solo NULL no se distinguen, y
+  -- confundirlos significa dejar de retener sin que nadie lo decida.
+  sin_retencion         INTEGER NOT NULL DEFAULT 0,
   vigencia_desde        TEXT,
   veces_usada           INTEGER NOT NULL DEFAULT 0,
   -- 'manual'    la escribió el contador
@@ -605,6 +610,22 @@ CREATE INDEX IF NOT EXISTS idx_excel_row_fecha ON excel_row(fecha_emision);
 """
 
 
+def _m012_regla_sin_retencion(conn: sqlite3.Connection) -> None:
+    """Migración 12 — «a este proveedor no se le retiene», dicho a propósito.
+
+    `regla_causacion` ya existe en las bases con esquema 10, así que la columna
+    se añade aquí. Sin ella, un concepto de retención vacío significaba a la vez
+    «no se retiene» y «nadie lo ha decidido», y el asiento quedaba marcado para
+    siempre aunque el contador ya lo hubiera aprobado.
+    """
+    cols = {r["name"] for r in conn.execute(
+        "PRAGMA table_info(regla_causacion)").fetchall()}
+    if cols and "sin_retencion" not in cols:
+        conn.execute(
+            "ALTER TABLE regla_causacion ADD COLUMN sin_retencion"
+            " INTEGER NOT NULL DEFAULT 0")
+
+
 def _m011_asiento_y_cuentas_de_la_empresa(conn: sqlite3.Connection) -> None:
     """Migración 11 — la propuesta de asiento, y las dos cuentas que Contab no sabe.
 
@@ -773,6 +794,7 @@ MIGRACIONES: list[tuple[int, object]] = [
     (9, _m009_responsabilidades_del_xml),
     (10, _m010_reglas_causacion),
     (11, _m011_asiento_y_cuentas_de_la_empresa),
+    (12, _m012_regla_sin_retencion),
 ]
 
 

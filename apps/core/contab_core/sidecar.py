@@ -1067,7 +1067,7 @@ def _h_plan_mudanza(params: dict) -> dict:
     return carpetas_module.mudar(db_path, raiz, dry_run=True)
 
 
-def _h_mudar_carpetas(params: dict) -> dict:
+def _h_mudar_carpetas(params: dict, progress=None) -> dict:
     """Mueve de verdad, deja manifiesto, y vuelve a indexar donde quedaron.
 
     Reindexar es parte de mudar, no un paso aparte: el índice de CUFEs guarda la
@@ -1090,9 +1090,12 @@ def _h_mudar_carpetas(params: dict) -> dict:
     conn = storage_module.connect(db_path)
     try:
         storage_module.ensure_schema(conn)
-        for periodo, carpeta in storage_module.periodo_folders(db_path).items():
+        por_mes = storage_module.periodo_folders(db_path)
+        for i, (periodo, carpeta) in enumerate(por_mes.items(), 1):
             if not carpeta or not Path(carpeta).is_dir():
                 continue
+            if progress is not None:
+                progress(i, len(por_mes), f"Revisando los soportes de {periodo}…")
             try:
                 stats = pdf_cufe_module.index_folder(conn, carpeta, password=clave)
                 reindexados[periodo] = stats.to_dict()
@@ -1362,6 +1365,7 @@ def _h_asiento_aprobar(params: dict) -> dict:
                                    if params.get("concepto_retencion_id") else None),
             cuenta_proveedores=(params.get("cuenta_proveedores") or "").strip() or None,
             cuenta_iva_descontable=(params.get("cuenta_iva_descontable") or "").strip() or None,
+            sin_retencion=bool(params.get("sin_retencion")),
             aprender_regla=bool(params.get("aprender_regla", True)),
         )
     finally:
@@ -1381,6 +1385,23 @@ def _h_asiento_desaprobar(params: dict) -> dict:
     conn = _con(params["db_path"])
     try:
         return asiento_module.desaprobar(conn, int(params["id"]))
+    finally:
+        conn.close()
+
+
+def _h_asiento_exportar(params: dict) -> dict:
+    """Los asientos aprobados del mes a un Excel, una fila por línea.
+
+    Es lo que hace útil la bandeja ANTES de Siigo: sin esto, aprobar era un
+    callejón sin salida y el contador tenía que teclear mirando la pantalla.
+    """
+    periodo = storage_module._norm_periodo(params.get("periodo") or "")
+    carpeta = params.get("output_dir")
+    if not carpeta:
+        raise ValueError("Hace falta la carpeta donde guardar el archivo.")
+    conn = _con(params["db_path"])
+    try:
+        return export_module.export_asientos(conn, periodo, Path(carpeta))
     finally:
         conn.close()
 
@@ -1790,6 +1811,11 @@ ASYNC_CAPABLE: dict[str, Callable[[dict, Any], Any]] = {
     "reindex_pdfs": lambda p, progress: _h_reindex_pdfs(p, progress=progress),
     "list_load_soportes": lambda p, progress: _h_list_load_soportes(p, progress=progress),
     "terceros_consultar_rut_todos": _h_terceros_consultar_rut_todos,
+    # Los tres se pasaban de los 30 s en meses grandes: la pantalla decía error
+    # mientras el sidecar seguía trabajando.
+    "asiento_generar": lambda p, progress: _h_asiento_generar(p, progress=progress),
+    "mudar_carpetas": lambda p, progress: _h_mudar_carpetas(p, progress=progress),
+    "indexar_xml": lambda p, progress: _h_indexar_xml(p, progress=progress),
 }
 
 
@@ -1908,6 +1934,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "asiento_aprobar": _h_asiento_aprobar,
     "asiento_aprobar_lote": _h_asiento_aprobar_lote,
     "asiento_desaprobar": _h_asiento_desaprobar,
+    "asiento_exportar": _h_asiento_exportar,
     "cuentas_empresa": _h_cuentas_empresa,
     "tarifas_list": _h_tarifas_list,
     "tarifas_guardar_concepto": _h_tarifas_guardar_concepto,

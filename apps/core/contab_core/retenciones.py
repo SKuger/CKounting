@@ -155,6 +155,8 @@ def calcular(
     documento: dict[str, Any] | None,
     tercero: dict[str, Any] | None = None,
     concepto_id: int | None = None,
+    sin_retencion: bool = False,
+    tercero_decidido: bool = False,
     anio: int | None = None,
 ) -> Calculo:
     """Las retenciones que corresponden a este documento.
@@ -179,11 +181,17 @@ def calcular(
 
     res.responsabilidades, res.origen_tercero = datos_del_tercero(tercero, documento)
     if res.origen_tercero == ORIGEN_SIN_DATOS:
-        res.revisar = True
+        # `tercero_decidido` significa que ya existe una regla para este
+        # proveedor, es decir que una persona YA miró y decidió qué hacer con
+        # él. Volver a marcarlo haría que cada factura suya pidiera revisión
+        # para siempre, y entonces aprobar la primera no serviría de nada.
+        res.revisar = not tercero_decidido
         res.avisos.append(
             "No se sabe si este proveedor es gran contribuyente o autorretenedor: "
-            "ni está en el catálogo ni la factura lo declara. Se propone la "
-            "retención ordinaria — conviene mirarla.")
+            "ni está en el catálogo ni la factura lo declara. "
+            + ("Se aplica lo que se decidió la primera vez."
+               if tercero_decidido
+               else "Se propone la retención ordinaria — conviene mirarla."))
     elif res.origen_tercero == ORIGEN_FACTURA:
         res.avisos.append("Las responsabilidades del proveedor las declara la factura.")
 
@@ -196,6 +204,9 @@ def calcular(
     elif _tiene(res.responsabilidades, AUTORRETENEDOR):
         res.avisos.append(
             "No se retiene renta: el proveedor es autorretenedor (O-15).")
+    elif sin_retencion:
+        # Lo decidió una persona, así que no hay nada que preguntar.
+        res.avisos.append("A este proveedor no se le practica retención en la fuente.")
     elif concepto_id is None:
         res.revisar = True
         res.avisos.append("Falta decir qué concepto de retención aplica.")

@@ -66,12 +66,23 @@ class Resumen:
         return {
             "periodo": self.periodo, "total": self.total,
             "completos": self.completos, "revisar": self.revisar,
+            # Cuántos se propusieron sin XML: salen igual, pero sin detalle.
             "sin_xml": self.sin_xml, "avisos": self.avisos[:20],
             # Lo que la pantalla del mes enseña: «412 documentos · 380 con regla
             # conocida [aprobar todos] · 32 nuevos [decidir]».
             "porcentaje_completo": (
                 round(self.completos * 100 / self.total) if self.total else 0),
         }
+
+
+def _ya_lo_decidio(propuesta) -> bool:
+    """¿Existe ya una regla que diga qué hacer con la retención de este proveedor?
+
+    Si la hay, una persona ya miró. Seguir pidiendo revisión por no conocer sus
+    responsabilidades haría que aprobar la primera factura no sirviera de nada.
+    """
+    return bool(propuesta.seguro
+                and (propuesta.concepto_retencion_id or propuesta.sin_retencion))
 
 
 def _d(v: Any) -> Decimal:
@@ -111,15 +122,16 @@ def generar(
         res.avisos.append(
             "Esta empresa no tiene perfil fiscal: no se calculan retenciones.")
 
-    docs = documentos_module.documentos_del_periodo(conn, periodo)
-    filas_del_mes = conn.execute(
-        "SELECT COUNT(DISTINCT cufe_cude) FROM excel_row WHERE periodo = ?"
-        " AND cufe_cude IS NOT NULL", (periodo,)).fetchone()[0]
-    res.sin_xml = max(filas_del_mes - len(docs), 0)
+    # Con XML si lo hay, y con lo que el Excel ya trae si no (D-104). Si solo se
+    # miraran los que tienen XML, un mes sin XML no produciría ni una propuesta —
+    # y los XML hay que bajarlos uno por uno del portal.
+    docs = documentos_module.documentos_a_causar(conn, periodo)
+    res.sin_xml = sum(1 for d in docs
+                      if d.get("origen") == documentos_module.ORIGEN_EXCEL)
 
-    for i, cabecera in enumerate(docs, 1):
+    for i, documento in enumerate(docs, 1):
         avisa(f"Proponiendo {i} de {len(docs)}…")
-        cufe = cabecera["cufe"]
+        cufe = documento["cufe"]
         ya = conn.execute(
             "SELECT id, aprobado FROM asiento_propuesto WHERE periodo = ? AND cufe = ?",
             (periodo, cufe)).fetchone()
@@ -128,22 +140,25 @@ def generar(
             res.completos += 1
             continue
 
-        documento = documentos_module.documento_por_cufe(conn, cufe)
-        if documento is None:
-            continue
         res.total += 1
 
         propuesta = causacion_module.proponer(conn, documento)
         tercero = terceros_module.obtener(conn, documento.get("emisor_nit") or "")
         calculo = retenciones_module.calcular(
             conn, perfil=perfil, documento=documento, tercero=tercero,
-            concepto_id=propuesta.concepto_retencion_id)
+            concepto_id=propuesta.concepto_retencion_id,
+            sin_retencion=propuesta.sin_retencion,
+            tercero_decidido=_ya_lo_decidio(propuesta))
 
         lineas, avisos = _lineas_de(
             documento, propuesta, calculo,
             cuenta_proveedores=cuenta_proveedores, cuenta_iva=cuenta_iva,
             responsable_iva=bool(perfil and perfil.get("responsable_iva")))
         avisos = [*avisos, *calculo.avisos]
+        if documento.get("origen") == documentos_module.ORIGEN_EXCEL:
+            avisos.append(
+                "Sin el XML de este documento: se propuso con el total y el IVA "
+                "del reporte de la DIAN, sin el detalle por línea.")
         if not propuesta.seguro:
             avisos.insert(0, propuesta.por_que)
 
@@ -283,6 +298,7 @@ def aprobar(
     concepto_retencion_id: int | None = None,
     cuenta_proveedores: str | None = None,
     cuenta_iva_descontable: str | None = None,
+    sin_retencion: bool = False,
     aprender_regla: bool = True,
 ) -> dict[str, Any]:
     """Da por bueno un asiento, con las correcciones que él haya hecho.
@@ -312,10 +328,18 @@ def aprobar(
         causacion_module.aprender(
             conn, cuenta_puc=cuenta_puc, tercero_nit=a["tercero_nit"],
             patron=(patron or "").strip() or None,
-            concepto_retencion_id=concepto_retencion_id)
+            concepto_retencion_id=concepto_retencion_id,
+            # «A este proveedor no se le retiene», dicho por él. Va a la regla
+            # para que las siguientes facturas no vuelvan a preguntarlo.
+            sin_retencion=sin_retencion)
 
     # Se rehace el asiento con lo corregido y se marca aprobado.
-    documento = documentos_module.documento_por_cufe(conn, a["cufe"])
+    # El documento puede venir del XML o del Excel: `aprobar` tiene que mirar en
+    # los dos sitios. Buscándolo solo por XML, en un mes sin XML la corrección
+    # del contador no se aplicaba a ninguna línea — y él la veía ignorada.
+    documento = next(
+        (d for d in documentos_module.documentos_a_causar(conn, a["periodo"])
+         if d["cufe"] == a["cufe"]), None)
     if documento is not None:
         info = dict(conn.execute("SELECT * FROM empresa_info").fetchone() or {})
         perfil = perfil_module.perfil_vigente(conn, fecha=f"{a['periodo']}-01")
@@ -326,7 +350,10 @@ def aprobar(
         tercero = terceros_module.obtener(conn, documento.get("emisor_nit") or "")
         calculo = retenciones_module.calcular(
             conn, perfil=perfil, documento=documento, tercero=tercero,
-            concepto_id=concepto_retencion_id or propuesta.concepto_retencion_id)
+            concepto_id=concepto_retencion_id or propuesta.concepto_retencion_id,
+            sin_retencion=sin_retencion
+            or (propuesta.sin_retencion and not concepto_retencion_id),
+            tercero_decidido=True)   # la está aprobando una persona
         lineas, avisos = _lineas_de(
             documento, propuesta, calculo,
             cuenta_proveedores=(info.get("cuenta_proveedores") or "").strip(),

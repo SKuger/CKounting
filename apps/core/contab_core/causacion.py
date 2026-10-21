@@ -56,6 +56,8 @@ class Propuesta:
     # siempre. No es lo mismo que un proveedor nuevo, y la bandeja lo dice
     # distinto: «factura algo distinto a lo de siempre».
     concepto_nuevo: bool = False
+    # El contador dijo que a esto NO se le retiene. Distinto de «no lo ha dicho».
+    sin_retencion: bool = False
 
     def como_dict(self) -> dict[str, Any]:
         return {
@@ -63,6 +65,7 @@ class Propuesta:
             "concepto_retencion_id": self.concepto_retencion_id,
             "regla_id": self.regla_id, "por_que": self.por_que, "seguro": self.seguro,
             "concepto_nuevo": self.concepto_nuevo,
+            "sin_retencion": self.sin_retencion,
         }
 
 
@@ -141,6 +144,7 @@ def proponer(conn, documento: dict[str, Any]) -> Propuesta:
     return Propuesta(
         cuenta_puc=mejor["cuenta_puc"],
         concepto_retencion_id=mejor["concepto_retencion_id"],
+        sin_retencion=bool(mejor["sin_retencion"]),
         regla_id=mejor["id"], por_que=por_que, seguro=True,
     )
 
@@ -152,6 +156,7 @@ def aprender(
     tercero_nit: str | None = None,
     patron: str | None = None,
     concepto_retencion_id: int | None = None,
+    sin_retencion: bool = False,
     vigencia_desde: str | None = None,
 ) -> dict[str, Any]:
     """Guarda lo que el contador decidió, para no volvérselo a preguntar.
@@ -174,16 +179,17 @@ def aprender(
     if ya:
         conn.execute(
             "UPDATE regla_causacion SET cuenta_puc = ?, concepto_retencion_id = ?,"
-            " archivada = 0, updated_at = datetime('now') WHERE id = ?",
-            (cuenta_puc, concepto_retencion_id, ya[0]))
+            " sin_retencion = ?, archivada = 0, updated_at = datetime('now')"
+            " WHERE id = ?",
+            (cuenta_puc, concepto_retencion_id, 1 if sin_retencion else 0, ya[0]))
         rid = ya[0]
     else:
         cur = conn.execute(
             "INSERT INTO regla_causacion(tercero_nit, patron, cuenta_puc,"
-            " concepto_retencion_id, vigencia_desde, origen)"
-            " VALUES (?,?,?,?,?,?)",
+            " concepto_retencion_id, sin_retencion, vigencia_desde, origen)"
+            " VALUES (?,?,?,?,?,?,?)",
             (tercero_nit, patron, cuenta_puc, concepto_retencion_id,
-             vigencia_desde, ORIGEN_APRENDIDA))
+             1 if sin_retencion else 0, vigencia_desde, ORIGEN_APRENDIDA))
         rid = int(cur.lastrowid)
     conn.commit()
     return dict(conn.execute(

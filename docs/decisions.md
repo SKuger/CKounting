@@ -1232,3 +1232,63 @@ asiento; preguntarla con el asiento delante es la misma pregunta con la
 respuesta a la vista. Y como cada empresa tiene su propia base (D-003), que «las
 cuentas varíen por empresa» sale gratis: no hay una tabla común que pudiera
 mezclarlas.
+
+## D-122 — La propuesta se arma del Excel cuando no hay XML ✅
+
+**Decisión**: `asiento.generar` toma el documento del XML si existe y **de la
+fila del Excel de la DIAN si no**. El Excel ya trae NIT y nombre del emisor,
+fecha, IVA y total: con eso el asiento se propone completo, sin el detalle por
+línea.
+
+**Por qué**: es D-104 llevado hasta el final —el XML es una capa pegada al
+Excel, nunca su reemplazo— y hasta ahora el código lo incumplía. Un ensayo sobre
+el julio real del contador lo destapó: **55 documentos, 0 propuestas**, porque
+ninguno tenía XML. Y los XML se bajan uno por uno del portal con el navegador
+abierto, así que exigirlos dejaba la Fase 4 inservible hasta hacer horas de
+trabajo manual.
+
+## D-123 — Solo se causan compras ✅
+
+**Decisión**: la bandeja ignora las filas con `Grupo = Emitido` y las que emitió
+la propia empresa.
+
+**Por qué**: `Grupo` dice `Emitido` (ventas) o `Recibido` (compras) — ver
+`docs/excel-structure.md`—, y las ventas no se causan desde aquí. En el julio
+real eran **31 de 55**: quince facturas emitidas, siete documentos soporte,
+cuatro notas y cinco nóminas, todas pidiendo una cuenta de gasto que no les
+corresponde. Las filas **sin** grupo sí entran: esconder una compra significa
+que nunca se causa y nadie se entera; colar una venta se ve y se salta.
+
+## D-124 — Si ya hay regla, no se vuelve a preguntar por el tercero ✅
+
+**Decisión**: cuando existe una regla que decide la retención de un proveedor,
+el motor **deja de marcar** sus facturas por no conocer sus responsabilidades.
+El aviso se conserva; lo que desaparece es el bloqueo.
+
+**Por qué**: sin esto, aprobar la primera factura de un proveedor no servía de
+nada — las siguientes volvían a pedir revisión por el mismo motivo, para
+siempre. Es justo la promesa que el contador pidió: «como por lo general el
+concepto que factura el proveedor es el mismo, las siguientes se registrarían de
+esa forma». Comprobado sobre su julio real: aprobar una de las cuatro facturas
+de un proveedor dejó **las cuatro** listas.
+
+## D-125 — Solo se exporta lo aprobado ✅
+
+**Decisión**: `export_asientos` saca a Excel únicamente los asientos con
+`aprobado = 1`. Lo que está «por decidir» no entra aunque tenga todas sus
+líneas.
+
+**Por qué**: una propuesta no es un asiento todavía. Mezclarlas en el mismo
+archivo es exactamente cómo acaba contabilizado en Siigo algo que nadie aprobó
+— y el archivo es lo que él va a importar. El archivo además dice si cuadra,
+que es la comprobación más barata que existe antes de llevarlo.
+
+## D-126 — Lo que se pasa de 30 segundos va en segundo plano ✅
+
+**Decisión**: armar la propuesta del mes, mudar las carpetas y leer los XML
+corren como trabajos con progreso (D-076), no como RPC síncronos.
+
+**Por qué**: la mudanza reindexa cada PDF con `pdftotext` y lector de QR; con
+cien soportes se pasa del tope de 30 s, la pantalla dice «error» y el sidecar
+sigue trabajando. Un error falso mientras se mueven documentos de un cliente es
+la peor combinación: el contador no sabe si parar, repetir o esperar.
