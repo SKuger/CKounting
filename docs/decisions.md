@@ -1166,3 +1166,39 @@ devuelve cero retenciones y lo dice.
 **Por qué**: el mismo criterio de la Fase 1 con `perfil_vigente`. Una retención
 calculada sobre un supuesto hace más daño que una no calculada: la primera se
 contabiliza y se paga, la segunda se nota.
+
+## D-116 — La regla del proveedor gana a la del concepto ✅
+
+**Decisión**: cuando una regla por tercero y una por texto aplican al mismo
+documento, se usa la del tercero. Una que acierte las dos cosas gana a ambas.
+
+**Por qué**: el contador decide la cuenta mirando la factura, **salvo** unos
+proveedores que siempre van a la misma cuenta «pase lo que pase» —nombró tres—.
+Eso es una excepción explícita, y una excepción que no gana no es una excepción.
+
+## D-117 — El crédito al proveedor es el resto, no un dato ✅
+
+**Decisión**: en la propuesta de asiento, la línea de proveedores se calcula
+como el total menos lo retenido, en vez de leerse de ninguna parte.
+
+**Por qué**: así el asiento **cuadra por construcción**. Si se tomara de otro
+lado, cuadrar dependería de que dos sumas coincidan, y el día que no coincidan
+se contabiliza un asiento descuadrado que alguien deshace a mano.
+
+## D-118 — Las cuentas que Contab no puede deducir no tienen valor por defecto ✅
+
+**Decisión**: `cuenta_proveedores` y `cuenta_iva_descontable` nacen vacías. Sin
+ellas la propuesta sale marcada diciendo cuál falta.
+
+**Por qué**: poner `220505` «porque es lo habitual» produciría un mes entero
+contabilizado contra una cuenta que puede no ser la de esa empresa, y eso se
+descubre tarde. Es el mismo criterio del perfil fiscal: no inventar un valor
+por defecto en algo que se contabiliza.
+
+## D-119 — Volver a generar la propuesta no toca lo aprobado ✅
+
+**Decisión**: `asiento.generar` salta los asientos ya aprobados.
+
+**Por qué**: rehacer la propuesta después de que el contador aprobó media mañana
+de trabajo le borraría esa mañana. Y la propuesta se rehace a menudo —cada vez
+que llega un XML nuevo o cambia una regla—.

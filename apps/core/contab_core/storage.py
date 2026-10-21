@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import log
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 11
 
 # Cuánto espera una escritura a que se libere el lock antes de rendirse (ms).
 BUSY_TIMEOUT_MS = 5_000
@@ -265,6 +265,63 @@ CREATE TABLE IF NOT EXISTS tarifas_import (
   conceptos     INTEGER NOT NULL DEFAULT 0,
   imported_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- ── Fase 4.3: las reglas de causación ────────────────────────────────────────
+-- «Cuando llega una factura de un proveedor nuevo, ¿qué mira para decidir la
+-- cuenta?» → «LA FACTURA». Y aparte: hay proveedores que SIEMPRE van a la misma
+-- cuenta pase lo que pase. De ahí las dos formas de regla y su orden.
+--
+-- SIN centro de costo (D-112): el contador respondió que no los usa.
+-- ── Fase 4.4: la propuesta de asiento del mes ────────────────────────────────
+-- Una cabecera por documento y sus líneas de débito y crédito. Es una PROPUESTA:
+-- nada sale hacia Siigo hasta que el contador la apruebe (Fase 4.5).
+CREATE TABLE IF NOT EXISTS asiento_propuesto (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  periodo       TEXT NOT NULL,
+  cufe          TEXT NOT NULL,
+  tercero_nit   TEXT,
+  fecha         TEXT,
+  -- 'completo'  se puede aprobar en lote
+  -- 'revisar'   falta algo o hay una duda que el contador tiene que resolver
+  estado        TEXT NOT NULL DEFAULT 'revisar',
+  avisos        TEXT,                -- por qué hay que revisarlo, en su idioma
+  regla_id      INTEGER,
+  aprobado      INTEGER NOT NULL DEFAULT 0,
+  aprobado_at   TEXT,
+  generado_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(periodo, cufe)
+);
+CREATE INDEX IF NOT EXISTS ix_asiento_periodo ON asiento_propuesto(periodo);
+
+CREATE TABLE IF NOT EXISTS asiento_linea (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  asiento_id    INTEGER NOT NULL REFERENCES asiento_propuesto(id) ON DELETE CASCADE,
+  orden         INTEGER NOT NULL DEFAULT 0,
+  cuenta_puc    TEXT,
+  descripcion   TEXT,
+  -- TEXT y Decimal: el REAL de SQLite es float y ahí se pierde el céntimo (D-075)
+  debito        TEXT NOT NULL DEFAULT '0',
+  credito       TEXT NOT NULL DEFAULT '0'
+);
+CREATE INDEX IF NOT EXISTS ix_asiento_linea ON asiento_linea(asiento_id);
+
+CREATE TABLE IF NOT EXISTS regla_causacion (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  tercero_nit           TEXT,              -- NULL = cualquier proveedor
+  patron                TEXT,              -- texto a buscar en la factura; NULL = cualquiera
+  cuenta_puc            TEXT NOT NULL,     -- a dónde va el gasto
+  concepto_retencion_id INTEGER REFERENCES retencion_concepto(id),
+  vigencia_desde        TEXT,
+  veces_usada           INTEGER NOT NULL DEFAULT 0,
+  -- 'manual'    la escribió el contador
+  -- 'aprendida' salió de una decisión suya en la bandeja de aprobación
+  origen                TEXT NOT NULL DEFAULT 'manual',
+  archivada             INTEGER NOT NULL DEFAULT 0,
+  created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(tercero_nit, patron, vigencia_desde)
+);
+CREATE INDEX IF NOT EXISTS ix_regla_tercero ON regla_causacion(tercero_nit);
 
 CREATE TABLE IF NOT EXISTS puc_account (
   id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -548,6 +605,35 @@ CREATE INDEX IF NOT EXISTS idx_excel_row_fecha ON excel_row(fecha_emision);
 """
 
 
+def _m011_asiento_y_cuentas_de_la_empresa(conn: sqlite3.Connection) -> None:
+    """Migración 11 — la propuesta de asiento, y las dos cuentas que Contab no sabe.
+
+    Un asiento de compra necesita, además de la cuenta del gasto, **el pasivo con
+    el proveedor** y, si la empresa es responsable de IVA, **el IVA descontable**.
+    Ninguna de las dos se puede deducir: son del PUC de cada empresa.
+
+    No se ponen por defecto a propósito. Poner `220505` porque «es lo habitual»
+    produciría un mes entero contabilizado contra una cuenta que puede no ser la
+    suya, y eso se descubre tarde. Vacías, la propuesta sale marcada diciendo
+    cuál falta.
+    """
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(empresa_info)").fetchall()}
+    if "cuenta_proveedores" not in cols:
+        conn.execute("ALTER TABLE empresa_info ADD COLUMN cuenta_proveedores TEXT")
+    if "cuenta_iva_descontable" not in cols:
+        conn.execute("ALTER TABLE empresa_info ADD COLUMN cuenta_iva_descontable TEXT")
+
+
+def _m010_reglas_causacion(conn: sqlite3.Connection) -> None:
+    """Migración 10 — las reglas de causación (Fase 4.3).
+
+    La tabla se declara en SCHEMA_SQL con `IF NOT EXISTS`. **Sin columna de
+    centro de costo** (D-112): el contador respondió que no los usa, y un campo
+    que nadie llena solo sirve para llenarse mal.
+    """
+    return None
+
+
 def _m009_responsabilidades_del_xml(conn: sqlite3.Connection) -> None:
     """Migración 9 — lo que la factura declara del emisor (Fase 4.2).
 
@@ -685,6 +771,8 @@ MIGRACIONES: list[tuple[int, object]] = [
     (7, _m007_documentos_xml),
     (8, _m008_tarifas),
     (9, _m009_responsabilidades_del_xml),
+    (10, _m010_reglas_causacion),
+    (11, _m011_asiento_y_cuentas_de_la_empresa),
 ]
 
 
@@ -759,7 +847,8 @@ def read_empresa_info(db_path: str | Path) -> dict | None:
     try:
         ensure_schema(conn)
         row = conn.execute(
-            "SELECT nit, dv, razon_social, default_folder, pdfs_folder, archived, created_at "
+            "SELECT nit, dv, razon_social, default_folder, pdfs_folder, archived, created_at, "
+            "cuenta_proveedores, cuenta_iva_descontable "
             "FROM empresa_info LIMIT 1"
         ).fetchone()
         if row is None:

@@ -561,11 +561,20 @@ es volver a subir el archivo, no publicar una versión.)*
 - [ ] ~~4.2 original~~ — `apps/core/contab_core/retenciones.py`: company profile (1.1) +
       tercero profile (1.3/1.4) + document (Phase 3) → retención en la fuente,
       ReteIVA, ReteICA and autorretención where they apply.
-- [ ] **4.3** — `regla_causacion` (tercero · concepto · pattern → cuenta PUC +
+- [x] **4.3** — ✅ 2026-10-21. Dos formas de regla, y la del proveedor gana a la
+      del texto: «hay proveedores que SIEMPRE van a la misma cuenta pase lo que
+      pase». **Sin centro de costo** (D-112). Cada decisión en la bandeja
+      escribe o afina una regla, que es lo que hace barato el segundo mes.
+- [ ] ~~4.3 original~~ — `regla_causacion` (tercero · concepto · pattern → cuenta PUC +
       centro de costo, with validity) and `apps/core/contab_core/causacion.py`.
       The chart of accounts is already there: [`puc.py`](../apps/core/contab_core/puc.py)
       imports it per company.
-- [ ] **4.4** — Generate `asiento_propuesto` for a whole month as a background job
+- [x] **4.4** — ✅ 2026-10-21. La propuesta del mes entero, como trabajo en
+      segundo plano. El crédito al proveedor es **el resto**, así el asiento
+      cuadra por construcción. Las dos cuentas que Contab no puede deducir —el
+      pasivo con el proveedor y el IVA descontable— **no se ponen por defecto**:
+      si faltan, el asiento sale marcado diciendo cuál.
+- [ ] ~~4.4 original~~ — Generate `asiento_propuesto` for a whole month as a background job
       (same `jobs.py` pattern — this one has no duration ceiling either).
 - [ ] **4.5** — The approval tray in the frontend: known documents approved in
       bulk, new ones decided one by one, and **every new decision writes or

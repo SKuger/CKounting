@@ -87,6 +87,18 @@ def test_las_lineas_traen_su_detalle(factura):
     assert lineas[0].impuestos[0].tarifa == Decimal("19.00")
 
 
+def test_la_factura_declara_las_responsabilidades_del_emisor(factura):
+    """`cbc:TaxLevelCode` del anexo DIAN. Es lo que el contador mira cuando no
+    tiene el RUT del proveedor delante, y por eso se lee."""
+    assert factura.documento.emisor_responsabilidades == ["O-13", "O-48"]
+
+
+def test_las_responsabilidades_se_normalizan():
+    assert xml_ubl.responsabilidades_de("O-13;O-15") == ["O-13", "O-15"]
+    assert xml_ubl.responsabilidades_de("O13, O 48") == ["O-13", "O-48"]
+    assert xml_ubl.responsabilidades_de("") == []
+
+
 def test_una_factura_exenta_no_inventa_impuestos():
     """La muestra real del portal era una póliza: sin `TaxTotal` ninguno."""
     r = xml_ubl.leer(MUESTRAS / "factura-exenta.xml")
