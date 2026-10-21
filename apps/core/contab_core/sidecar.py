@@ -33,6 +33,7 @@ from . import puc as puc_module
 from . import rename_soportes as rename_module
 from . import storage as storage_module
 from . import tablero as tablero_module
+from . import tarifas as tarifas_module
 from . import terceros as terceros_module
 from . import validations as validations_module
 
@@ -1290,6 +1291,84 @@ def _digits(s: Any) -> str:
     return "".join(c for c in str(s or "") if c.isdigit())
 
 
+def _h_tarifas_import(params: dict) -> dict:
+    """Sube el Excel de tarifas del contador (4.1). `dry_run` enseña sin escribir.
+
+    No se valida contra el NIT como en el PUC: las tarifas son nacionales, el
+    mismo archivo sirve para las cinco empresas que lleva.
+    """
+    db_path = Path(params["db_path"])
+    source_path = Path(params["source_path"])
+    dry_run = bool(params.get("dry_run", False))
+    try:
+        cargado = tarifas_module.cargar(source_path)
+    except Exception as exc:
+        raise ValueError(f"No se pudo leer el archivo: {exc}") from exc
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return tarifas_module.guardar(conn, cargado, dry_run=dry_run)
+    finally:
+        conn.close()
+
+
+def _h_tarifas_list(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    anio = int(params.get("anio") or 0) or None
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        conceptos = tarifas_module.listar_conceptos(
+            conn, incluir_archivados=bool(params.get("incluir_archivados")))
+        if anio:
+            # La base en pesos depende del año; se calcula al listar y no se
+            # guarda, porque cambia sola cuando cambia la UVT.
+            for c in conceptos:
+                pesos = tarifas_module.base_minima_pesos(conn, c, anio)
+                c["base_minima_pesos"] = str(pesos) if pesos is not None else None
+        return {
+            "conceptos": conceptos,
+            "uvt": tarifas_module.listar_uvt(conn),
+            "ultima_importacion": tarifas_module.ultima_importacion(conn),
+            "anio": anio,
+        }
+    finally:
+        conn.close()
+
+
+def _h_tarifas_guardar_concepto(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return tarifas_module.guardar_concepto(conn, params.get("concepto") or {})
+    finally:
+        conn.close()
+
+
+def _h_tarifas_guardar_uvt(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return tarifas_module.guardar_uvt(
+            conn, int(params["anio"]), str(params["valor"]), str(params.get("norma") or ""))
+    finally:
+        conn.close()
+
+
+def _h_tarifas_archivar_concepto(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        tarifas_module.archivar_concepto(
+            conn, int(params["id"]), bool(params.get("archivado", True)))
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
 def _h_puc_import(params: dict) -> dict:
     """Sube un dump de PUC (upsert por código = fusionar). Valida que el NIT del
     encabezado del Excel coincida con la empresa: si no, BLOQUEA (D-070).
@@ -1707,6 +1786,11 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "tablero": _h_tablero,
     # Plan Único de Cuentas (PUC) por empresa (D-070)
     "puc_import": _h_puc_import,
+    "tarifas_import": _h_tarifas_import,
+    "tarifas_list": _h_tarifas_list,
+    "tarifas_guardar_concepto": _h_tarifas_guardar_concepto,
+    "tarifas_guardar_uvt": _h_tarifas_guardar_uvt,
+    "tarifas_archivar_concepto": _h_tarifas_archivar_concepto,
     "puc_list": _h_puc_list,
     "puc_save_account": _h_puc_save_account,
     "puc_archive_account": _h_puc_archive_account,
