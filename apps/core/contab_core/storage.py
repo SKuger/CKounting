@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import log
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 # Cuánto espera una escritura a que se libere el lock antes de rendirse (ms).
 BUSY_TIMEOUT_MS = 5_000
@@ -218,6 +218,51 @@ CREATE INDEX IF NOT EXISTS idx_pdf_cufe_value_hex ON pdf_cufe_value(cufe_cude);
 -- Plan Único de Cuentas (PUC) — a nivel EMPRESA (E5, D-070). Se sube un dump Excel
 -- que hace upsert por 'codigo' (fusionar): las cuentas manuales que no vienen en el
 -- dump se conservan. 'fuente' distingue dump vs manual; 'archived' es soft-hide.
+-- ── Fase 4.1: los parámetros que son LEY y cambian por decreto ───────────────
+-- Se importan del Excel del contador (D-102). Si los sembrara el programa, cada
+-- enero habría que publicar una versión para cambiar un número, y quien no
+-- actualizara liquidaría con las del año pasado sin enterarse.
+CREATE TABLE IF NOT EXISTS uvt (
+  anio        INTEGER PRIMARY KEY,
+  valor       TEXT NOT NULL,        -- pesos. TEXT + Decimal: el REAL de SQLite es float (D-075)
+  norma       TEXT,                 -- «Resolución DIAN 000238 de 2025» — la trazabilidad del número
+  fuente      TEXT NOT NULL DEFAULT 'manual',   -- 'excel' | 'manual'
+  updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Un concepto de retención por fila. El mismo concepto puede aparecer dos veces
+-- con tarifas distintas según el tercero sea declarante o no: por eso la llave
+-- incluye `aplica_a`.
+CREATE TABLE IF NOT EXISTS retencion_concepto (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  concepto        TEXT NOT NULL,
+  aplica_a        TEXT NOT NULL DEFAULT '',   -- 'declarantes' | 'no_declarantes' | 'ambos' | texto
+  -- 'base'  → la tarifa se aplica sobre la base gravable (retefuente)
+  -- 'iva'   → la tarifa se aplica sobre el IVA facturado (ReteIVA)
+  -- Sin esta marca, ReteIVA se calcularía sobre la base y saldría mal.
+  sobre           TEXT NOT NULL DEFAULT 'base',
+  tarifa          TEXT,               -- porcentaje, p.ej. '11' = 11%. NULL si no es numérica
+  tarifa_texto    TEXT,               -- lo que decía el Excel cuando no era un número
+  base_minima_uvt TEXT,               -- NULL = no hay mínimo: se retiene desde el primer peso
+  cuenta_puc      TEXT,
+  vigencia_desde  TEXT,               -- 'AAAA-MM-DD'
+  observaciones   TEXT,
+  fuente          TEXT NOT NULL DEFAULT 'manual',   -- 'excel' | 'manual'
+  archivado       INTEGER NOT NULL DEFAULT 0,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(concepto, aplica_a, vigencia_desde)
+);
+CREATE INDEX IF NOT EXISTS ix_retencion_concepto_vig ON retencion_concepto(vigencia_desde);
+
+CREATE TABLE IF NOT EXISTS tarifas_import (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_name   TEXT NOT NULL,
+  uvt_filas     INTEGER NOT NULL DEFAULT 0,
+  conceptos     INTEGER NOT NULL DEFAULT 0,
+  imported_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS puc_account (
   id                  INTEGER PRIMARY KEY AUTOINCREMENT,
   codigo              TEXT NOT NULL,
@@ -500,6 +545,18 @@ CREATE INDEX IF NOT EXISTS idx_excel_row_fecha ON excel_row(fecha_emision);
 """
 
 
+def _m008_tarifas(conn: sqlite3.Connection) -> None:
+    """Migración 8 — UVT y conceptos de retención (Fase 4.1).
+
+    Las tablas se declaran en SCHEMA_SQL con `IF NOT EXISTS`. **No hay tabla de
+    tarifas de ICA**: ninguna de las cinco empresas del contador es agente de
+    ReteICA, y lo confirmó por escrito el 2026-10-20. Construirla «por si acaso»
+    sería esquema muerto desde el primer día (D-085); cuando alguna lo sea, se
+    añade.
+    """
+    return None
+
+
 def _m007_documentos_xml(conn: sqlite3.Connection) -> None:
     """Migración 7 — el documento del XML: líneas, impuestos y referencias (Fase 3.2).
 
@@ -612,6 +669,7 @@ MIGRACIONES: list[tuple[int, object]] = [
     (5, _m005_terceros),
     (6, _m006_bitacora_ingesta),
     (7, _m007_documentos_xml),
+    (8, _m008_tarifas),
 ]
 
 

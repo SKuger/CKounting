@@ -528,7 +528,15 @@ web search, and updating them each year is re-uploading the file — not a relea
 *(ES: las tarifas se importan de tu Excel, igual que el PUC; actualizarlas cada año
 es volver a subir el archivo, no publicar una versión.)*
 
-- [ ] **4.1** — Parameter tables, all dated and all editable from the UI after
+- [x] **4.1** — ✅ 2026-10-20. Hecha contra el Excel real del contador, leído y
+      documentado en [`docs/tarifas-structure.md`](../docs/tarifas-structure.md).
+      **Sin `ica_tarifa`**: ninguna de sus cinco empresas es agente de ReteICA y
+      lo confirmó por escrito, así que esa tabla sería esquema muerto desde el
+      primer día (D-085). Lo que más costó: las tarifas llegan como **fracción
+      con formato de porcentaje** (`0.11` = 11%), y leerlas como número de
+      porcentaje habría liquidado al 0,11% en todas las filas sin que nada
+      fallara.
+- [ ] ~~4.1 original~~ — Parameter tables, all dated and all editable from the UI after
       import: `uvt` (año, valor), `retencion_concepto` (concepto, tarifa, base
       mínima en UVT, cuenta PUC, vigencia), `ica_tarifa` (municipio, actividad, por
       mil, vigencia). The importer follows the shape of
