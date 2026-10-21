@@ -129,17 +129,31 @@ def test_sin_regla_el_documento_queda_para_decidir(conn):
     assert any("Ninguna regla" in x for x in a["avisos"])
 
 
-def test_sin_saber_nada_del_proveedor_queda_para_revisar(conn):
-    """Con 21 de 25 terceros en blanco, esto es el caso corriente — y es
-    correcto: propone la retención ordinaria pero no la da por buena."""
+def test_sin_regla_y_sin_saber_del_proveedor_queda_para_revisar(conn):
+    """Con 21 de 25 terceros en blanco, esto es el caso corriente la primera
+    vez: propone la retención ordinaria pero no la da por buena."""
     _cuentas(conn)
-    _regla(conn)
     conn.execute("UPDATE documento SET emisor_responsabilidades = NULL")
     conn.commit()
     r = asiento.generar(conn, "2026-09")
     assert r["revisar"] == 1
     assert any("no se sabe" in x.lower()
                for x in asiento.listar(conn, "2026-09")[0]["avisos"])
+
+
+def test_si_ya_hay_regla_no_se_vuelve_a_preguntar_por_el_tercero(conn):
+    """La promesa central: aprobar la primera factura de un proveedor sirve
+    para las siguientes. Si el motor siguiera pidiendo revisión por no conocer
+    sus responsabilidades, aprobar la primera no habría servido de nada."""
+    _cuentas(conn)
+    _regla(conn)
+    conn.execute("UPDATE documento SET emisor_responsabilidades = NULL")
+    conn.commit()
+    r = asiento.generar(conn, "2026-09")
+    assert r["completos"] == 1 and r["revisar"] == 0
+    avisos = asiento.listar(conn, "2026-09")[0]["avisos"]
+    assert any("se decidió la primera vez" in x for x in avisos), \
+        "sigue diciéndolo, pero ya no bloquea"
 
 
 def test_con_regla_el_documento_se_puede_aprobar_en_lote(conn):
