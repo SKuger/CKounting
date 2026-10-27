@@ -1,7 +1,7 @@
 {
   "name": "contab-shell",
   "productName": "Contab",
-  "version": "0.11.1",
+  "version": "0.11.2",
   "description": "Contab — shell de escritorio (Electron) que arranca el servidor Nitro + sidecars.",
   "private": true,
   "main": "src/main.js",
