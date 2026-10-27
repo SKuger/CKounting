@@ -211,6 +211,38 @@ TIPO_EVENTO_RADIAN = "Application response"
 ORIGEN_XML = "xml"
 ORIGEN_EXCEL = "excel"
 
+# Qué es cada documento para la causación (D-127). La compra es lo de siempre;
+# lo que la empresa EMITE también se contabiliza, con el receptor como tercero.
+NATURALEZA_COMPRA = "compra"
+NATURALEZA_VENTA = "venta"
+NATURALEZA_DOC_SOPORTE = "doc_soporte"
+NATURALEZAS = (NATURALEZA_COMPRA, NATURALEZA_VENTA, NATURALEZA_DOC_SOPORTE)
+_TIPO_DOC_SOPORTE = "documento soporte"
+_TIPO_NOMINA = ("nomina", "nómina")
+
+
+def naturaleza_de(tipo_doc: str | None, grupo: str | None, emisor_nit: str | None,
+                  propio_nit: str | None) -> str | None:
+    """Compra, venta, documento soporte… o None si no se causa.
+
+    - `Nomina Individual` no se causa: el reporte no trae lo que hace falta para
+      hacerlo bien, y lo dijo el contador (2026-10-27).
+    - `Documento soporte con no obligados` lo emite la empresa a un vendedor que
+      no factura: es una compra sin IVA, con el **receptor** como proveedor.
+    - Lo demás que la empresa emitió es una venta (o su nota crédito).
+    - Las filas sin grupo entran como compra salvo que el emisor sea la propia
+      empresa: esconder una compra es peor que colar una venta (D-123).
+    """
+    tipo = (tipo_doc or "").strip().lower()
+    if tipo.startswith(_TIPO_NOMINA):
+        return None
+    propio = (propio_nit or "").strip()
+    emitido = ((grupo or "").strip().lower() == "emitido"
+               or (bool(propio) and (emisor_nit or "").strip() == propio))
+    if tipo.startswith(_TIPO_DOC_SOPORTE):
+        return NATURALEZA_DOC_SOPORTE
+    return NATURALEZA_VENTA if emitido else NATURALEZA_COMPRA
+
 
 def _desde_la_fila(fila: sqlite3.Row) -> dict[str, Any] | None:
     """Un documento armado con lo que el Excel de la DIAN ya trae.
@@ -258,6 +290,7 @@ def _desde_la_fila(fila: sqlite3.Row) -> dict[str, Any] | None:
         "emisor_nit": str(datos.get("NIT Emisor") or "").strip() or None,
         "emisor_nombre": str(datos.get("Nombre Emisor") or "").strip() or None,
         "receptor_nit": str(datos.get("NIT Receptor") or "").strip() or None,
+        "receptor_nombre": str(datos.get("Nombre Receptor") or "").strip() or None,
         "subtotal": str(total - iva),
         "total_impuestos": str(iva) if iva else None,
         "total": str(total),
@@ -279,43 +312,45 @@ def documentos_a_causar(conn: sqlite3.Connection, periodo: str) -> list[dict[str
     saber de dónde salió.
     """
     salida: list[dict[str, Any]] = []
-    # Solo se causan COMPRAS. La columna «Grupo» del reporte de la DIAN dice
-    # `Emitido` (ventas) o `Recibido` (compras) — ver `docs/excel-structure.md`—,
-    # y las ventas no se causan desde aquí.
+    # Compras Y lo que la empresa emitió (D-127, que supersede a D-123). La
+    # columna «Grupo» del reporte dice `Emitido` o `Recibido`; `naturaleza_de`
+    # decide qué es cada fila y descarta la nómina y los eventos RADIAN.
     #
-    # Las filas SIN grupo sí entran: esconder una compra significa que nunca se
-    # causa y nadie se entera; colar una venta se ve y se salta. Y como red de
-    # seguridad se descarta también lo que emitió la propia empresa, que es el
-    # mismo criterio de D-048 para V1.
-    #
-    # En el julio real del usuario esto baja de 55 documentos a 24: las otras 31
-    # eran ventas y nóminas que no tenían nada que hacer en la bandeja.
+    # Cada documento sale con `naturaleza`, `tercero_nit` y `tercero_nombre`:
+    # el emisor en una compra, el receptor en todo lo emitido. Ni el motor ni
+    # las reglas tienen que saber en qué columna estaba el NIT.
+    import json as _j
     propio = (conn.execute("SELECT nit FROM empresa_info").fetchone() or [""])[0] or ""
     filas = conn.execute(
         "SELECT DISTINCT cufe_cude, data_json, tipo_doc FROM excel_row"
         " WHERE periodo = ? AND cufe_cude IS NOT NULL"
-        " AND COALESCE(tipo_doc, '') <> ?"
-        " AND COALESCE(json_extract(data_json, '$.Grupo'), '') <> 'Emitido'",
+        " AND COALESCE(tipo_doc, '') <> ?",
         (periodo, TIPO_EVENTO_RADIAN),
     ).fetchall()
     for fila in filas:
+        try:
+            datos = _j.loads(fila["data_json"] or "{}")
+        except Exception:
+            datos = {}
         doc = documento_por_cufe(conn, fila["cufe_cude"])
-        emisor = (doc or {}).get("emisor_nit") or ""
-        if not emisor:
-            import json as _j
-            try:
-                emisor = str(_j.loads(fila["data_json"] or "{}").get("NIT Emisor") or "")
-            except Exception:
-                emisor = ""
-        if propio and emisor.strip() == propio.strip():
+        emisor = (doc or {}).get("emisor_nit") or str(datos.get("NIT Emisor") or "")
+        naturaleza = naturaleza_de(fila["tipo_doc"], datos.get("Grupo"), emisor, propio)
+        if naturaleza is None:
             continue
         if doc is not None:
             doc["origen"] = ORIGEN_XML
-            salida.append(doc)
-            continue
-        desde_excel = _desde_la_fila(fila)
-        if desde_excel:
-            salida.append(desde_excel)
+        else:
+            doc = _desde_la_fila(fila)
+            if not doc:
+                continue
+        doc["naturaleza"] = naturaleza
+        if naturaleza == NATURALEZA_COMPRA:
+            doc["tercero_nit"] = doc.get("emisor_nit")
+            doc["tercero_nombre"] = doc.get("emisor_nombre")
+        else:
+            doc["tercero_nit"] = doc.get("receptor_nit")
+            doc["tercero_nombre"] = doc.get("receptor_nombre")
+        salida.append(doc)
     salida.sort(key=lambda d: (d.get("fecha_emision") or "", d.get("numero") or ""))
     return salida
 

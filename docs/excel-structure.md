@@ -63,7 +63,7 @@ Análisis estructural del archivo `Ejemplo_LaDian.xlsx` (muestra entregada por e
 | 29 | `Rete ICA` | number | valor_retencion | Retención de Industria y Comercio. 0 en muestra. |
 | 30 | `Total` | number | valor_total | Headline. Decimales posibles. |
 | 31 | `Estado` | string | estado | Valores observados: `Aprobado`, `Aprobado con notificación`. Otros DIAN posibles: `Rechazado`, `En proceso`, `Aprobado sin notificación`. |
-| 32 | `Grupo` | string | otro | `Emitido` (ventas) o `Recibido` (compras). **Determina qué columna usar como "Tercero".** |
+| 32 | `Grupo` | string | otro | `Emitido` (ventas, documentos soporte, nómina) o `Recibido` (compras). **Determina qué columna usar como "Tercero"**: el emisor en lo recibido, el receptor en lo emitido (D-127). |
 
 ## Estructura de los PDFs de soporte (referencia para E3/E4)
 

@@ -1247,7 +1247,7 @@ ninguno tenía XML. Y los XML se bajan uno por uno del portal con el navegador
 abierto, así que exigirlos dejaba la Fase 4 inservible hasta hacer horas de
 trabajo manual.
 
-## D-123 — Solo se causan compras ✅
+## D-123 — Solo se causan compras ⛔ superseded por D-127
 
 **Decisión**: la bandeja ignora las filas con `Grupo = Emitido` y las que emitió
 la propia empresa.
@@ -1292,3 +1292,29 @@ corren como trabajos con progreso (D-076), no como RPC síncronos.
 cien soportes se pasa del tope de 30 s, la pantalla dice «error» y el sidecar
 sigue trabajando. Un error falso mientras se mueven documentos de un cliente es
 la peor combinación: el contador no sabe si parar, repetir o esperar.
+
+## D-127 — Lo que la empresa emite también se causa ✅
+
+**Decisión**: supersede a D-123. La bandeja causa tres naturalezas, y cada
+asiento y cada regla llevan la suya:
+
+- **compra** (`Grupo = Recibido`): lo de siempre — gasto, IVA descontable,
+  retenciones, proveedores por el resto.
+- **doc_soporte** (`Documento soporte con no obligados`, emitido): una compra a
+  alguien que no factura. El tercero es el **receptor**, no hay IVA, y la
+  retención se elige al aprobar como en cualquier compra.
+- **venta** (factura o nota crédito emitida): el tercero es el **receptor**.
+  Débito a **clientes** por el total; crédito al **ingreso** (la cuenta que dice
+  la regla) y al **IVA generado**. Sin retenciones: las practica el cliente.
+- **Nómina individual** no se causa.
+
+Cuatro cuentas por empresa en lugar de dos: proveedores, IVA descontable,
+clientes e IVA generado. Siguen sin valor por defecto (D-118).
+
+**Por qué**: lo pidió el contador el 2026-10-27, probando la 0.11 con su primer
+mes real. D-123 decía que «las ventas no se causan desde aquí» y era la mitad
+del mes: en el julio de REAL eran 31 filas emitidas de 55. Una regla de ingreso
+lleva su naturaleza porque el mismo NIT puede ser cliente y proveedor, y la
+cuenta de cada cosa es otra: sin eso, aprobar la venta pisaría la regla del
+gasto. La retención en el documento soporte no la mencionó —habló de cuentas—;
+se deja elegible, y si no la quiere es un clic en «ninguna».

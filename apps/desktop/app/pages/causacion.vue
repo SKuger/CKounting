@@ -14,10 +14,14 @@
 import { ArrowLeft, RefreshCw, Check, Undo2, ChevronRight, Download } from 'lucide-vue-next'
 
 type Linea = { id: number; cuenta_puc: string | null; descripcion: string; debito: string; credito: string }
+// `naturaleza` (D-127): compra, venta o doc_soporte. Decide qué líneas lleva,
+// quién es el tercero y qué se le pregunta al contador al aprobar.
+type Naturaleza = 'compra' | 'venta' | 'doc_soporte'
 type Asiento = {
   id: number; cufe: string; tercero_nit: string | null; fecha: string | null
-  estado: string; avisos: string[]; aprobado: number; lineas: Linea[]
+  estado: string; avisos: string[]; aprobado: number; lineas: Linea[]; naturaleza: Naturaleza
 }
+const ETIQUETA: Record<Naturaleza, string> = { compra: 'Compra', venta: 'Venta', doc_soporte: 'Doc. soporte' }
 type Resumen = { total: number; completos: number; revisar: number; aprobados: number; porcentaje_completo: number }
 
 const route = useRoute()
@@ -30,7 +34,10 @@ const generando = ref(false)
 const asientos = ref<Asiento[]>([])
 const resumen = ref<Resumen>({ total: 0, completos: 0, revisar: 0, aprobados: 0, porcentaje_completo: 0 })
 const razonSocial = ref('')
-const cuentas = reactive({ cuenta_proveedores: '', cuenta_iva_descontable: '' })
+// Las cuatro cuentas que Contab no puede deducir, del PUC de ESTA empresa.
+const cuentas = reactive({
+  cuenta_proveedores: '', cuenta_iva_descontable: '', cuenta_clientes: '', cuenta_iva_generado: '',
+})
 const abierto = ref<number | null>(null)
 const guardando = ref(false)
 // Armar la propuesta se pasaba de los 30 s en meses grandes: va como trabajo
@@ -59,7 +66,14 @@ const pendientes = computed(() => asientos.value.filter((a) => !a.aprobado && a.
 const listos = computed(() => asientos.value.filter((a) => !a.aprobado && a.estado === 'completo'))
 const aprobados = computed(() => asientos.value.filter((a) => a.aprobado))
 
-const faltanCuentas = computed(() => !cuentas.cuenta_proveedores)
+const hayVentas = computed(() => asientos.value.some((a) => a.naturaleza === 'venta'))
+const hayCompras = computed(() => asientos.value.some((a) => a.naturaleza !== 'venta'))
+const faltanCuentas = computed(() =>
+  (hayCompras.value && !cuentas.cuenta_proveedores) || (hayVentas.value && !cuentas.cuenta_clientes))
+
+// En una venta la cuenta que él decide es la del ingreso (la segunda línea);
+// en lo demás, la del gasto (la primera).
+const lineaDecidida = (a: Asiento) => (a.naturaleza === 'venta' ? a.lineas[1] : a.lineas[0])
 
 async function cargar() {
   if (!dbPath.value || !periodo.value) return
@@ -73,8 +87,7 @@ async function cargar() {
     const t = await rpc<{ conceptos: Concepto[] }>('tarifas_list', { db_path: dbPath.value })
     conceptos.value = t.conceptos.filter((c) => c.sobre !== 'iva')
     const c = await rpc<typeof cuentas>('cuentas_empresa', { db_path: dbPath.value })
-    cuentas.cuenta_proveedores = c.cuenta_proveedores || ''
-    cuentas.cuenta_iva_descontable = c.cuenta_iva_descontable || ''
+    for (const k of Object.keys(cuentas) as (keyof typeof cuentas)[]) cuentas[k] = c[k] || ''
     const info = await rpc<{ razon_social: string }>('open_empresa', { db_path: dbPath.value })
     razonSocial.value = info.razon_social
   } catch (e) {
@@ -103,8 +116,7 @@ async function generar() {
 function abrir(a: Asiento) {
   if (abierto.value === a.id) { abierto.value = null; return }
   abierto.value = a.id
-  const gasto = a.lineas[0]
-  correccion.cuenta_puc = gasto?.cuenta_puc || ''
+  correccion.cuenta_puc = lineaDecidida(a)?.cuenta_puc || ''
   correccion.patron = ''
   correccion.retencion = ''
   correccion.aprender_regla = true
@@ -120,8 +132,7 @@ async function aprobar(a: Asiento) {
       concepto_retencion_id: correccion.retencion && correccion.retencion !== 'ninguna' ? correccion.retencion : '',
       sin_retencion: correccion.retencion === 'ninguna',
       aprender_regla: correccion.aprender_regla,
-      cuenta_proveedores: cuentas.cuenta_proveedores,
-      cuenta_iva_descontable: cuentas.cuenta_iva_descontable,
+      ...cuentas,
     })
     abierto.value = null
     await cargar()
@@ -206,18 +217,29 @@ onMounted(cargar)
       <span v-if="trabajo.corriendo.value" class="text-xs text-muted-foreground">{{ trabajo.etiqueta.value }}</span>
       <span class="flex-1" />
       <label class="flex items-center gap-1.5 text-xs text-muted-foreground">
-        Cuenta de proveedores
-        <Input v-model="cuentas.cuenta_proveedores" class="h-8 w-28 font-mono" placeholder="220505" />
+        Proveedores
+        <Input v-model="cuentas.cuenta_proveedores" class="h-8 w-24 font-mono" placeholder="220505" />
       </label>
       <label class="flex items-center gap-1.5 text-xs text-muted-foreground">
         IVA descontable
-        <Input v-model="cuentas.cuenta_iva_descontable" class="h-8 w-28 font-mono" placeholder="240810" />
+        <Input v-model="cuentas.cuenta_iva_descontable" class="h-8 w-24 font-mono" placeholder="240810" />
+      </label>
+      <label class="flex items-center gap-1.5 text-xs text-muted-foreground">
+        Clientes
+        <Input v-model="cuentas.cuenta_clientes" class="h-8 w-24 font-mono" placeholder="130505" />
+      </label>
+      <label class="flex items-center gap-1.5 text-xs text-muted-foreground">
+        IVA generado
+        <Input v-model="cuentas.cuenta_iva_generado" class="h-8 w-24 font-mono" placeholder="240805" />
       </label>
     </section>
 
     <p v-if="faltanCuentas" class="shrink-0 rounded-md border border-status-warning/40 bg-status-warning-bg px-3 py-2 text-sm">
-      Falta decir a qué cuenta va <strong>el pasivo con el proveedor</strong> en esta empresa.
-      Escríbela arriba: se guarda al aprobar el primer asiento, y solo para esta empresa.
+      Falta decir a qué cuenta va
+      <template v-if="hayCompras && !cuentas.cuenta_proveedores"><strong>el pasivo con el proveedor</strong></template>
+      <template v-if="hayCompras && !cuentas.cuenta_proveedores && hayVentas && !cuentas.cuenta_clientes"> y </template>
+      <template v-if="hayVentas && !cuentas.cuenta_clientes"><strong>la cuenta por cobrar a clientes</strong></template>
+      en esta empresa. Escríbela arriba: se guarda al aprobar el primer asiento, y solo para esta empresa.
     </p>
 
     <section class="min-h-0 flex-1 overflow-auto rounded-lg border border-border bg-card">
@@ -242,7 +264,11 @@ onMounted(cargar)
                 :class="abierto === a.id ? 'rotate-90' : ''" />
               <span class="w-20 shrink-0 font-mono text-xs text-muted-foreground">{{ a.fecha }}</span>
               <span class="w-24 shrink-0 font-mono text-xs">{{ a.tercero_nit }}</span>
-              <span class="min-w-0 flex-1 truncate">{{ a.lineas[0]?.descripcion }}</span>
+              <span v-if="a.naturaleza !== 'compra'"
+                class="shrink-0 rounded border border-border px-1.5 py-px text-[10px] uppercase text-muted-foreground">
+                {{ ETIQUETA[a.naturaleza] }}
+              </span>
+              <span class="min-w-0 flex-1 truncate">{{ lineaDecidida(a)?.descripcion }}</span>
               <span class="shrink-0 font-mono text-xs">{{ pesos(a.lineas[0]?.debito || '0') }}</span>
               <Button v-if="a.aprobado" variant="ghost" size="icon-sm" title="Deshacer la aprobación"
                 @click.stop="deshacer(a)"><Undo2 class="size-3.5" /></Button>
@@ -276,10 +302,11 @@ onMounted(cargar)
 
               <div v-if="!a.aprobado" class="mt-3 flex flex-wrap items-end gap-3">
                 <div class="grid gap-1">
-                  <Label class="text-xs">Cuenta del gasto</Label>
-                  <Input v-model="correccion.cuenta_puc" class="h-8 w-32 font-mono" placeholder="519530" />
+                  <Label class="text-xs">{{ a.naturaleza === 'venta' ? 'Cuenta del ingreso' : 'Cuenta del gasto' }}</Label>
+                  <Input v-model="correccion.cuenta_puc" class="h-8 w-32 font-mono"
+                    :placeholder="a.naturaleza === 'venta' ? '413505' : '519530'" />
                 </div>
-                <div class="grid gap-1">
+                <div v-if="a.naturaleza !== 'venta'" class="grid gap-1">
                   <Label class="text-xs">Retención en la fuente</Label>
                   <select v-model="correccion.retencion" class="h-8 rounded-md border border-border bg-background px-2 text-xs">
                     <option value="">— elegir —</option>
@@ -300,14 +327,14 @@ onMounted(cargar)
                   <Check class="size-3.5" /> Aprobar
                 </Button>
               </div>
-              <p v-if="!a.aprobado && !correccion.retencion" class="mt-2 text-xs text-status-warning">
+              <p v-if="!a.aprobado && a.naturaleza !== 'venta' && !correccion.retencion" class="mt-2 text-xs text-status-warning">
                 Elige la retención —o «ninguna»—: sin eso, las próximas facturas de este proveedor
                 volverán a pedir revisión aunque apruebes esta.
               </p>
               <p v-if="!a.aprobado" class="mt-2 text-xs text-muted-foreground">
                 Si dejas vacío «recordarlo cuando la factura diga», la regla se guarda para
-                <strong>todo</strong> lo que facture este proveedor. Si lo llenas, solo para
-                ese concepto — y cuando facture otra cosa te lo vuelvo a preguntar.
+                <strong>todo</strong> lo que {{ a.naturaleza === 'venta' ? 'se le facture a este cliente' : 'facture este proveedor' }}.
+                Si lo llenas, solo para ese concepto — y cuando diga otra cosa te lo vuelvo a preguntar.
               </p>
             </div>
           </template>

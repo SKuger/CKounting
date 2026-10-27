@@ -53,12 +53,17 @@ pierde.
 **8. Causar.** Tarjeta **«Causación»** → *Armar la propuesta del mes*. Verá
 tres grupos: **por decidir**, **listos para aprobar** y **aprobados**.
 
-   - El **primer mes** casi todo cae en «por decidir»: una vez por proveedor.
-     Abra la factura, vea el asiento completo, ponga la cuenta del gasto,
-     **elija la retención** (o «ninguna») y apruebe. Lo que decida se recuerda.
-   - En el **primer asiento de cada empresa** escriba arriba las dos cuentas
-     que Contab no puede saber: la del **proveedor** y la del **IVA
-     descontable**. Se guardan para esa empresa.
+   - El **primer mes** casi todo cae en «por decidir»: una vez por proveedor
+     o cliente. Abra la factura, vea el asiento completo, ponga la cuenta del
+     gasto (o del ingreso, en una venta), **elija la retención** (o «ninguna»)
+     y apruebe. Lo que decida se recuerda.
+   - En el **primer asiento de cada empresa** escriba arriba las cuentas que
+     Contab no puede saber: **proveedores** e **IVA descontable** para lo que
+     compra; **clientes** e **IVA generado** para lo que vende. Se guardan
+     para esa empresa.
+   - Entran las compras, las ventas (con sus notas crédito) y los documentos
+     soporte a no obligados, cada uno marcado. La **nómina no**: el reporte no
+     trae lo que hace falta.
    - El **segundo mes**, las facturas de proveedores que ya decidió salen en
      «listos»: *Aprobar los N listos* y adelante. Si un proveedor factura algo
      distinto a lo de siempre, se lo vuelve a preguntar.

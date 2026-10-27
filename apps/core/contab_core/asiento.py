@@ -19,12 +19,26 @@ escritos en su idioma, no con un código de error.
 El crédito a proveedores es **lo que queda**, no un dato aparte: así el asiento
 cuadra por construcción y no por una suma que pueda salir mal.
 
-## Las dos cuentas que Contab no puede saber
+## Lo que la empresa emite también se causa (D-127)
 
-El pasivo con el proveedor y el IVA descontable son del PUC de cada empresa.
-**No se ponen por defecto**: contabilizar un mes entero contra una cuenta que no
-es la suya se descubre tarde y se deshace a mano. Si faltan, el asiento sale
-marcado diciendo cuál.
+    Documento soporte a no obligados — una compra sin IVA, el receptor es el proveedor:
+    Débito   cuenta del gasto                             total
+    Crédito  retenciones                                  lo retenido
+    Crédito  proveedores                                  el resto
+
+    Factura de venta (y su nota crédito, en negativo) — el receptor es el cliente:
+    Débito   clientes                                     total
+    Crédito  cuenta del ingreso (la que dice la regla)    subtotal
+    Crédito  IVA generado                                 IVA        (si aplica)
+
+La nómina no se causa: el reporte no trae lo que hace falta para hacerlo bien.
+
+## Las cuentas que Contab no puede saber
+
+El pasivo con el proveedor, el IVA descontable, la cuenta por cobrar a clientes
+y el IVA generado son del PUC de cada empresa. **No se ponen por defecto**:
+contabilizar un mes entero contra una cuenta que no es la suya se descubre tarde
+y se deshace a mano. Si faltan, el asiento sale marcado diciendo cuál.
 """
 from __future__ import annotations
 
@@ -95,6 +109,35 @@ def _pesos(v: Decimal) -> Decimal:
     return v.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
 
 
+def _cuentas_de(info: dict[str, Any]) -> dict[str, str]:
+    return {k: (info.get(k) or "").strip() for k in (
+        "cuenta_proveedores", "cuenta_iva_descontable",
+        "cuenta_clientes", "cuenta_iva_generado")}
+
+
+def _calcular_retenciones(conn, *, perfil, documento, propuesta, tercero_decidido):
+    """Las retenciones del documento, o ninguna si es una venta.
+
+    En una venta la que retiene es la otra parte, al pagar; aquí no hay nada que
+    calcular. En un documento soporte sí: es una compra a alguien que no factura,
+    y lo que la factura «declara» del emisor es de la propia empresa, así que se
+    mira solo el catálogo del receptor.
+    """
+    naturaleza = documento.get("naturaleza") or documentos_module.NATURALEZA_COMPRA
+    if naturaleza == documentos_module.NATURALEZA_VENTA:
+        return retenciones_module.Calculo()
+    tercero = terceros_module.obtener(conn, documento.get("tercero_nit") or "")
+    visto = documento
+    if naturaleza == documentos_module.NATURALEZA_DOC_SOPORTE:
+        visto = {**documento, "emisor_responsabilidades": None,
+                 "subtotal": documento.get("total"), "total_impuestos": None}
+    return retenciones_module.calcular(
+        conn, perfil=perfil, documento=visto, tercero=tercero,
+        concepto_id=propuesta.concepto_retencion_id,
+        sin_retencion=propuesta.sin_retencion,
+        tercero_decidido=tercero_decidido)
+
+
 def generar(
     conn,
     periodo: str,
@@ -109,12 +152,10 @@ def generar(
     avisa = progreso or (lambda _m: None)
     res = Resumen(periodo=periodo)
 
-    info = dict(conn.execute("SELECT * FROM empresa_info").fetchone() or {})
-    cuenta_proveedores = (info.get("cuenta_proveedores") or "").strip()
-    cuenta_iva = (info.get("cuenta_iva_descontable") or "").strip()
+    cuentas = _cuentas_de(dict(conn.execute("SELECT * FROM empresa_info").fetchone() or {}))
     perfil = perfil_module.perfil_vigente(conn, fecha=f"{periodo}-01")
 
-    if not cuenta_proveedores:
+    if not cuentas["cuenta_proveedores"]:
         res.avisos.append(
             "Falta decir a qué cuenta va el pasivo con el proveedor; sin ella el "
             "asiento no se puede cerrar.")
@@ -143,16 +184,12 @@ def generar(
         res.total += 1
 
         propuesta = causacion_module.proponer(conn, documento)
-        tercero = terceros_module.obtener(conn, documento.get("emisor_nit") or "")
-        calculo = retenciones_module.calcular(
-            conn, perfil=perfil, documento=documento, tercero=tercero,
-            concepto_id=propuesta.concepto_retencion_id,
-            sin_retencion=propuesta.sin_retencion,
+        calculo = _calcular_retenciones(
+            conn, perfil=perfil, documento=documento, propuesta=propuesta,
             tercero_decidido=_ya_lo_decidio(propuesta))
 
         lineas, avisos = _lineas_de(
-            documento, propuesta, calculo,
-            cuenta_proveedores=cuenta_proveedores, cuenta_iva=cuenta_iva,
+            documento, propuesta, calculo, cuentas=cuentas,
             responsable_iva=bool(perfil and perfil.get("responsable_iva")))
         avisos = [*avisos, *calculo.avisos]
         if documento.get("origen") == documentos_module.ORIGEN_EXCEL:
@@ -162,8 +199,11 @@ def generar(
         if not propuesta.seguro:
             avisos.insert(0, propuesta.por_que)
 
+        contrapartida = cuentas["cuenta_clientes" if documento.get("naturaleza")
+                                == documentos_module.NATURALEZA_VENTA
+                                else "cuenta_proveedores"]
         estado = (ESTADO_COMPLETO
-                  if propuesta.seguro and not calculo.revisar and cuenta_proveedores
+                  if propuesta.seguro and not calculo.revisar and contrapartida
                   else ESTADO_REVISAR)
         if estado == ESTADO_COMPLETO:
             res.completos += 1
@@ -184,37 +224,55 @@ def _lineas_de(
     propuesta: causacion_module.Propuesta,
     calculo: retenciones_module.Calculo,
     *,
-    cuenta_proveedores: str,
-    cuenta_iva: str,
+    cuentas: dict[str, str],
     responsable_iva: bool,
 ) -> tuple[list[Linea], list[str]]:
     avisos: list[str] = []
+    naturaleza = documento.get("naturaleza") or documentos_module.NATURALEZA_COMPRA
     subtotal = _pesos(_d(documento.get("subtotal")))
     iva = _pesos(_d(documento.get("total_impuestos")))
     total = _pesos(_d(documento.get("total")))
+    nombre = documento.get("tercero_nombre") or documento.get("emisor_nombre")
 
-    lineas = [Linea(
-        cuenta_puc=propuesta.cuenta_puc,
-        descripcion=documento.get("emisor_nombre") or "Compra",
-        debito=subtotal)]
+    if naturaleza == documentos_module.NATURALEZA_VENTA:
+        # El cliente debe el total; el ingreso y el IVA generado son el haber.
+        lineas = [Linea(cuentas["cuenta_clientes"] or None, "Clientes", debito=total)]
+        lineas.append(Linea(propuesta.cuenta_puc, nombre or "Venta", credito=subtotal))
+        if iva != CERO and responsable_iva:
+            if cuentas["cuenta_iva_generado"]:
+                lineas.append(Linea(cuentas["cuenta_iva_generado"], "IVA generado", credito=iva))
+            else:
+                avisos.append(
+                    "Falta la cuenta del IVA generado: el IVA de esta venta no "
+                    "quedó en ninguna línea.")
+    else:
+        if naturaleza == documentos_module.NATURALEZA_DOC_SOPORTE:
+            # Sin IVA: quien no está obligado a facturar no lo cobra. El gasto
+            # es el total, y si el reporte trae IVA es para mirarlo.
+            if iva != CERO:
+                avisos.append(
+                    f"Este documento soporte trae IVA por {iva} pesos; un no obligado "
+                    "no lo cobra. Se causó el total como gasto.")
+            subtotal, iva = (total if total != CERO else subtotal), CERO
+        lineas = [Linea(propuesta.cuenta_puc, nombre or "Compra", debito=subtotal)]
 
-    if iva > CERO and responsable_iva:
-        if cuenta_iva:
-            lineas.append(Linea(cuenta_iva, "IVA descontable", debito=iva))
-        else:
-            avisos.append(
-                "Falta la cuenta del IVA descontable: el IVA de esta factura no "
-                "quedó en ninguna línea.")
+        if iva > CERO and responsable_iva:
+            if cuentas["cuenta_iva_descontable"]:
+                lineas.append(Linea(cuentas["cuenta_iva_descontable"], "IVA descontable", debito=iva))
+            else:
+                avisos.append(
+                    "Falta la cuenta del IVA descontable: el IVA de esta factura no "
+                    "quedó en ninguna línea.")
 
-    retenido = CERO
-    for r in calculo.retenciones:
-        lineas.append(Linea(r.cuenta_puc, f"{r.concepto} ({r.tarifa}%)", credito=r.valor))
-        retenido += r.valor
+        retenido = CERO
+        for r in calculo.retenciones:
+            lineas.append(Linea(r.cuenta_puc, f"{r.concepto} ({r.tarifa}%)", credito=r.valor))
+            retenido += r.valor
 
-    # El crédito al proveedor es el resto: así cuadra por construcción.
-    base_credito = total if total > CERO else subtotal + iva
-    por_pagar = _pesos(base_credito - retenido)
-    lineas.append(Linea(cuenta_proveedores or None, "Proveedores", credito=por_pagar))
+        # El crédito al proveedor es el resto: así cuadra por construcción.
+        base_credito = total if total > CERO else subtotal + iva
+        por_pagar = _pesos(base_credito - retenido)
+        lineas.append(Linea(cuentas["cuenta_proveedores"] or None, "Proveedores", credito=por_pagar))
 
     descuadre = sum(x.debito for x in lineas) - sum(x.credito for x in lineas)
     if descuadre != CERO:
@@ -231,10 +289,12 @@ def _escribir(conn, periodo, documento, estado, avisos, regla_id, lineas,
         conn.execute("DELETE FROM asiento_propuesto WHERE id = ?", (asiento_id,))
     cur = conn.execute(
         "INSERT INTO asiento_propuesto(periodo, cufe, tercero_nit, fecha, estado,"
-        " avisos, regla_id) VALUES (?,?,?,?,?,?,?)",
-        (periodo, documento["cufe"], documento.get("emisor_nit"),
+        " avisos, regla_id, naturaleza) VALUES (?,?,?,?,?,?,?,?)",
+        (periodo, documento["cufe"],
+         documento.get("tercero_nit") or documento.get("emisor_nit"),
          documento.get("fecha_emision"), estado,
-         json.dumps(avisos, ensure_ascii=False) if avisos else None, regla_id))
+         json.dumps(avisos, ensure_ascii=False) if avisos else None, regla_id,
+         documento.get("naturaleza") or documentos_module.NATURALEZA_COMPRA))
     aid = int(cur.lastrowid)
     for orden, ln in enumerate(lineas):
         conn.execute(
@@ -298,6 +358,8 @@ def aprobar(
     concepto_retencion_id: int | None = None,
     cuenta_proveedores: str | None = None,
     cuenta_iva_descontable: str | None = None,
+    cuenta_clientes: str | None = None,
+    cuenta_iva_generado: str | None = None,
     sin_retencion: bool = False,
     aprender_regla: bool = True,
 ) -> dict[str, Any]:
@@ -313,25 +375,29 @@ def aprobar(
         raise ValueError(f"El asiento {asiento_id} no existe.")
     a = dict(fila)
 
-    # Las dos cuentas de la empresa, si las acaba de escribir en esta pantalla.
-    if cuenta_proveedores or cuenta_iva_descontable:
-        actual = dict(conn.execute(
-            "SELECT cuenta_proveedores, cuenta_iva_descontable FROM empresa_info"
-        ).fetchone() or {})
+    # Las cuentas de la empresa, si las acaba de escribir en esta pantalla.
+    nuevas = {"cuenta_proveedores": cuenta_proveedores,
+              "cuenta_iva_descontable": cuenta_iva_descontable,
+              "cuenta_clientes": cuenta_clientes,
+              "cuenta_iva_generado": cuenta_iva_generado}
+    if any(nuevas.values()):
+        actual = dict(conn.execute("SELECT * FROM empresa_info").fetchone() or {})
         conn.execute(
-            "UPDATE empresa_info SET cuenta_proveedores = ?, cuenta_iva_descontable = ?",
-            ((cuenta_proveedores or actual.get("cuenta_proveedores") or "").strip() or None,
-             (cuenta_iva_descontable or actual.get("cuenta_iva_descontable") or "").strip() or None))
+            "UPDATE empresa_info SET cuenta_proveedores = ?, cuenta_iva_descontable = ?,"
+            " cuenta_clientes = ?, cuenta_iva_generado = ?",
+            tuple((nuevas[k] or actual.get(k) or "").strip() or None for k in nuevas))
 
-    # La regla, para que la próxima factura de este proveedor salga sola.
+    es_venta = (a.get("naturaleza") or "compra") == documentos_module.NATURALEZA_VENTA
+    # La regla, para que la próxima factura de este tercero salga sola.
     if aprender_regla and cuenta_puc and a.get("tercero_nit"):
         causacion_module.aprender(
             conn, cuenta_puc=cuenta_puc, tercero_nit=a["tercero_nit"],
             patron=(patron or "").strip() or None,
-            concepto_retencion_id=concepto_retencion_id,
+            concepto_retencion_id=None if es_venta else concepto_retencion_id,
             # «A este proveedor no se le retiene», dicho por él. Va a la regla
             # para que las siguientes facturas no vuelvan a preguntarlo.
-            sin_retencion=sin_retencion)
+            sin_retencion=sin_retencion and not es_venta,
+            naturaleza=a.get("naturaleza") or documentos_module.NATURALEZA_COMPRA)
 
     # Se rehace el asiento con lo corregido y se marca aprobado.
     # El documento puede venir del XML o del Excel: `aprobar` tiene que mirar en
@@ -347,17 +413,16 @@ def aprobar(
         if cuenta_puc:
             propuesta.cuenta_puc = cuenta_puc
             propuesta.seguro = True
-        tercero = terceros_module.obtener(conn, documento.get("emisor_nit") or "")
-        calculo = retenciones_module.calcular(
-            conn, perfil=perfil, documento=documento, tercero=tercero,
-            concepto_id=concepto_retencion_id or propuesta.concepto_retencion_id,
-            sin_retencion=sin_retencion
-            or (propuesta.sin_retencion and not concepto_retencion_id),
+        if concepto_retencion_id:
+            propuesta.concepto_retencion_id = concepto_retencion_id
+            propuesta.sin_retencion = False
+        elif sin_retencion:
+            propuesta.sin_retencion = True
+        calculo = _calcular_retenciones(
+            conn, perfil=perfil, documento=documento, propuesta=propuesta,
             tercero_decidido=True)   # la está aprobando una persona
         lineas, avisos = _lineas_de(
-            documento, propuesta, calculo,
-            cuenta_proveedores=(info.get("cuenta_proveedores") or "").strip(),
-            cuenta_iva=(info.get("cuenta_iva_descontable") or "").strip(),
+            documento, propuesta, calculo, cuentas=_cuentas_de(info),
             responsable_iva=bool(perfil and perfil.get("responsable_iva")))
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("DELETE FROM asiento_linea WHERE asiento_id = ?", (a["id"],))
