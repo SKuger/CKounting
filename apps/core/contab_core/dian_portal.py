@@ -17,6 +17,7 @@ import calendar
 import re
 import shutil
 import zipfile
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -37,18 +38,29 @@ class DianPortalError(ValueError):
     """Error con mensaje en español para la UI. Nunca lleva el enlace dentro."""
 
 
-def rango_del_mes(periodo: str) -> tuple[str, str]:
-    """'AAAA-MM' → ('AAAA-MM-01', 'AAAA-MM-<último día>').
+def rango_del_mes(periodo: str, hoy: date | None = None) -> tuple[str, str]:
+    """'AAAA-MM' → ('AAAA-MM-01', 'AAAA-MM-<último día>'), recortado a hoy.
 
     El último día se calcula, no se asume: febrero de un año bisiesto y los meses
     de 30 días son justo donde un rango mal armado se come o se deja documentos.
+
+    Y **nunca pasa de hoy**: el mes en curso se pide hasta la fecha de hoy. Carlos
+    pidió octubre el 27 de octubre y la DIAN respondió 500 a un rango que
+    terminaba el 31; el calendario del portal tampoco deja elegir un día futuro.
+    Un mes que todavía no empieza es un error, no un rango vacío.
     """
     p = (periodo or "").strip()
     if not _RE_PERIODO.match(p):
         raise DianPortalError(f"El mes debe venir como AAAA-MM (llegó «{p}»)")
     anio, mes = int(p[:4]), int(p[5:])
     ultimo = calendar.monthrange(anio, mes)[1]
-    return f"{p}-01", f"{p}-{ultimo:02d}"
+    hoy = hoy or date.today()
+    desde, hasta = date(anio, mes, 1), date(anio, mes, ultimo)
+    if desde > hoy:
+        raise DianPortalError(f"{p} todavía no empieza: la DIAN no tiene nada que dar.")
+    if hasta > hoy:
+        hasta = hoy
+    return desde.isoformat(), hasta.isoformat()
 
 
 def validar_enlace(enlace: str) -> str:

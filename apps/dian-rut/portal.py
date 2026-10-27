@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import re
 import shutil
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -221,9 +222,15 @@ async def descargar_listado(
                 _JS_EXPORTAR, {"desde": desde, "hasta": hasta, "grupo": codigo_grupo}
             )
             if not res.get("ok"):
+                # El cuerpo va al log entero y al mensaje recortado: un «500» a
+                # secas obligó a adivinar (D-083). Se corta antes de cualquier
+                # cosa que parezca el enlace de acceso, que no se registra nunca.
+                cuerpo_resp = re.sub(r"\s+", " ", str(res.get("cuerpo") or "")).strip()
+                print(f"[portal] export {res.get('status')}: {cuerpo_resp[:600]}", file=sys.stderr)
+                detalle = res.get("error") or cuerpo_resp[:160]
                 raise PortalError(
                     "La DIAN no aceptó la solicitud de exportación "
-                    f"(estado {res.get('status')}). {res.get('error') or ''}".strip()
+                    f"(estado {res.get('status')}). {detalle}".strip()
                 )
 
             avisa("La DIAN está generando el archivo…")
