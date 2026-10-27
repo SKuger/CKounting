@@ -84,7 +84,7 @@ def _plano(texto: str | None) -> str:
 
 def texto_del_documento(documento: dict[str, Any]) -> str:
     """Todo lo que la factura dice y sirve para reconocerla."""
-    partes = [documento.get("emisor_nombre") or ""]
+    partes = [documento.get("tercero_nombre") or documento.get("emisor_nombre") or ""]
     for ln in documento.get("lineas") or []:
         partes.append(ln.get("descripcion") or "")
     return _plano(" · ".join(p for p in partes if p))
@@ -97,13 +97,18 @@ def proponer(conn, documento: dict[str, Any]) -> Propuesta:
     `seguro=False`, que es lo que la bandeja usa para separar «apruebe en lote»
     de «decida usted».
     """
-    nit = (documento.get("emisor_nit") or "").strip()
+    nit = (documento.get("tercero_nit") or documento.get("emisor_nit") or "").strip()
     texto = texto_del_documento(documento)
+    # Una regla de ingreso no es una regla de gasto: el mismo NIT puede ser
+    # cliente y proveedor, y la cuenta de cada cosa es otra (D-127).
+    naturaleza = documento.get("naturaleza") or "compra"
+    quien = "cliente" if naturaleza == "venta" else "proveedor"
 
     mejor: dict[str, Any] | None = None
     mejor_peso = 0
     for fila in conn.execute(
-        "SELECT * FROM regla_causacion WHERE archivada = 0 ORDER BY id"
+        "SELECT * FROM regla_causacion WHERE archivada = 0 AND naturaleza = ?"
+        " ORDER BY id", (naturaleza,)
     ).fetchall():
         regla = dict(fila)
         peso = 0
@@ -124,20 +129,20 @@ def proponer(conn, documento: dict[str, Any]) -> Propuesta:
         # ¿Es un proveedor nuevo, o uno conocido facturando otra cosa? No es lo
         # mismo, y el contador quiere que se le diga distinto.
         conocido = conn.execute(
-            "SELECT patron FROM regla_causacion WHERE archivada = 0"
-            " AND tercero_nit = ? AND patron IS NOT NULL", (nit,)).fetchall()
+            "SELECT patron FROM regla_causacion WHERE archivada = 0 AND naturaleza = ?"
+            " AND tercero_nit = ? AND patron IS NOT NULL", (naturaleza, nit)).fetchall()
         if conocido:
             de_siempre = ", ".join(f"«{r[0]}»" for r in conocido[:3])
             return Propuesta(
                 concepto_nuevo=True,
-                por_que=(f"Este proveedor suele facturar {de_siempre}, y esta "
+                por_que=(f"Este {quien} suele facturar {de_siempre}, y esta "
                          f"factura dice otra cosa."))
         return Propuesta(por_que="Ninguna regla aplica todavía a este documento.")
 
     if mejor["tercero_nit"] and mejor["patron"]:
         por_que = f"Regla para {mejor['tercero_nit']} cuando dice «{mejor['patron']}»."
     elif mejor["tercero_nit"]:
-        por_que = f"Este proveedor siempre va a {mejor['cuenta_puc']}."
+        por_que = f"Este {quien} siempre va a {mejor['cuenta_puc']}."
     else:
         por_que = f"La factura dice «{mejor['patron']}»."
 
@@ -158,6 +163,7 @@ def aprender(
     concepto_retencion_id: int | None = None,
     sin_retencion: bool = False,
     vigencia_desde: str | None = None,
+    naturaleza: str = "compra",
 ) -> dict[str, Any]:
     """Guarda lo que el contador decidió, para no volvérselo a preguntar.
 
@@ -174,8 +180,8 @@ def aprender(
     ya = conn.execute(
         "SELECT id FROM regla_causacion WHERE IFNULL(tercero_nit,'') = IFNULL(?,'')"
         " AND IFNULL(patron,'') = IFNULL(?,'')"
-        " AND IFNULL(vigencia_desde,'') = IFNULL(?,'')",
-        (tercero_nit, patron, vigencia_desde)).fetchone()
+        " AND IFNULL(vigencia_desde,'') = IFNULL(?,'') AND naturaleza = ?",
+        (tercero_nit, patron, vigencia_desde, naturaleza)).fetchone()
     if ya:
         conn.execute(
             "UPDATE regla_causacion SET cuenta_puc = ?, concepto_retencion_id = ?,"
@@ -186,10 +192,10 @@ def aprender(
     else:
         cur = conn.execute(
             "INSERT INTO regla_causacion(tercero_nit, patron, cuenta_puc,"
-            " concepto_retencion_id, sin_retencion, vigencia_desde, origen)"
-            " VALUES (?,?,?,?,?,?,?)",
+            " concepto_retencion_id, sin_retencion, vigencia_desde, origen, naturaleza)"
+            " VALUES (?,?,?,?,?,?,?,?)",
             (tercero_nit, patron, cuenta_puc, concepto_retencion_id,
-             1 if sin_retencion else 0, vigencia_desde, ORIGEN_APRENDIDA))
+             1 if sin_retencion else 0, vigencia_desde, ORIGEN_APRENDIDA, naturaleza))
         rid = int(cur.lastrowid)
     conn.commit()
     return dict(conn.execute(
@@ -207,7 +213,7 @@ def listar(conn, *, incluir_archivadas: bool = False) -> list[dict[str, Any]]:
     sql = "SELECT * FROM regla_causacion"
     if not incluir_archivadas:
         sql += " WHERE archivada = 0"
-    sql += " ORDER BY tercero_nit IS NULL, tercero_nit, patron"
+    sql += " ORDER BY naturaleza, tercero_nit IS NULL, tercero_nit, patron"
     return [dict(r) for r in conn.execute(sql)]
 
 
@@ -225,17 +231,20 @@ def guardar(conn, data: dict[str, Any]) -> dict[str, Any]:
         str(data["cuenta_puc"]).strip(),
         int(data["concepto_retencion_id"]) if data.get("concepto_retencion_id") else None,
         (data.get("vigencia_desde") or "").strip() or None,
+        (data.get("naturaleza") or "compra").strip().lower(),
     )
+    if valores[-1] not in ("compra", "venta", "doc_soporte"):
+        raise ValueError(f"Naturaleza desconocida: «{valores[-1]}».")
     if rid:
         conn.execute(
             "UPDATE regla_causacion SET tercero_nit = ?, patron = ?, cuenta_puc = ?,"
-            " concepto_retencion_id = ?, vigencia_desde = ?, updated_at = datetime('now')"
-            " WHERE id = ?", (*valores, int(rid)))
+            " concepto_retencion_id = ?, vigencia_desde = ?, naturaleza = ?,"
+            " updated_at = datetime('now') WHERE id = ?", (*valores, int(rid)))
     else:
         cur = conn.execute(
             "INSERT INTO regla_causacion(tercero_nit, patron, cuenta_puc,"
-            " concepto_retencion_id, vigencia_desde, origen)"
-            " VALUES (?,?,?,?,?, 'manual')", valores)
+            " concepto_retencion_id, vigencia_desde, naturaleza, origen)"
+            " VALUES (?,?,?,?,?,?, 'manual')", valores)
         rid = int(cur.lastrowid)
     conn.commit()
     return dict(conn.execute(

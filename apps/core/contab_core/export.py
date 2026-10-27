@@ -146,8 +146,12 @@ def export_missing_supports(
 # que teclear en Siigo mirando la pantalla. Una fila por línea de asiento, que
 # es la forma que entiende el importador de Siigo y cualquier otro.
 ASIENTO_COLUMNS: list[str] = [
-    "Fecha", "NIT proveedor", "Cuenta PUC", "Descripción", "Débito", "Crédito", "CUFE",
+    "Fecha", "NIT tercero", "Cuenta PUC", "Descripción", "Débito", "Crédito", "CUFE", "Tipo",
 ]
+
+
+# Cómo se llama cada naturaleza en el archivo, para quien lo lea en Siigo.
+TIPO_ASIENTO = {"compra": "Compra", "venta": "Venta", "doc_soporte": "Documento soporte"}
 
 
 def export_asientos(conn, periodo: str, output_dir: str | Path) -> dict[str, Any]:
@@ -180,7 +184,8 @@ def export_asientos(conn, periodo: str, output_dir: str | Path) -> dict[str, Any
             debito = money.to_money(ln["debito"] or 0)
             credito = money.to_money(ln["credito"] or 0)
             valores = [a["fecha"], a["tercero_nit"], ln["cuenta_puc"],
-                       ln["descripcion"], debito, credito, a["cufe"]]
+                       ln["descripcion"], debito, credito, a["cufe"],
+                       TIPO_ASIENTO.get(a.get("naturaleza") or "compra", a.get("naturaleza"))]
             for c, v in enumerate(valores):
                 ws.write(fila, c, _coerce_cell(v), pesos if c in (4, 5) else None)
             total_debito += debito

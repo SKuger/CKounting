@@ -1365,6 +1365,8 @@ def _h_asiento_aprobar(params: dict) -> dict:
                                    if params.get("concepto_retencion_id") else None),
             cuenta_proveedores=(params.get("cuenta_proveedores") or "").strip() or None,
             cuenta_iva_descontable=(params.get("cuenta_iva_descontable") or "").strip() or None,
+            cuenta_clientes=(params.get("cuenta_clientes") or "").strip() or None,
+            cuenta_iva_generado=(params.get("cuenta_iva_generado") or "").strip() or None,
             sin_retencion=bool(params.get("sin_retencion")),
             aprender_regla=bool(params.get("aprender_regla", True)),
         )
@@ -1406,20 +1408,24 @@ def _h_asiento_exportar(params: dict) -> dict:
         conn.close()
 
 
+CUENTAS_EMPRESA = ("cuenta_proveedores", "cuenta_iva_descontable",
+                   "cuenta_clientes", "cuenta_iva_generado")
+
+
 def _h_cuentas_empresa(params: dict) -> dict:
-    """Las dos cuentas que Contab no puede deducir: proveedores e IVA descontable."""
+    """Las cuentas que Contab no puede deducir: proveedores, IVA descontable,
+    clientes e IVA generado (D-127). Son del PUC de cada empresa."""
     conn = _con(params["db_path"])
     try:
-        if "cuenta_proveedores" in params or "cuenta_iva_descontable" in params:
+        if any(k in params for k in CUENTAS_EMPRESA):
+            actual = dict(conn.execute("SELECT * FROM empresa_info").fetchone() or {})
             conn.execute(
-                "UPDATE empresa_info SET cuenta_proveedores = ?,"
-                " cuenta_iva_descontable = ?",
-                ((params.get("cuenta_proveedores") or "").strip() or None,
-                 (params.get("cuenta_iva_descontable") or "").strip() or None))
+                "UPDATE empresa_info SET " + ", ".join(f"{k} = ?" for k in CUENTAS_EMPRESA),
+                tuple((params.get(k) if k in params else actual.get(k)) or None
+                      for k in CUENTAS_EMPRESA))
             conn.commit()
         fila = conn.execute(
-            "SELECT cuenta_proveedores, cuenta_iva_descontable FROM empresa_info"
-        ).fetchone()
+            "SELECT " + ", ".join(CUENTAS_EMPRESA) + " FROM empresa_info").fetchone()
         return dict(fila) if fila else {}
     finally:
         conn.close()

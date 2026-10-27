@@ -326,3 +326,125 @@ def test_aprobar_diciendo_sin_retencion_libera_a_los_hermanos(conn):
     assert r["completos"] == 1 and r["revisar"] == 0
     lineas = asiento.listar(conn, "2026-09")[0]["lineas"]
     assert not any("%" in ln["descripcion"] for ln in lineas), "ninguna línea de retención"
+
+
+# ───────── D-127 · lo que la empresa emite también se causa ──────────────────
+# Lo pidió el contador el 2026-10-27 probando la 0.11: el reporte trae lo que la
+# empresa EMITIÓ, y eso también se contabiliza, con el receptor como tercero.
+
+def _fila(conn, cufe, tipo, grupo, *, nit_otro, total, iva, idx):
+    import json as _j
+    datos = {"Grupo": grupo, "Total": total, "IVA": iva,
+             "NIT Emisor": "900181831" if grupo == "Emitido" else nit_otro,
+             "NIT Receptor": nit_otro if grupo == "Emitido" else "900181831",
+             "Nombre Receptor": "CLIENTE SAS", "Nombre Emisor": "REAL"}
+    conn.execute(
+        "INSERT INTO excel_row(load_id,row_index,cufe_cude,tipo_doc,data_json,periodo)"
+        " VALUES (1,?,?,?,?,'2026-09')", (idx, cufe, tipo, _j.dumps(datos)))
+    conn.commit()
+
+
+def _todas_las_cuentas(conn):
+    conn.execute("UPDATE empresa_info SET cuenta_proveedores='220505',"
+                 " cuenta_iva_descontable='240810', cuenta_clientes='130505',"
+                 " cuenta_iva_generado='240805'")
+    conn.commit()
+
+
+def _por_cufe(conn, cufe):
+    return next(a for a in asiento.listar(conn, "2026-09") if a["cufe"] == cufe)
+
+
+def test_una_venta_se_causa_contra_clientes_con_iva_generado(conn):
+    _todas_las_cuentas(conn)
+    _fila(conn, "v" * 96, "Factura electrónica", "Emitido",
+          nit_otro="901111111", total="119000", iva="19000", idx=5)
+    causacion.guardar(conn, {"tercero_nit": "901111111", "cuenta_puc": "413505",
+                             "naturaleza": "venta"})
+    asiento.generar(conn, "2026-09")
+    a = _por_cufe(conn, "v" * 96)
+    assert a["naturaleza"] == "venta"
+    assert a["tercero_nit"] == "901111111", "el tercero es el receptor"
+    assert a["estado"] == "completo"
+    por_cuenta = {ln["cuenta_puc"]: (Decimal(ln["debito"]), Decimal(ln["credito"]))
+                  for ln in a["lineas"]}
+    assert por_cuenta["130505"] == (Decimal("119000"), Decimal("0"))
+    assert por_cuenta["413505"] == (Decimal("0"), Decimal("100000"))
+    assert por_cuenta["240805"] == (Decimal("0"), Decimal("19000"))
+    assert not any("retenci" in ln["descripcion"].lower() for ln in a["lineas"]), \
+        "en una venta no retenemos nosotros"
+
+
+def test_la_regla_de_venta_no_se_confunde_con_la_de_compra_del_mismo_nit(conn):
+    """El mismo NIT puede ser cliente y proveedor: la cuenta del gasto no es la
+    del ingreso."""
+    _todas_las_cuentas(conn)
+    causacion.guardar(conn, {"tercero_nit": "901111111", "cuenta_puc": "519530"})
+    _fila(conn, "v" * 96, "Factura electrónica", "Emitido",
+          nit_otro="901111111", total="119000", iva="19000", idx=5)
+    asiento.generar(conn, "2026-09")
+    a = _por_cufe(conn, "v" * 96)
+    assert a["estado"] == "revisar", "la regla de gasto no vale para la venta"
+    assert a["lineas"][1]["cuenta_puc"] is None
+
+
+def test_una_nota_credito_de_venta_sale_en_negativo(conn):
+    _todas_las_cuentas(conn)
+    _fila(conn, "n" * 96, "Nota de crédito electrónica", "Emitido",
+          nit_otro="901111111", total="119000", iva="19000", idx=6)
+    asiento.generar(conn, "2026-09")
+    a = _por_cufe(conn, "n" * 96)
+    assert Decimal(a["lineas"][0]["debito"]) == Decimal("-119000")
+
+
+def test_el_documento_soporte_se_causa_sin_iva_y_con_el_receptor(conn):
+    _todas_las_cuentas(conn)
+    _fila(conn, "s" * 96, "Documento soporte con no obligados", "Emitido",
+          nit_otro="1017173047", total="1000000", iva="0", idx=7)
+    concepto = tarifas.listar_conceptos(conn)[0]["id"]
+    causacion.guardar(conn, {"tercero_nit": "1017173047", "cuenta_puc": "519530",
+                             "concepto_retencion_id": concepto,
+                             "naturaleza": "doc_soporte"})
+    asiento.generar(conn, "2026-09")
+    a = _por_cufe(conn, "s" * 96)
+    assert a["naturaleza"] == "doc_soporte"
+    assert a["tercero_nit"] == "1017173047"
+    cuentas = [ln["cuenta_puc"] for ln in a["lineas"]]
+    assert "240810" not in cuentas, "sin IVA descontable"
+    assert cuentas[0] == "519530" and cuentas[-1] == "220505"
+    assert "23654001" in cuentas, "la retención sí: es una compra a un no obligado"
+    assert sum(Decimal(ln["debito"]) for ln in a["lineas"]) == \
+        sum(Decimal(ln["credito"]) for ln in a["lineas"])
+
+
+def test_la_nomina_no_se_causa(conn):
+    _todas_las_cuentas(conn)
+    _fila(conn, "w" * 96, "Nomina Individual", "Emitido",
+          nit_otro="1017173047", total="2000000", iva="0", idx=8)
+    asiento.generar(conn, "2026-09")
+    assert all(a["cufe"] != "w" * 96 for a in asiento.listar(conn, "2026-09"))
+
+
+def test_sin_cuenta_de_clientes_la_venta_queda_marcada(conn):
+    _cuentas(conn)
+    _fila(conn, "v" * 96, "Factura electrónica", "Emitido",
+          nit_otro="901111111", total="119000", iva="19000", idx=5)
+    causacion.guardar(conn, {"tercero_nit": "901111111", "cuenta_puc": "413505",
+                             "naturaleza": "venta"})
+    asiento.generar(conn, "2026-09")
+    a = _por_cufe(conn, "v" * 96)
+    assert a["estado"] == "revisar"
+    assert any("IVA generado" in x for x in a["avisos"])
+
+
+def test_al_aprobar_una_venta_se_aprende_una_regla_de_venta(conn):
+    _todas_las_cuentas(conn)
+    _fila(conn, "v" * 96, "Factura electrónica", "Emitido",
+          nit_otro="901111111", total="119000", iva="19000", idx=5)
+    asiento.generar(conn, "2026-09")
+    a = _por_cufe(conn, "v" * 96)
+    asiento.aprobar(conn, a["id"], cuenta_puc="413505")
+    reglas = causacion.listar(conn)
+    assert [(r["naturaleza"], r["cuenta_puc"]) for r in reglas] == [("venta", "413505")]
+    a = _por_cufe(conn, "v" * 96)
+    assert a["aprobado"] == 1 and a["lineas"][1]["cuenta_puc"] == "413505"
