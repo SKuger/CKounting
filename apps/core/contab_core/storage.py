@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import log
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 # Cuánto espera una escritura a que se libere el lock antes de rendirse (ms).
 BUSY_TIMEOUT_MS = 5_000
@@ -286,6 +286,8 @@ CREATE TABLE IF NOT EXISTS asiento_propuesto (
   estado        TEXT NOT NULL DEFAULT 'revisar',
   avisos        TEXT,                -- por qué hay que revisarlo, en su idioma
   regla_id      INTEGER,
+  -- compra | venta | doc_soporte (D-127): qué líneas lleva y quién es el tercero
+  naturaleza    TEXT NOT NULL DEFAULT 'compra',
   aprobado      INTEGER NOT NULL DEFAULT 0,
   aprobado_at   TEXT,
   generado_at   TEXT NOT NULL DEFAULT (datetime('now')),
@@ -316,6 +318,8 @@ CREATE TABLE IF NOT EXISTS regla_causacion (
   -- lote, lo segundo hay que preguntarlo. Con un solo NULL no se distinguen, y
   -- confundirlos significa dejar de retener sin que nadie lo decida.
   sin_retencion         INTEGER NOT NULL DEFAULT 0,
+  -- compra | venta | doc_soporte: la cuenta de una regla es de gasto o de ingreso
+  naturaleza            TEXT NOT NULL DEFAULT 'compra',
   vigencia_desde        TEXT,
   veces_usada           INTEGER NOT NULL DEFAULT 0,
   -- 'manual'    la escribió el contador
@@ -610,6 +614,33 @@ CREATE INDEX IF NOT EXISTS idx_excel_row_fecha ON excel_row(fecha_emision);
 """
 
 
+def _m013_ventas_y_documento_soporte(conn: sqlite3.Connection) -> None:
+    """Migración 13 — lo que la empresa emite también se causa (D-127).
+
+    Lo pidió el contador el 2026-10-27, probando la 0.11: el reporte de la DIAN
+    trae lo que la empresa **emitió** —ventas, notas crédito de venta y
+    documentos soporte a no obligados— y eso también se contabiliza, con el
+    **receptor** como tercero. Tres cosas nuevas, todas con valor por defecto
+    para que lo que ya existe siga significando lo mismo:
+
+    - `asiento_propuesto.naturaleza`: `compra` (lo de siempre), `venta` o
+      `doc_soporte`. Decide qué líneas lleva el asiento.
+    - `regla_causacion.naturaleza`: una regla de ingreso para un cliente no es la
+      regla de gasto para ese mismo NIT cuando además es proveedor.
+    - `empresa_info.cuenta_clientes` y `cuenta_iva_generado`: las dos cuentas de
+      una venta que Contab tampoco puede deducir, y tampoco se ponen por defecto.
+    """
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(empresa_info)").fetchall()}
+    if "cuenta_clientes" not in cols:
+        conn.execute("ALTER TABLE empresa_info ADD COLUMN cuenta_clientes TEXT")
+    if "cuenta_iva_generado" not in cols:
+        conn.execute("ALTER TABLE empresa_info ADD COLUMN cuenta_iva_generado TEXT")
+    for tabla in ("asiento_propuesto", "regla_causacion"):
+        cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({tabla})").fetchall()}
+        if "naturaleza" not in cols:
+            conn.execute(f"ALTER TABLE {tabla} ADD COLUMN naturaleza TEXT NOT NULL DEFAULT 'compra'")
+
+
 def _m012_regla_sin_retencion(conn: sqlite3.Connection) -> None:
     """Migración 12 — «a este proveedor no se le retiene», dicho a propósito.
 
@@ -795,6 +826,7 @@ MIGRACIONES: list[tuple[int, object]] = [
     (10, _m010_reglas_causacion),
     (11, _m011_asiento_y_cuentas_de_la_empresa),
     (12, _m012_regla_sin_retencion),
+    (13, _m013_ventas_y_documento_soporte),
 ]
 
 
