@@ -129,6 +129,10 @@ def preparar_descarga(periodo: str, enlace: str, grupo: str | None = None) -> di
         "hasta": hasta,
         "grupo": validar_grupo(grupo),
         "etiqueta": periodo,
+        # El mes normalizado. El sidecar lo usa para crear la carpeta del mes
+        # (D-110); sin esta llave, «Traer de la DIAN» moría con KeyError en toda
+        # empresa que ya tuviera carpeta — lo vio Carlos en la 0.11.0.
+        "periodo": periodo,
     }
 
 
