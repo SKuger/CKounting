@@ -301,3 +301,15 @@ def test_render_no_necesita_pillow(tmp_path):
     assert resultado.status == EXTRACTION_STATUS_OK, resultado.error
     assert resultado.source == "qr-scan"
     assert resultado.cufes[0].value == EXPECTED_CUFES[src.name][0]
+
+
+def test_la_ligadura_ff_no_rompe_el_cufe():
+    """Una factura POS real (buñuelos, 2026-09) venía con fuente de ligaduras:
+    pdftotext sacaba «…79cﬀcf7c…» con la ﬀ como un solo glifo U+FB00, y el
+    extractor no veía ninguna corrida de 96. Tampoco la rescató el QR."""
+    from contab_core.pdf_cufe import _find_cufes_in_text
+    esperado = "05fd48364dbae620e370753fc06b5dae23d31f0acd5f861834a5356cd9f72f79cffcf7c4859974364d3ebe0d07e79e41"
+    texto = "TOTAL A PAGAR: $21,600.00\nCUFE: " + esperado.replace("ff", "ﬀ") + "\nRepresentación Gráﬁca"
+    assert "ﬀ" in texto
+    hits = _find_cufes_in_text(texto)
+    assert hits and hits[0].value == esperado and hits[0].label == "CUFE"
