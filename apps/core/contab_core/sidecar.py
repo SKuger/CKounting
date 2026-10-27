@@ -1989,6 +1989,13 @@ def handle_request(request: dict) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # El canal con Nitro es UTF-8 en los dos sentidos. Sin esto, en Windows Python
+    # abre stdin/stdout con la página de códigos del sistema (cp1252), y como las
+    # respuestas van con ensure_ascii=False, toda Ñ o tilde salía en cp1252 y Node
+    # —que lee UTF-8— la volvía «�»: así llegó «CASTA�EDA» a la ficha de un tercero.
+    for stream in (sys.stdin, sys.stdout):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     # Registra en el catálogo central (contab.db) las empresas ya existentes en disco
     # (migración de instalaciones previas a 0.1.4). Best-effort: nunca bloquea el arranque.
     try:
