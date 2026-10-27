@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import unicodedata
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,7 +50,7 @@ EXTRACTION_STATUS_PROTEGIDO = "protegido"
 #       of unlabeled/failed text reads (D-067).
 # 2: el extractor aprende a abrir PDFs con contraseña. Subirlo hace que se
 # re-lean los que quedaron cacheados como «sin texto» sin serlo.
-EXTRACTOR_VERSION = 2
+EXTRACTOR_VERSION = 3  # 3: ligaduras tipográficas (ﬀ) deshechas antes de buscar
 
 
 @dataclass(frozen=True)
@@ -116,6 +117,10 @@ def _find_cufes_in_text(text: str) -> list[Cufe]:
     """
     if not text:
         return []
+    # Una fuente con ligaduras convierte «ff» en un solo glifo «ﬀ» (U+FB00) y
+    # pdftotext lo saca tal cual: el CUFE de una factura POS de buñuelos tenía
+    # «…79cﬀcf7c…» y no había corrida hexadecimal de 96. NFKC deshace la ligadura.
+    text = unicodedata.normalize("NFKC", text)
     candidates = _hex_candidates(text)
     if not candidates:
         return []
