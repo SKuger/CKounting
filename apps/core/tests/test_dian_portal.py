@@ -180,3 +180,27 @@ def test_se_pueden_filtrar_por_mes(conn):
 def test_un_camino_inventado_se_rechaza(conn):
     with pytest.raises(DianPortalError, match="Camino desconocido"):
         dp.registrar_ingesta(conn, periodo="2026-07", camino="telepatía")
+
+
+def test_el_plan_de_descarga_cae_en_la_carpeta_del_mes(tmp_path):
+    """Carlos, 0.11.0: «Traer de la DIAN» moría con `'periodo'` en toda empresa
+    que ya tuviera carpeta. El plan traía `etiqueta` y el sidecar pedía
+    `periodo` para crear la carpeta del mes (D-110). Esta prueba pasa por el
+    handler real, que es el único sitio donde se juntan las dos cosas."""
+    from contab_core import sidecar, storage
+    db = tmp_path / "e.db"
+    storage.init_empresa_db(db, nit="900921756", dv="6", razon_social="ALAGUNA")
+    raiz = tmp_path / "ALAGUNA"
+    raiz.mkdir()
+    c = storage.connect(db)
+    storage.ensure_schema(c)
+    c.execute("UPDATE empresa_info SET default_folder = ?", (str(raiz),))
+    c.commit()
+    c.close()
+
+    plan = sidecar._h_preparar_descarga_dian(
+        {"db_path": str(db), "periodo": "2026-10", "enlace": ENLACE})
+    assert plan["periodo"] == "2026-10"
+    assert plan["carpeta"] == str(raiz / "2026-10")
+    assert (raiz / "2026-10").is_dir(), "el mes nace con su carpeta hecha"
+    assert plan["nit_receptor"] == "900921756"
