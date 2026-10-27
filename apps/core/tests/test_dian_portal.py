@@ -5,6 +5,7 @@ estos tests no comprueban que algo funcione, sino que ese enlace **no se escape*
 ni al log, ni al mensaje de un error, ni al resultado de un trabajo.
 """
 import zipfile
+from datetime import date
 
 import pytest
 
@@ -30,7 +31,19 @@ SECRETO = "24bdb332-ea46-42ad-8e38-36bf51f33c29"
 def test_el_ultimo_dia_del_mes_se_calcula(periodo, esperado):
     """Un rango que se queda corto deja documentos fuera del mes, y eso es
     contabilidad que falta — no un detalle de formato."""
-    assert dp.rango_del_mes(periodo) == esperado
+    assert dp.rango_del_mes(periodo, hoy=date(2027, 6, 1)) == esperado
+
+
+def test_el_mes_en_curso_se_pide_hasta_hoy():
+    """Carlos pidió octubre el 27 de octubre y la DIAN respondió 500 a un rango
+    que terminaba el 31: el portal no acepta un día futuro."""
+    assert dp.rango_del_mes("2026-10", hoy=date(2026, 10, 27)) == ("2026-10-01", "2026-10-27")
+    assert dp.rango_del_mes("2026-09", hoy=date(2026, 10, 27)) == ("2026-09-01", "2026-09-30")
+
+
+def test_un_mes_que_no_ha_empezado_es_error():
+    with pytest.raises(DianPortalError, match="no empieza"):
+        dp.rango_del_mes("2026-11", hoy=date(2026, 10, 27))
 
 
 @pytest.mark.parametrize("malo", ["2026-13", "26-01", "2026-1", "", "marzo", "2026-00"])
