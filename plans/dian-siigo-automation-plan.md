@@ -584,6 +584,11 @@ es volver a subir el archivo, no publicar una versión.)*
       concepto sea el mismo; si ese proveedor factura otra cosa, se le vuelve a
       preguntar (D-120). Las dos cuentas de la empresa se escriben ahí mismo,
       en el primer asiento, y quedan guardadas **para esa empresa**.
+- [x] **4.6** — ✅ 2026-10-27. Lo que la empresa **emite** también se causa
+      (D-127, supersede a D-123): el documento soporte a no obligados como una
+      compra sin IVA, y la venta —con su nota crédito— contra clientes, ingreso
+      e IVA generado; el tercero es el receptor y las reglas llevan naturaleza.
+      La nómina no. Lo pidió el contador con su primer mes real delante.
 - [ ] ~~4.5 original~~ — The approval tray in the frontend: known documents approved in
       bulk, new ones decided one by one, and **every new decision writes or
       refines a rule**.
