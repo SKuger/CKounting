@@ -11,7 +11,7 @@
 // De ahí las tres cosas que manda esta pantalla: se ve el asiento ENTERO antes
 // de aprobar, se puede corregir, y al aprobar **se aprende** — aprobar no es
 // marcar una casilla, es enseñarle a Contab lo que él acaba de decidir.
-import { ArrowLeft, RefreshCw, Check, Undo2, ChevronRight, Download, FileSpreadsheet, Settings2 } from 'lucide-vue-next'
+import { ArrowLeft, RefreshCw, Check, Undo2, ChevronRight, Download, FileSpreadsheet, Settings2, UploadCloud } from 'lucide-vue-next'
 
 type Linea = { id: number; cuenta_puc: string | null; descripcion: string; debito: string; credito: string }
 // `naturaleza` (D-127): compra, venta o doc_soporte. Decide qué líneas lleva,
@@ -112,6 +112,60 @@ async function onSiigoFolder(ruta: string) {
     toast.error('No se pudo armar el archivo de Siigo', humanError(e))
   } finally {
     siigoExportando.value = false
+  }
+}
+
+// El catálogo de Siigo desde el Excel de la empresa: hoja «Impuestos» y hoja
+// «Comprobantes». Se enseña qué cruzó y qué no ANTES de escribir nada.
+type VistaCatalogo = {
+  source_name: string
+  conceptos_cruzados: { codigo: string; nombre: string; concepto: string }[]
+  sin_cruce: { codigo: string; nombre: string; motivo: string }[]
+  config: Record<string, string>
+  avisos: string[]
+}
+const catalogoSubiendo = ref(false)
+const catalogoAplicando = ref(false)
+const catalogoVista = ref<VistaCatalogo | null>(null)
+const catalogoRuta = ref('')
+
+async function subirCatalogo(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  catalogoSubiendo.value = true
+  try {
+    const fd = new FormData()
+    fd.append('db_path', dbPath.value)
+    fd.append('file', file)
+    const res = await $fetch<{ ok: boolean; error?: string; result?: VistaCatalogo; saved_to?: string }>(
+      '/api/upload-siigo', { method: 'POST', body: fd })
+    if (!res.ok || !res.result) throw new Error(res.error || 'error al subir')
+    catalogoVista.value = res.result
+    catalogoRuta.value = res.saved_to || ''
+    siigoPanel.value = true
+  } catch (e) {
+    toast.error('No se pudo leer el catálogo', humanError(e))
+  } finally {
+    catalogoSubiendo.value = false
+  }
+}
+
+async function aplicarCatalogo() {
+  if (!catalogoRuta.value) return
+  catalogoAplicando.value = true
+  try {
+    const r = await rpc<VistaCatalogo>('siigo_importar', {
+      db_path: dbPath.value, source_path: catalogoRuta.value, dry_run: false })
+    toast.success('Catálogo de Siigo cargado',
+      `${r.conceptos_cruzados.length} conceptos con código · ${Object.keys(r.config).length} valores de configuración`)
+    catalogoVista.value = null
+    await cargarSiigo()
+  } catch (e) {
+    toast.error('No se pudo aplicar el catálogo', humanError(e))
+  } finally {
+    catalogoAplicando.value = false
   }
 }
 
@@ -315,12 +369,47 @@ onMounted(cargar)
 
     <!-- panel de Siigo: nunca un modal -->
     <section v-if="siigoPanel" class="shrink-0 rounded-lg border border-primary/40 bg-card p-3">
-      <h2 class="text-sm font-semibold">Lo que Siigo exige y Contab no puede adivinar</h2>
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <h2 class="text-sm font-semibold">Lo que Siigo exige y Contab no puede adivinar</h2>
+        <Button as="label" size="sm" variant="outline" :disabled="catalogoSubiendo">
+          <UploadCloud class="size-3.5" /> {{ catalogoSubiendo ? 'Leyendo…' : 'Subir el catálogo (Excel)' }}
+          <input type="file" accept=".xlsx,.xlsm" class="hidden" @change="subirCatalogo">
+        </Button>
+      </div>
       <p class="mb-3 text-xs text-muted-foreground">
         Son del catálogo de <strong>esta empresa</strong> en Siigo. El tipo de comprobante es el número con que
         la empresa registra cada clase de documento; el último consecutivo es el del último comprobante de ese
-        tipo que ya está en Siigo — Contab sigue desde ahí y lo va anotando.
+        tipo que ya está en Siigo — Contab sigue desde ahí y lo va anotando. Puede escribirlos aquí o subir el
+        Excel con las hojas «Impuestos» y «Comprobantes»: Contab le enseña qué leyó antes de guardar.
       </p>
+
+      <!-- vista previa del catálogo, antes de escribir nada -->
+      <div v-if="catalogoVista" class="mb-3 rounded-md border border-border bg-muted/30 p-3">
+        <h3 class="text-xs font-semibold">{{ catalogoVista.source_name }}</h3>
+        <p class="mt-1 text-xs text-muted-foreground">
+          <strong class="text-foreground">{{ catalogoVista.conceptos_cruzados.length }}</strong> conceptos de retención reciben su código ·
+          <strong class="text-foreground">{{ Object.keys(catalogoVista.config).length }}</strong> valores (tipos, consecutivos, IVA).
+        </p>
+        <ul v-if="catalogoVista.conceptos_cruzados.length" class="mt-2 space-y-0.5 text-xs">
+          <li v-for="c in catalogoVista.conceptos_cruzados" :key="c.codigo">
+            <span class="font-mono">{{ c.codigo }}</span> {{ c.nombre }} → <strong>{{ c.concepto }}</strong>
+          </li>
+        </ul>
+        <ul v-if="catalogoVista.sin_cruce.length" class="mt-2 space-y-0.5 text-xs text-status-warning">
+          <li v-for="c in catalogoVista.sin_cruce" :key="c.codigo">
+            · <span class="font-mono">{{ c.codigo }}</span> {{ c.nombre }}: {{ c.motivo }}
+          </li>
+        </ul>
+        <ul v-if="catalogoVista.avisos.length" class="mt-2 space-y-0.5 text-xs text-status-warning">
+          <li v-for="(a, i) in catalogoVista.avisos" :key="i">· {{ a }}</li>
+        </ul>
+        <div class="mt-3 flex gap-2">
+          <Button size="sm" :disabled="catalogoAplicando" @click="aplicarCatalogo">
+            {{ catalogoAplicando ? 'Guardando…' : 'Aplicar' }}
+          </Button>
+          <Button size="sm" variant="ghost" :disabled="catalogoAplicando" @click="catalogoVista = null">Cancelar</Button>
+        </div>
+      </div>
       <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <div v-for="c in CLASES" :key="c.clave" class="grid gap-1">
           <Label class="text-xs">{{ c.etiqueta }} · tipo</Label>
