@@ -33,6 +33,7 @@ from . import perfil_fiscal as perfil_module
 from . import program_db as program_db_module
 from . import puc as puc_module
 from . import rename_soportes as rename_module
+from . import siigo as siigo_module
 from . import storage as storage_module
 from . import tablero as tablero_module
 from . import tarifas as tarifas_module
@@ -1412,6 +1413,31 @@ CUENTAS_EMPRESA = ("cuenta_proveedores", "cuenta_iva_descontable",
                    "cuenta_clientes", "cuenta_iva_generado")
 
 
+def _h_siigo_config(params: dict) -> dict:
+    """Lo que el archivo de Siigo necesita y no se deduce: tipos de comprobante,
+    últimos consecutivos, códigos de IVA (D-128). Con `valores`, guarda."""
+    conn = _con(params["db_path"])
+    try:
+        if params.get("valores"):
+            return {"config": siigo_module.guardar_config(conn, dict(params["valores"]))}
+        return {"config": siigo_module.config(conn)}
+    finally:
+        conn.close()
+
+
+def _h_siigo_exportar(params: dict) -> dict:
+    """Los asientos aprobados del mes en el formato que Siigo importa."""
+    periodo = storage_module._norm_periodo(params.get("periodo") or "")
+    carpeta = params.get("output_dir")
+    if not carpeta:
+        raise ValueError("Hace falta la carpeta donde guardar el archivo.")
+    conn = _con(params["db_path"])
+    try:
+        return siigo_module.export_siigo(conn, periodo, Path(carpeta))
+    finally:
+        conn.close()
+
+
 def _h_cuentas_empresa(params: dict) -> dict:
     """Las cuentas que Contab no puede deducir: proveedores, IVA descontable,
     clientes e IVA generado (D-127). Son del PUC de cada empresa."""
@@ -1941,6 +1967,8 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "asiento_aprobar_lote": _h_asiento_aprobar_lote,
     "asiento_desaprobar": _h_asiento_desaprobar,
     "asiento_exportar": _h_asiento_exportar,
+    "siigo_config": _h_siigo_config,
+    "siigo_exportar": _h_siigo_exportar,
     "cuentas_empresa": _h_cuentas_empresa,
     "tarifas_list": _h_tarifas_list,
     "tarifas_guardar_concepto": _h_tarifas_guardar_concepto,

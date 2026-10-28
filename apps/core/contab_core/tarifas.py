@@ -317,7 +317,7 @@ def guardar_concepto(conn, data: dict[str, Any]) -> dict[str, Any]:
     """Crea o edita un concepto a mano. Lo manual no lo pisa una importación."""
     cid = data.get("id")
     campos = ("concepto", "aplica_a", "sobre", "tarifa", "tarifa_texto",
-              "base_minima_uvt", "cuenta_puc", "vigencia_desde", "observaciones")
+              "base_minima_uvt", "cuenta_puc", "codigo_siigo", "vigencia_desde", "observaciones")
     valores = [(_txt(data.get(c)) or None) for c in campos]
     if cid:
         conn.execute(
