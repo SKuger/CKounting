@@ -81,12 +81,20 @@ const siigo = reactive<Record<string, string>>({})
 // al aprobar y la regla lo recuerda.
 type Iva = { codigo: string; nombre: string; tarifa: string | null }
 const ivas = ref<Iva[]>([])
+// En una venta, lo que el cliente le retiene (D-131): una retefuente, un
+// ReteIVA y un ReteICA del catálogo. Solo se manda si él lo tocó: si no, la
+// regla conserva lo aprendido —incluida una tarifa propia del cliente—.
+type RetVenta = { codigo: string; nombre: string; tipo: string; tarifa: string | null }
+const retencionesVenta = ref<RetVenta[]>([])
+const retPorTipo = (t: string) => retencionesVenta.value.filter((r) => r.tipo === t)
+const retCliente = reactive({ retefuente: '', reteiva: '', reteica: '', tocado: false })
 const catalogoCargado = ref(false)
 const tiposUsados = computed(() => [...new Set(CLASES.map((c) => siigo[`tipo:${c.clave}`]).filter(Boolean))])
 
 async function cargarSiigo() {
-  const r = await rpc<{ config: Record<string, string>; ivas: Iva[]; catalogo_cargado: boolean }>(
+  const r = await rpc<{ config: Record<string, string>; ivas: Iva[]; retenciones_venta: RetVenta[]; catalogo_cargado: boolean }>(
     'siigo_config', { db_path: dbPath.value })
+  retencionesVenta.value = r.retenciones_venta || []
   for (const k of Object.keys(siigo)) delete siigo[k]
   Object.assign(siigo, r.config)
   ivas.value = r.ivas || []
@@ -308,6 +316,10 @@ function abrir(a: Asiento) {
   correccion.retencion = ''
   correccion.aprender_regla = true
   correccion.iva_codigo = a.lineas.find((l) => l.rol === 'iva')?.codigo_siigo || ''
+  const codigos = a.lineas.filter((l) => l.rol === 'retencion').map((l) => l.codigo_siigo || '')
+  for (const t of ['retefuente', 'reteiva', 'reteica'] as const)
+    retCliente[t] = retPorTipo(t).find((r) => codigos.includes(r.codigo))?.codigo || ''
+  retCliente.tocado = false
 }
 
 async function aprobar(a: Asiento) {
@@ -321,6 +333,9 @@ async function aprobar(a: Asiento) {
       sin_retencion: correccion.retencion === 'ninguna',
       aprender_regla: correccion.aprender_regla,
       iva_codigo: correccion.iva_codigo,
+      retenciones_cliente: a.naturaleza === 'venta' && retCliente.tocado
+        ? ([retCliente.retefuente, retCliente.reteiva, retCliente.reteica].filter(Boolean).join(',') || 'ninguna')
+        : '',
       ...cuentas,
     })
     abierto.value = null
@@ -442,12 +457,12 @@ onMounted(cargar)
         <div class="flex flex-wrap gap-2">
           <Button as="label" size="sm" variant="outline" :disabled="catalogoSubiendo">
             <UploadCloud class="size-3.5" /> {{ catalogoSubiendo ? 'Leyendo…' : 'Subir el catálogo (Excel)' }}
-            <input type="file" accept=".xlsx,.xlsm" class="hidden" @change="subirCatalogo">
+            <input type="file" accept=".xlsx,.xlsm,.ods" class="hidden" @change="subirCatalogo">
           </Button>
           <Button as="label" size="sm" variant="outline" :disabled="siembraSubiendo || !catalogoCargado"
             :title="catalogoCargado ? 'El archivo de carga de Siigo con su hoja de históricos' : 'Primero el catálogo'">
             <UploadCloud class="size-3.5" /> {{ siembraSubiendo ? 'Leyendo…' : 'Reglas desde los históricos' }}
-            <input type="file" accept=".xlsx,.xlsm" class="hidden" @change="subirHistoricos">
+            <input type="file" accept=".xlsx,.xlsm,.ods" class="hidden" @change="subirHistoricos">
           </Button>
         </div>
       </div>
@@ -623,6 +638,16 @@ onMounted(cargar)
                     </option>
                   </select>
                 </div>
+                <template v-if="a.naturaleza === 'venta' && retencionesVenta.length">
+                  <div v-for="t in (['retefuente', 'reteiva', 'reteica'] as const)" :key="t" class="grid gap-1">
+                    <Label class="text-xs">{{ { retefuente: 'Le retiene en la fuente', reteiva: 'Le retiene IVA', reteica: 'Le retiene ICA' }[t] }}</Label>
+                    <select v-model="retCliente[t]" class="h-8 rounded-md border border-border bg-background px-2 text-xs"
+                      @change="retCliente.tocado = true">
+                      <option value="">Nada</option>
+                      <option v-for="r in retPorTipo(t)" :key="r.codigo" :value="r.codigo">{{ r.codigo }} · {{ r.nombre }}</option>
+                    </select>
+                  </div>
+                </template>
                 <div v-if="ivas.length && a.lineas.some((l) => l.rol === 'iva')" class="grid gap-1">
                   <Label class="text-xs">IVA (código de Siigo)</Label>
                   <select v-model="correccion.iva_codigo" class="h-8 rounded-md border border-border bg-background px-2 text-xs">
