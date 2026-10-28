@@ -137,15 +137,26 @@ def datos_del_tercero(
     return [], ORIGEN_SIN_DATOS
 
 
-def _aplica_a(concepto: dict[str, Any], declarante: bool) -> bool:
+def _es_persona_juridica(nit: str | None) -> bool:
+    """Un NIT de nueve dígitos que empieza por 8 o 9 es de una persona jurídica.
+    Una persona jurídica siempre declara renta; de una natural no se sabe."""
+    n = "".join(ch for ch in str(nit or "") if ch.isdigit())
+    return len(n) == 9 and n[0] in "89"
+
+
+def _contradice(concepto: dict[str, Any], nit: str | None) -> bool:
+    """¿El concepto elegido choca con lo que se SABE del tercero?
+
+    Hasta la 0.17 el motor tomaba «declarante» por «gran contribuyente» (O-13)
+    y descartaba en silencio todo concepto «de declarantes» para cualquier otro
+    proveedor: el asiento salía completo y sin retención. Declarante de renta
+    es casi toda empresa, y nada en el RUT público lo dice de una persona
+    natural, así que el concepto que eligió el contador se aplica siempre y
+    solo se avisa cuando la contradicción es segura: «no declarantes» a una
+    empresa.
+    """
     a = (concepto.get("aplica_a") or "").strip().lower()
-    if a in ("", "ambos"):
-        return True
-    if a == "declarantes":
-        return declarante
-    if a == "no_declarantes":
-        return not declarante
-    return True       # una frase que no sabemos leer no excluye el concepto
+    return a == "no_declarantes" and _es_persona_juridica(nit)
 
 
 def calcular(
@@ -219,12 +230,13 @@ def calcular(
             res.revisar = True
         else:
             concepto = dict(fila)
-            declarante = _tiene(res.responsabilidades, GRAN_CONTRIBUYENTE)
-            if not _aplica_a(concepto, declarante):
+            nit = documento.get("tercero_nit") or documento.get("emisor_nit")
+            if _contradice(concepto, nit):
+                res.revisar = True
                 res.avisos.append(
-                    f"«{concepto['concepto']}» no aplica a este tercero "
-                    f"({concepto['aplica_a']}).")
-            elif concepto.get("tarifa") in (None, ""):
+                    f"«{concepto['concepto']}» es para no declarantes y este tercero es una "
+                    f"empresa, que siempre declara renta: revise el concepto.")
+            if concepto.get("tarifa") in (None, ""):
                 res.revisar = True
                 res.avisos.append(
                     f"«{concepto['concepto']}» no tiene tarifa numérica"
