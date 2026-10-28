@@ -181,6 +181,60 @@ async function aplicarCatalogo() {
   }
 }
 
+// Las reglas por tercero, sembradas desde la hoja de históricos del archivo de
+// carga de Siigo (D-130). Lo que ya decidió en la bandeja no se toca.
+type VistaSiembra = {
+  source_name: string; nuevas: number; por_clase: Record<string, number>; con_retencion: number
+  ya_existian: number; ambiguos: { tercero_nit: string; naturaleza: string; cuentas: string[] }[]
+  comprobantes_ignorados: number
+}
+const siembraSubiendo = ref(false)
+const siembraAplicando = ref(false)
+const siembraVista = ref<VistaSiembra | null>(null)
+const siembraRuta = ref('')
+
+async function subirHistoricos(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  siembraSubiendo.value = true
+  try {
+    const fd = new FormData()
+    fd.append('db_path', dbPath.value)
+    fd.append('accion', 'historicos')
+    fd.append('file', file)
+    const res = await $fetch<{ ok: boolean; error?: string; result?: VistaSiembra; saved_to?: string }>(
+      '/api/upload-siigo', { method: 'POST', body: fd })
+    if (!res.ok || !res.result) throw new Error(res.error || 'error al subir')
+    siembraVista.value = res.result
+    siembraRuta.value = res.saved_to || ''
+    siigoPanel.value = true
+  } catch (e) {
+    toast.error('No se pudieron leer los históricos', humanError(e))
+  } finally {
+    siembraSubiendo.value = false
+  }
+}
+
+async function aplicarSiembra() {
+  if (!siembraRuta.value) return
+  siembraAplicando.value = true
+  try {
+    const r = await rpc<VistaSiembra>('siigo_sembrar', {
+      db_path: dbPath.value, source_path: siembraRuta.value, dry_run: false })
+    siembraVista.value = null
+    toast.success(`${r.nuevas} reglas creadas desde Siigo`,
+      'Pulse «Armar la propuesta del mes» para que las use.')
+  } catch (e) {
+    toast.error('No se pudieron crear las reglas', humanError(e))
+  } finally {
+    siembraAplicando.value = false
+  }
+}
+
+const NATURALEZA_TXT: Record<string, string> = { compra: 'compras', venta: 'ventas', doc_soporte: 'documentos soporte' }
+
 function etiquetaFalta(f: string): string {
   const [k, v] = f.split(':')
   if (k === 'tipo') return `tipo de comprobante de ${CLASES.find((c) => c.clave === v)?.etiqueta.toLowerCase() ?? v}`
@@ -385,10 +439,17 @@ onMounted(cargar)
     <section v-if="siigoPanel" class="shrink-0 rounded-lg border border-primary/40 bg-card p-3">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <h2 class="text-sm font-semibold">Lo que Siigo exige y Contab no puede adivinar</h2>
-        <Button as="label" size="sm" variant="outline" :disabled="catalogoSubiendo">
-          <UploadCloud class="size-3.5" /> {{ catalogoSubiendo ? 'Leyendo…' : 'Subir el catálogo (Excel)' }}
-          <input type="file" accept=".xlsx,.xlsm" class="hidden" @change="subirCatalogo">
-        </Button>
+        <div class="flex flex-wrap gap-2">
+          <Button as="label" size="sm" variant="outline" :disabled="catalogoSubiendo">
+            <UploadCloud class="size-3.5" /> {{ catalogoSubiendo ? 'Leyendo…' : 'Subir el catálogo (Excel)' }}
+            <input type="file" accept=".xlsx,.xlsm" class="hidden" @change="subirCatalogo">
+          </Button>
+          <Button as="label" size="sm" variant="outline" :disabled="siembraSubiendo || !catalogoCargado"
+            :title="catalogoCargado ? 'El archivo de carga de Siigo con su hoja de históricos' : 'Primero el catálogo'">
+            <UploadCloud class="size-3.5" /> {{ siembraSubiendo ? 'Leyendo…' : 'Reglas desde los históricos' }}
+            <input type="file" accept=".xlsx,.xlsm" class="hidden" @change="subirHistoricos">
+          </Button>
+        </div>
       </div>
       <p class="mb-3 text-xs text-muted-foreground">
         Son del catálogo de <strong>esta empresa</strong> en Siigo. El tipo de comprobante es el número con que
@@ -396,6 +457,27 @@ onMounted(cargar)
         tipo que ya está en Siigo — Contab sigue desde ahí y lo va anotando. Puede escribirlos aquí o subir el
         Excel con las hojas «Impuestos» y «Comprobantes»: Contab le enseña qué leyó antes de guardar.
       </p>
+
+      <!-- vista previa de la siembra, antes de crear ninguna regla -->
+      <div v-if="siembraVista" class="mb-3 rounded-md border border-border bg-muted/30 p-3">
+        <h3 class="text-xs font-semibold">{{ siembraVista.source_name }}</h3>
+        <p class="mt-1 text-xs text-muted-foreground">
+          Se crearían <strong class="text-foreground">{{ siembraVista.nuevas }}</strong> reglas
+          (<template v-for="(n, k, i) in siembraVista.por_clase" :key="k">{{ i ? ', ' : '' }}{{ n }} de {{ NATURALEZA_TXT[k] || k }}</template>),
+          <strong class="text-foreground">{{ siembraVista.con_retencion }}</strong> con su concepto de retención.
+          <template v-if="siembraVista.ya_existian">{{ siembraVista.ya_existian }} terceros ya tenían regla y no se tocan.</template>
+        </p>
+        <p v-if="siembraVista.ambiguos.length" class="mt-2 text-xs text-status-warning">
+          {{ siembraVista.ambiguos.length }} terceros fueron a cuentas distintas sin una que domine; se deciden en la bandeja:
+          <span class="font-mono">{{ siembraVista.ambiguos.slice(0, 6).map((a) => a.tercero_nit).join(', ') }}</span><template v-if="siembraVista.ambiguos.length > 6">…</template>
+        </p>
+        <div class="mt-3 flex gap-2">
+          <Button size="sm" :disabled="siembraAplicando || !siembraVista.nuevas" @click="aplicarSiembra">
+            {{ siembraAplicando ? 'Creando…' : `Crear ${siembraVista.nuevas} reglas` }}
+          </Button>
+          <Button size="sm" variant="ghost" :disabled="siembraAplicando" @click="siembraVista = null">Cancelar</Button>
+        </div>
+      </div>
 
       <!-- vista previa del catálogo, antes de escribir nada -->
       <div v-if="catalogoVista" class="mb-3 rounded-md border border-border bg-muted/30 p-3">
