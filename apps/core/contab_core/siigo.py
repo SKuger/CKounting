@@ -191,7 +191,7 @@ def export_siigo(conn, periodo: str, output_dir: str | Path) -> dict[str, Any]:
             es_cartera = rol == "cartera"
             valores: list[Any] = [
                 int(tipo) if tipo.isdigit() else tipo, a.get("siigo_consecutivo"), fecha,
-                "COP", "", _cuenta(ln.get("cuenta_puc")), _nit(a.get("tercero_nit")),
+                "COP", "", _cuenta(ln.get("cuenta_puc")), _nit(ln.get("tercero_nit") or a.get("tercero_nit")),
                 "", "", "", "", "",
                 prefijo if es_cartera else "", (int(consecutivo_doc) if es_cartera and consecutivo_doc.isdigit() else (consecutivo_doc if es_cartera else "")),
                 1 if es_cartera else "", (fecha + timedelta(days=dias)) if (es_cartera and fecha) else "",

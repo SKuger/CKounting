@@ -1373,16 +1373,56 @@ def _h_asiento_aprobar(params: dict) -> dict:
             aprender_regla=bool(params.get("aprender_regla", True)),
             iva_codigo=(params.get("iva_codigo") or "").strip() or None,
             retenciones_cliente=(params.get("retenciones_cliente") or "").strip() or None,
+            lineas=params.get("lineas"),
         )
+    finally:
+        conn.close()
+
+
+def _correccion(params: dict) -> dict:
+    return {k: params.get(k) for k in asiento_module.CAMPOS_CORRECCION if k in params}
+
+
+def _cuentas_empresa(params: dict) -> dict:
+    return {k: (params.get(k) or "").strip() or None for k in CUENTAS_EMPRESA}
+
+
+def _h_asiento_guardar(params: dict) -> dict:
+    """Guarda las líneas como las dejó el contador, sin aprobar."""
+    conn = _con(params["db_path"])
+    try:
+        return asiento_module.guardar(
+            conn, int(params["id"]), params.get("lineas") or [],
+            _correccion(params), **_cuentas_empresa(params))
+    finally:
+        conn.close()
+
+
+def _h_asiento_previsualizar(params: dict) -> dict:
+    """Cómo quedaría el asiento con otra cuenta, retención o IVA. No guarda."""
+    conn = _con(params["db_path"])
+    try:
+        return asiento_module.previsualizar(
+            conn, int(params["id"]), **_correccion(params), **_cuentas_empresa(params))
+    finally:
+        conn.close()
+
+
+def _h_asiento_descartar(params: dict) -> dict:
+    conn = _con(params["db_path"])
+    try:
+        return asiento_module.descartar(conn, int(params["id"]))
     finally:
         conn.close()
 
 
 def _h_asiento_aprobar_lote(params: dict) -> dict:
     periodo = storage_module._norm_periodo(params.get("periodo") or "")
+    ids = params.get("ids")
     conn = _con(params["db_path"])
     try:
-        return asiento_module.aprobar_lote(conn, periodo)
+        return asiento_module.aprobar_lote(
+            conn, periodo, [int(i) for i in ids] if isinstance(ids, list) else None)
     finally:
         conn.close()
 
@@ -2034,6 +2074,9 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "asiento_list": _h_asiento_list,
     "asiento_aprobar": _h_asiento_aprobar,
     "asiento_aprobar_lote": _h_asiento_aprobar_lote,
+    "asiento_guardar": _h_asiento_guardar,
+    "asiento_previsualizar": _h_asiento_previsualizar,
+    "asiento_descartar": _h_asiento_descartar,
     "asiento_desaprobar": _h_asiento_desaprobar,
     "asiento_exportar": _h_asiento_exportar,
     "siigo_config": _h_siigo_config,
