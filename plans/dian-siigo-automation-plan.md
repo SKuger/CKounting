@@ -603,6 +603,10 @@ es volver a subir el archivo, no publicar una versión.)*
 - [x] **4.9** — ✅ 2026-10-28. Las reglas se **siembran desde los históricos**
       de Siigo (D-130): sobre REAL, 240 reglas y el julio de 0 a 42 de 50
       documentos con regla. Lo ambiguo se decide en la bandeja.
+- [x] **4.10** — ✅ 2026-10-28. **Lo que el cliente retiene en una venta** va al
+      débito y la cartera por el neto (D-131), aprendido por cliente de los
+      históricos —con su tarifa si difiere— o elegido al aprobar. Y el
+      catálogo y los históricos se leen también en `.ods` (D-132).
 - [ ] ~~4.5 original~~ — The approval tray in the frontend: known documents approved in
       bulk, new ones decided one by one, and **every new decision writes or
       refines a rule**.

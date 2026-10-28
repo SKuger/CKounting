@@ -84,10 +84,11 @@ códigos.
 
 **Antes del primer mes de una empresa**, en el mismo panel «Siigo»: *Reglas
 desde los históricos*, con el archivo de carga de Siigo que tenga la hoja de
-históricos (guárdelo como `.xlsx`). Contab mira a qué cuenta fue cada proveedor
+históricos (sirve el `.ods` tal como lo guarda). Contab mira a qué cuenta fue cada proveedor
 y cada cliente en sus últimos comprobantes y crea la regla; así el primer mes
-sale casi todo «listo» en vez de una decisión por proveedor. Lo que usted ya
-decidió en la bandeja no se toca. Las cuentas van tal como las escribió (use las subcuentas de 8
+sale casi todo «listo» en vez de una decisión por proveedor. De cada cliente
+aprende también qué le retiene en las ventas (retefuente, ReteIVA, ReteICA, y
+la tarifa si es distinta). Lo que usted ya decidió en la bandeja no se toca. Las cuentas van tal como las escribió (use las subcuentas de 8
 dígitos de su PUC). *Exportar aprobados* sigue ahí, como listado simple.
 
 ## Qué esperar

@@ -1378,3 +1378,31 @@ y esas decisiones ya estaban tomadas en Siigo. Sobre la copia de REAL: 240
 reglas de 266 terceros (9 ambiguos), y el julio pasó de 0 a 42 documentos con
 regla de 50. Los últimos 10 y no todos: un proveedor que cambió de cuenta hace
 un año tiene que ir a la de ahora.
+
+## D-131 — En una venta, lo que el cliente retiene va al débito y la cartera por el neto ✅
+
+**Decisión**: con el catálogo de Siigo cargado, una venta lleva las retenciones
+que el cliente le practica a la empresa —retefuente sobre la base, ReteIVA
+sobre el IVA, ReteICA **en por mil** sobre la base— al débito, en las cuentas
+1355 del catálogo y con su código y su base; la cartera queda por el neto, con
+centavos, como en su archivo. Qué retiene cada cliente vive en su regla
+(`retenciones_cliente`: códigos de Siigo, «ninguna», o NULL si no se sabe) y se
+siembra de los históricos o se elige al aprobar. Si el cliente aplicó una
+tarifa distinta a la del catálogo con el mismo código, se guarda con él:
+«05:1.8» es ReteICA al 1,8 por mil. Una venta de un cliente del que no se sabe
+no se aprueba en lote.
+
+**Por qué**: en tres años de ventas de REAL, 79 de 90 llevan las mismas tres
+retenciones y la cartera por el neto; sin ellas, el archivo de Siigo no
+coincidía con el suyo en ninguna venta. Y la venta de prueba de su septiembre
+(FELE-426) tenía el ICA al 1,8 por mil, no al 2 del catálogo: con la tarifa
+aprendida del cliente, la cartera sale igual a la suya, al centavo.
+
+## D-132 — Las hojas de cálculo se leen también en `.ods` ✅
+
+**Decisión**: el catálogo y los históricos de Siigo se leen de `.xlsx` o de
+`.ods` (`hojas.py`), sin dependencia nueva: un `.ods` es un ZIP con XML.
+
+**Por qué**: el contador guarda en LibreOffice; su archivo de carga llegó en
+`.ods`. Pedirle que lo convierta cada vez es una instrucción más que olvidar.
+Sobre su archivo real, las 2.445 filas salen idénticas a las del `.xlsx`.
