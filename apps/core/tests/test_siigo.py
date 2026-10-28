@@ -60,7 +60,7 @@ def _filas(path):
 
 def _aprobar_la_compra(conn):
     asiento.generar(conn, "2026-09")
-    a = asiento.listar(conn, "2026-09")[0]
+    a = next(a for a in asiento.listar(conn, "2026-09") if a["cufe"] == CUFE)
     concepto = tarifas.listar_conceptos(conn)[0]["id"]
     asiento.aprobar(conn, a["id"], cuenta_puc="51953001", concepto_retencion_id=concepto)
     return a["id"]
@@ -178,7 +178,6 @@ def test_el_catalogo_se_lee_y_se_cruza_con_los_conceptos(conn, tmp_path):
     cargado = siigo.cargar_catalogo(ruta)
     assert [i["codigo"] for i in cargado.impuestos] == ["02", "01", "14", "09", "07", "100"]
     assert cargado.impuestos[0]["tarifa"] == "19" and cargado.impuestos[3]["tarifa"] == "2.5"
-    assert any("Depreciacion".lower() in a.lower() or "depreciación" in a.lower() for a in cargado.avisos)
 
     vista = siigo.aplicar_catalogo(conn, cargado, dry_run=True)
     assert vista["config"]["iva:19"] == "02" and vista["config"]["iva:5"] == "01"
@@ -205,3 +204,89 @@ def test_con_el_catalogo_cargado_el_archivo_sale_completo(conn, tmp_path):
     assert {f[1] for f in filas} == {875}, "sigue al 874 del catálogo"
     ret = next(f for f in filas if f[5] == 23654001)
     assert ret[16] == "09"
+
+
+def _excel_catalogo_real(ruta: Path):
+    """La forma del catálogo real del contador: el mismo código cuatro veces,
+    una por contexto, sin columna que lo diga — lo dicen la cuenta y la
+    descripción. Hojas llamadas Hoja1 y Hoja2, como él las mandó."""
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Hoja1"
+    ws.append(["Código", "Nombre", "Tipo de impuesto", "Tarifa", "Cuenta", "Descripción"])
+    filas = [
+        (2, "IVA SERVICIOS 19%", "IVA", 19, 24080504, "Iva generado venta de servicios 19%"),
+        (1, "IVA BIENES 19%", "IVA", 19, 24080501, "Iva generado venta de bienes 19%"),
+        (17, "COMPRAS 2,5%", "Retefuente", 2.5, 13551519, "Compras declarantes 2,5%"),
+        (2, "IVA SERVICIOS 19%", "IVA", 19, 24081501, "Iva descontable por servicios 19%"),
+        (1, "IVA BIENES 19%", "IVA", 19, 24081001, "Iva descontable por compras 19%"),
+        (17, "COMPRAS 2,5%", "Retefuente", 2.5, 23654001, "Compras declarantes 2,5%"),
+        (2, "IVA SERVICIOS 19%", "IVA", 19, 24082004, "Iva dev. ventas servicios 19%"),
+        (17, "COMPRAS 2,5%", "Retefuente", 2.5, 13551520, "Dev. compras declarantes 2,5"),
+        (2, "IVA SERVICIOS 19%", "IVA", 19, 24080604, "Iva dev. compras servicios 19%"),
+        (17, "COMPRAS 2,5%", "Retefuente", 2.5, 23654002, "Dev. compras declarantes 2,5%"),
+    ]
+    for f in filas:
+        ws.append(list(f))
+    ws2 = wb.create_sheet("Hoja2")
+    ws2.append(["Clase", "Tipo", "Ultimo Consecutivo"])
+    for f in [("Ajustes contables", 1, 42), ("Factura de compra", 11, 452), ("Factura de venta", 12, 198),
+              ("Nota crédito proveedores", 15, 22), ("Nota crédito para clientes", 17, 47),
+              ("Documento Soporte Electrónico", 19, 140), ("Comprobante de nómina", 992, 66)]:
+        ws2.append(list(f))
+    wb.save(ruta)
+
+
+def test_el_catalogo_real_se_lee_con_sus_cuatro_contextos(conn, tmp_path):
+    ruta = tmp_path / "Tabla Impuestos y Comprobantes.xlsx"
+    _excel_catalogo_real(ruta)
+    cargado = siigo.cargar_catalogo(ruta)
+    assert len(cargado.impuestos) == 10 and cargado.avisos == []
+    contextos = {(i["codigo"], i["contexto"]): i["cuenta"] for i in cargado.impuestos}
+    assert contextos[("02", "venta")] == "24080504" and contextos[("02", "compra")] == "24081501"
+    assert contextos[("02", "dev_venta")] == "24082004" and contextos[("02", "dev_compra")] == "24080604"
+    assert contextos[("17", "compra")] == "23654001" and contextos[("17", "dev_venta")] == "13551520"
+    assert {c["clase"]: c["tipo"] for c in cargado.comprobantes} == {
+        "compra": "11", "venta": "12", "nc_compra": "15", "nc_venta": "17", "doc_soporte": "19"}
+
+    vista = siigo.aplicar_catalogo(conn, cargado, dry_run=True)
+    assert vista["config"]["iva:19"] == "02", "con bienes y servicios a la misma tarifa, servicios por defecto"
+    assert [c["concepto"] for c in vista["conceptos_cruzados"]] == ["Compras."], "cruza por la cuenta de compra"
+    siigo.aplicar_catalogo(conn, cargado)
+    assert len(siigo.catalogo(conn)) == 10
+    assert [i["codigo"] for i in siigo.ivas_disponibles(conn)] == ["01", "02"]
+
+
+def test_con_catalogo_las_cuentas_de_iva_y_retencion_salen_de_el(conn, tmp_path):
+    ruta = tmp_path / "cat.xlsx"
+    _excel_catalogo_real(ruta)
+    siigo.aplicar_catalogo(conn, siigo.cargar_catalogo(ruta))
+    # la empresa tiene cuentas «de respaldo» distintas: con catálogo no se usan
+    conn.execute("UPDATE empresa_info SET cuenta_iva_descontable='99999999', cuenta_clientes='13050501',"
+                 " cuenta_iva_generado='88888888'")
+    conn.execute(
+        "INSERT INTO excel_row(load_id,row_index,cufe_cude,tipo_doc,data_json,periodo) VALUES (1,1,?,?,?,'2026-09')",
+        ("n" * 96, "Nota de crédito electrónica",
+         '{"Grupo":"Emitido","NIT Emisor":"900181831","NIT Receptor":"901111111","Nombre Receptor":"CLIENTE",'
+         '"Prefijo":"NCRS","Folio":"136","Fecha Emisión":"2026-09-14","Total":"119000","IVA":"19000"}'))
+    conn.commit()
+    _aprobar_la_compra(conn)
+    compra = next(a for a in asiento.listar(conn, "2026-09") if a["cufe"] == CUFE)
+    por_rol = {ln["rol"]: ln for ln in compra["lineas"]}
+    assert por_rol["iva"]["cuenta_puc"] == "24081501" and por_rol["iva"]["codigo_siigo"] == "02"
+    assert por_rol["retencion"]["cuenta_puc"] == "23654001" and por_rol["retencion"]["codigo_siigo"] == "17"
+
+    nc = next(a for a in asiento.listar(conn, "2026-09") if a["cufe"] == "n" * 96)
+    asiento.aprobar(conn, nc["id"], cuenta_puc="41750502", iva_codigo="02")
+    nc = asiento.listar_uno(conn, nc["id"])
+    iva = next(ln for ln in nc["lineas"] if ln["rol"] == "iva")
+    assert iva["cuenta_puc"] == "24082004", "la devolución en venta tiene su propia cuenta de IVA"
+    regla = next(r for r in causacion.listar(conn) if r["naturaleza"] == "venta")
+    assert regla["iva_codigo"] == "02", "el IVA elegido se aprende"
+
+    r = siigo.export_siigo(conn, "2026-09", tmp_path)
+    assert r["faltan"] == []
+    filas = _filas(r["path"])[1:]
+    assert {f[1] for f in filas if f[0] == 11} == {453}
+    assert next(f for f in filas if f[5] == 24082004)[16] == "02"

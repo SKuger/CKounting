@@ -596,6 +596,10 @@ es volver a subir el archivo, no publicar una versión.)*
       y, si falta, el archivo lo dice en vez de inventarlo.
       Pendiente: las retenciones que le practican a la empresa en sus ventas
       (una regla por cliente), y la nómina (fuente: su Excel, no la DIAN).
+- [x] **4.8** — ✅ 2026-10-28. El catálogo de impuestos de cada empresa entra
+      desde su Excel y **decide la cuenta** de cada línea de IVA y retención por
+      contexto (D-129). El IVA de bienes o servicios se elige al aprobar y la
+      regla lo recuerda.
 - [ ] ~~4.5 original~~ — The approval tray in the frontend: known documents approved in
       bulk, new ones decided one by one, and **every new decision writes or
       refines a rule**.

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import log
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 # Cuánto espera una escritura a que se libere el lock antes de rendirse (ms).
 BUSY_TIMEOUT_MS = 5_000
@@ -310,10 +310,21 @@ CREATE TABLE IF NOT EXISTS asiento_linea (
   credito       TEXT NOT NULL DEFAULT '0',
   rol           TEXT,                -- gasto | ingreso | iva | retencion | cartera (D-128)
   base          TEXT,                -- la base de una línea de impuesto o retención
-  concepto_id   INTEGER              -- el concepto de retención, para su código de Siigo
+  concepto_id   INTEGER,             -- el concepto de retención, para su código de Siigo
+  codigo_siigo  TEXT                 -- el código de impuesto decidido para esta línea
 );
 CREATE INDEX IF NOT EXISTS ix_asiento_linea ON asiento_linea(asiento_id);
 CREATE TABLE IF NOT EXISTS siigo_config (clave TEXT PRIMARY KEY, valor TEXT);
+CREATE TABLE IF NOT EXISTS siigo_impuesto (
+  codigo      TEXT NOT NULL,
+  contexto    TEXT NOT NULL,   -- venta | compra | dev_venta | dev_compra
+  nombre      TEXT,
+  tipo        TEXT,
+  tarifa      TEXT,
+  cuenta      TEXT,
+  descripcion TEXT,
+  PRIMARY KEY (codigo, contexto)
+);
 
 CREATE TABLE IF NOT EXISTS regla_causacion (
   id                    INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -328,6 +339,7 @@ CREATE TABLE IF NOT EXISTS regla_causacion (
   sin_retencion         INTEGER NOT NULL DEFAULT 0,
   -- compra | venta | doc_soporte: la cuenta de una regla es de gasto o de ingreso
   naturaleza            TEXT NOT NULL DEFAULT 'compra',
+  iva_codigo            TEXT,              -- qué IVA factura (código de Siigo), aprendido al aprobar
   vigencia_desde        TEXT,
   veces_usada           INTEGER NOT NULL DEFAULT 0,
   -- 'manual'    la escribió el contador
@@ -622,6 +634,42 @@ CREATE INDEX IF NOT EXISTS idx_excel_row_fecha ON excel_row(fecha_emision);
 """
 
 
+def _m015_catalogo_de_siigo(conn: sqlite3.Connection) -> None:
+    """Migración 15 — el catálogo de impuestos de Siigo, con sus cuatro cuentas.
+
+    El catálogo real del contador (2026-10-28) enseñó que un código de impuesto
+    de Siigo no tiene UNA cuenta: tiene cuatro, según el comprobante —venta,
+    compra, devolución en venta, devolución en compra—. El IVA 19 % de
+    servicios es `24080504` al vender, `24081501` al comprar y `24082004` en una
+    nota crédito de venta. Con el catálogo cargado, la cuenta de cada línea de
+    IVA y de retención sale de aquí, y las «cuentas de IVA» de la empresa
+    quedan como respaldo para cuando no hay catálogo.
+
+    `regla_causacion.iva_codigo`: qué IVA factura este proveedor (bienes o
+    servicios, 19 o 5), que es lo único del IVA que el documento no dice y el
+    contador sí sabe. Se aprende al aprobar, como la retención.
+    `asiento_linea.codigo_siigo`: el código que se decidió para esa línea, para
+    que el archivo no lo tenga que adivinar después.
+    """
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS siigo_impuesto (
+          codigo      TEXT NOT NULL,
+          contexto    TEXT NOT NULL,   -- venta | compra | dev_venta | dev_compra
+          nombre      TEXT,
+          tipo        TEXT,            -- iva | retefuente | reteiva | reteica | autorretencion | otro
+          tarifa      TEXT,
+          cuenta      TEXT,
+          descripcion TEXT,
+          PRIMARY KEY (codigo, contexto)
+        )""")
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(regla_causacion)").fetchall()}
+    if "iva_codigo" not in cols:
+        conn.execute("ALTER TABLE regla_causacion ADD COLUMN iva_codigo TEXT")
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(asiento_linea)").fetchall()}
+    if "codigo_siigo" not in cols:
+        conn.execute("ALTER TABLE asiento_linea ADD COLUMN codigo_siigo TEXT")
+
+
 def _m014_archivo_de_siigo(conn: sqlite3.Connection) -> None:
     """Migración 14 — lo que el archivo de importación de Siigo exige (D-128).
 
@@ -864,6 +912,7 @@ MIGRACIONES: list[tuple[int, object]] = [
     (12, _m012_regla_sin_retencion),
     (13, _m013_ventas_y_documento_soporte),
     (14, _m014_archivo_de_siigo),
+    (15, _m015_catalogo_de_siigo),
 ]
 
 

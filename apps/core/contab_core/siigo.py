@@ -29,7 +29,6 @@ from typing import Any
 import xlsxwriter
 
 from . import money
-from .asiento import ROL_CARTERA, ROL_IVA, ROL_RETENCION
 
 COLUMNAS: list[str] = [
     "Tipo de comprobante", "Consecutivo comprobante", "Fecha de elaboración",
@@ -174,20 +173,21 @@ def export_siigo(conn, periodo: str, output_dir: str | Path) -> dict[str, Any]:
             if debito < 0 or credito < 0:
                 debito, credito = -credito, -debito
             rol = ln.get("rol")
-            codigo_imp = ""
+            codigo_imp = (ln.get("codigo_siigo") or "").strip()
             base = money.ZERO
-            if rol == ROL_IVA:
+            if rol == "iva":
                 tarifa = _tarifa_iva(ln)
-                codigo_imp = (cfg.get(f"iva:{tarifa}") or "").strip() if tarifa else ""
+                if not codigo_imp and tarifa:
+                    codigo_imp = (cfg.get(f"iva:{tarifa}") or "").strip()
                 if tarifa and not codigo_imp:
                     faltan.add(f"iva:{tarifa}")
                 base = abs(money.to_money(ln.get("base") or 0))
-            elif rol == ROL_RETENCION:
-                codigo_imp = codigos_concepto.get(ln.get("concepto_id") or 0, "")
+            elif rol == "retencion":
+                codigo_imp = codigo_imp or codigos_concepto.get(ln.get("concepto_id") or 0, "")
                 if not codigo_imp:
                     faltan.add(f"concepto:{ln.get('concepto_id') or '?'}")
                 base = abs(money.to_money(ln.get("base") or 0))
-            es_cartera = rol == ROL_CARTERA
+            es_cartera = rol == "cartera"
             valores: list[Any] = [
                 int(tipo) if tipo.isdigit() else tipo, a.get("siigo_consecutivo"), fecha,
                 "COP", "", _cuenta(ln.get("cuenta_puc")), _nit(a.get("tercero_nit")),
@@ -273,13 +273,45 @@ _TIPOS_IMPUESTO = {
     "retención": "retefuente", "reteiva": "reteiva", "reteica": "reteica",
     "autorretencion": "autorretencion", "autorretención": "autorretencion",
 }
+# «Nota crédito proveedores» es la de compra; «para clientes», la de venta.
 _CLASES_POR_TEXTO = (
     ("doc_soporte", ("soporte",)),
-    ("nc_compra", ("nota", "compra")),
-    ("nc_venta", ("nota", "venta")),
-    ("compra", ("compra",)),
-    ("venta", ("venta",)),
+    ("nc_compra", ("nota credito", "proveedor")),
+    ("nc_compra", ("nota credito", "compra")),
+    ("nc_venta", ("nota credito", "cliente")),
+    ("nc_venta", ("nota credito", "venta")),
+    ("compra", ("factura", "compra")),
+    ("venta", ("factura", "venta")),
 )
+CONTEXTOS = ("venta", "compra", "dev_venta", "dev_compra")
+
+
+def contexto_de(naturaleza: str | None, tipo_doc: str | None) -> str:
+    """En qué columna del catálogo se busca la cuenta de una línea."""
+    es_nc = (tipo_doc or "") == "nota_credito"
+    if (naturaleza or "compra") == "venta":
+        return "dev_venta" if es_nc else "venta"
+    return "dev_compra" if es_nc else "compra"
+
+
+def _contexto_de_fila(cuenta: str, descripcion: str) -> str | None:
+    """El catálogo del contador trae el mismo código cuatro veces, una por
+    contexto, sin decir cuál es cuál: lo dicen la cuenta y la descripción.
+    1355 son retenciones que le practican (ventas); 2365/2367/2368 las que
+    practica (compras); 2408 05/20 es IVA generado y 2408 1x/06 descontable.
+    «Dev» en la descripción marca la devolución."""
+    c = (cuenta or "").strip()
+    d = _plano(descripcion)
+    dev = "dev" in d or "devol" in d
+    if c.startswith("1355") or c[:6] in ("240805", "240820"):
+        lado = "venta"
+    elif c[:4] in ("2365", "2367", "2368") or c[:5] == "24081" or c[:6] == "240806":
+        lado = "compra"
+    elif c[:4] in ("2464", "2495"):
+        lado = "venta" if "venta" in d else "compra"
+    else:
+        return None
+    return f"dev_{lado}" if dev else lado
 
 
 def _plano(v: Any) -> str:
@@ -289,9 +321,16 @@ def _plano(v: Any) -> str:
 
 
 def _hoja(wb, *nombres: str):
+    """La hoja cuyo título O cuya cabecera contenga alguna de las palabras: el
+    contador la llamó «Hoja1», y lo que la identifica es la columna «Código»."""
     for ws in wb.worksheets:
         if any(n in _plano(ws.title) for n in nombres):
             return ws
+    for ws in wb.worksheets:
+        for r in ws.iter_rows(max_row=5, values_only=True):
+            cab = " ".join(_plano(v) for v in r if v is not None)
+            if any(n in cab for n in nombres):
+                return ws
     return None
 
 
@@ -343,7 +382,7 @@ def cargar_catalogo(ruta: str | Path) -> CatalogoCargado:
     wb = load_workbook(ruta, data_only=True, read_only=True)
     out = CatalogoCargado(source_name=ruta.name)
 
-    ws = _hoja(wb, "impuesto")
+    ws = _hoja(wb, "impuesto", "codigo")
     if ws is None:
         out.avisos.append("No hay hoja «Impuestos»: no se leen códigos de impuesto.")
     else:
@@ -351,27 +390,33 @@ def cargar_catalogo(ruta: str | Path) -> CatalogoCargado:
             codigo = _codigo(_col(f, "codigo", "código"))
             if not codigo:
                 continue
-            tipo = _TIPOS_IMPUESTO.get(_plano(_col(f, "tipo")).replace(" ", ""), "")
+            tipo_txt = _plano(_col(f, "tipo")).replace(" ", "")
+            tipo = _TIPOS_IMPUESTO.get(tipo_txt, "otro" if tipo_txt else "")
+            cuenta = str(_col(f, "cuenta") or "").strip().replace(".0", "")
+            descripcion = str(_col(f, "descripcion", "descripción") or "").strip()
             out.impuestos.append({
-                "codigo": codigo, "nombre": str(_col(f, "nombre", "descripcion") or "").strip(),
-                "tipo": tipo, "tarifa": _tarifa(_col(f, "tarifa")),
-                "cuenta": str(_col(f, "cuenta") or "").strip().replace(".0", ""),
+                "codigo": codigo, "nombre": str(_col(f, "nombre") or "").strip(),
+                "tipo": tipo, "tarifa": _tarifa(_col(f, "tarifa")), "cuenta": cuenta,
+                "descripcion": descripcion,
+                "contexto": _contexto_de_fila(cuenta, descripcion),
             })
             if not tipo:
                 out.avisos.append(f"El código {codigo} no dice de qué tipo es (IVA, Retefuente…); no se puede cruzar.")
+            elif out.impuestos[-1]["contexto"] is None and cuenta:
+                out.avisos.append(f"No sé si la cuenta {cuenta} del código {codigo} es de compra o de venta; se guarda sin contexto.")
 
-    ws = _hoja(wb, "comprobante")
+    ws = _hoja(wb, "comprobante", "clase")
     if ws is None:
         out.avisos.append("No hay hoja «Comprobantes»: no se leen tipos ni consecutivos.")
     else:
         for f in _filas_con_cabecera(ws):
-            texto = _plano(_col(f, "clase", "nombre", "descripcion"))
+            texto = _plano(_col(f, "clase", "nombre", "descripcion")).replace("é", "e")
             clase = next((c for c, palabras in _CLASES_POR_TEXTO
                           if all(p in texto for p in palabras)), None)
             tipo = _col(f, "tipo")
             if clase is None or tipo in (None, ""):
-                if texto:
-                    out.avisos.append(f"No sé a qué clase corresponde «{texto}»; se salta.")
+                # El catálogo trae los catorce tipos de la empresa; Contab arma
+                # cinco. Los demás (egresos, nómina, depreciación…) no son un aviso.
                 continue
             ultimo = _col(f, "ultimo", "último", "consecutivo")
             out.comprobantes.append({
@@ -385,27 +430,42 @@ def cargar_catalogo(ruta: str | Path) -> CatalogoCargado:
 def aplicar_catalogo(conn, cargado: CatalogoCargado, *, dry_run: bool = False) -> dict[str, Any]:
     """Cruza el catálogo con lo que la empresa ya tiene y, si no es ensayo, escribe.
 
-    Un impuesto se cruza con un concepto de retención **por cuenta** primero y,
-    si no, por tipo y tarifa. Lo que no cruza se devuelve con nombre: un código
-    sin concepto no es un error, es un concepto que el contador no cargó.
+    El catálogo entero va a `siigo_impuesto` (código × contexto → cuenta). Un
+    código de retención se cruza con un concepto **por la cuenta de compra**
+    primero y, si no, por tipo y tarifa. Lo que no cruza se devuelve con nombre:
+    un código sin concepto no es un error, es un concepto que no está cargado.
     """
     conceptos = [dict(r) for r in conn.execute(
         "SELECT id, concepto, sobre, tarifa, cuenta_puc, codigo_siigo FROM retencion_concepto"
         " WHERE archivado = 0")]
     cruzados, sin_cruce, ivas = [], [], {}
+    cuentas_de_todos = {i["cuenta"] for i in cargado.impuestos if i["cuenta"]}
+    vistos: set[str] = set()
     for imp in cargado.impuestos:
         if imp["tipo"] == "iva":
-            if imp["tarifa"]:
-                ivas[f"iva:{imp['tarifa']}"] = imp["codigo"]
+            if imp["tarifa"] and imp["contexto"] in (None, "compra", "venta"):
+                # Si hay dos códigos para la misma tarifa (bienes y servicios),
+                # el de servicios queda por defecto: la regla del proveedor lo
+                # afina. Se dice en la vista previa.
+                clave = f"iva:{imp['tarifa']}"
+                if clave not in ivas or "servicio" in _plano(imp["nombre"]):
+                    ivas[clave] = imp["codigo"]
             continue
+        if imp["codigo"] in vistos:
+            continue
+        vistos.add(imp["codigo"])
         if imp["tipo"] not in ("retefuente", "reteiva"):
             sin_cruce.append({**imp, "motivo": "Contab no aplica este tipo de impuesto"})
             continue
         sobre = "iva" if imp["tipo"] == "reteiva" else "base"
-        c = next((c for c in conceptos if imp["cuenta"] and (c["cuenta_puc"] or "") == imp["cuenta"]), None)
+        cuentas_compra = {i["cuenta"] for i in cargado.impuestos
+                          if i["codigo"] == imp["codigo"] and i["contexto"] == "compra"}
+        c = next((c for c in conceptos if (c["cuenta_puc"] or "") in cuentas_compra), None)
         if c is None and imp["tarifa"]:
-            c = next((c for c in conceptos if c["sobre"] == sobre and c["tarifa"]
-                      and Decimal(str(c["tarifa"])) == Decimal(imp["tarifa"])), None)
+            candidatos = [c for c in conceptos if c["sobre"] == sobre and c["tarifa"]
+                          and Decimal(str(c["tarifa"])) == Decimal(imp["tarifa"])
+                          and (c["cuenta_puc"] or "") not in cuentas_de_todos]
+            c = candidatos[0] if len(candidatos) == 1 else None
         if c is None:
             sin_cruce.append({**imp, "motivo": "ningún concepto de retención con esa cuenta ni esa tarifa"})
             continue
@@ -418,6 +478,16 @@ def aplicar_catalogo(conn, cargado: CatalogoCargado, *, dry_run: bool = False) -
             config_nueva[f"ultimo:{cp['tipo']}"] = cp["ultimo"]
 
     if not dry_run:
+        if cargado.impuestos:
+            conn.execute("DELETE FROM siigo_impuesto")
+            for imp in cargado.impuestos:
+                if not imp["contexto"]:
+                    continue
+                conn.execute(
+                    "INSERT OR REPLACE INTO siigo_impuesto(codigo, contexto, nombre, tipo, tarifa,"
+                    " cuenta, descripcion) VALUES (?,?,?,?,?,?,?)",
+                    (imp["codigo"], imp["contexto"], imp["nombre"], imp["tipo"], imp["tarifa"],
+                     imp["cuenta"], imp["descripcion"]))
         for x in cruzados:
             conn.execute("UPDATE retencion_concepto SET codigo_siigo = ?, updated_at = datetime('now')"
                          " WHERE id = ?", (x["codigo"], x["concepto_id"]))
@@ -427,4 +497,25 @@ def aplicar_catalogo(conn, cargado: CatalogoCargado, *, dry_run: bool = False) -
         "source_name": cargado.source_name,
         "conceptos_cruzados": cruzados, "sin_cruce": sin_cruce,
         "config": config_nueva, "avisos": cargado.avisos, "dry_run": dry_run,
+        "impuestos": len(cargado.impuestos),
     }
+
+
+# ─────────────────────── el catálogo, para quien arma el asiento ──────────────
+
+def catalogo(conn) -> dict[tuple[str, str], dict[str, Any]]:
+    """(código, contexto) → fila del catálogo. Vacío si no se ha cargado."""
+    try:
+        filas = conn.execute("SELECT * FROM siigo_impuesto").fetchall()
+    except Exception:
+        return {}
+    return {(r["codigo"], r["contexto"]): dict(r) for r in filas}
+
+
+def ivas_disponibles(conn) -> list[dict[str, Any]]:
+    """Los códigos de IVA del catálogo, uno por código, para elegir al aprobar."""
+    vistos: dict[str, dict[str, Any]] = {}
+    for (codigo, _contexto), fila in sorted(catalogo(conn).items()):
+        if fila["tipo"] == "iva" and codigo not in vistos:
+            vistos[codigo] = {"codigo": codigo, "nombre": fila["nombre"], "tarifa": fila["tarifa"]}
+    return list(vistos.values())
