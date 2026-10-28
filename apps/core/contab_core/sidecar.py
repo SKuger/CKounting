@@ -27,6 +27,7 @@ from . import export as export_module
 from . import jobs as jobs_module
 from . import log
 from . import nit as nit_module
+from . import nomina as nomina_module
 from . import paths as paths_module
 from . import pdf_cufe as pdf_cufe_module
 from . import perfil_fiscal as perfil_module
@@ -1454,6 +1455,45 @@ def _h_siigo_sembrar(params: dict) -> dict:
         conn.close()
 
 
+def _h_nomina_aprender(params: dict) -> dict:
+    """La plantilla de nómina, deducida del 992 que ya está en Siigo (D-134)."""
+    conn = _con(params["db_path"])
+    try:
+        return nomina_module.aprender(
+            conn, Path(params["nomina_path"]), Path(params["carga_path"]),
+            dry_run=bool(params.get("dry_run", False)))
+    finally:
+        conn.close()
+
+
+def _h_nomina_generar(params: dict) -> dict:
+    periodo = storage_module._norm_periodo(params.get("periodo") or "")
+    conn = _con(params["db_path"])
+    try:
+        return nomina_module.generar(conn, periodo, Path(params["nomina_path"]))
+    finally:
+        conn.close()
+
+
+def _h_nomina_list(params: dict) -> dict:
+    periodo = storage_module._norm_periodo(params.get("periodo") or "")
+    conn = _con(params["db_path"])
+    try:
+        return {"comprobantes": nomina_module.listar(conn, periodo),
+                "plantilla": bool(any(k.startswith("nom:debito:") for k in siigo_module.config(conn)))}
+    finally:
+        conn.close()
+
+
+def _h_nomina_aprobar(params: dict) -> dict:
+    conn = _con(params["db_path"])
+    try:
+        nomina_module.aprobar(conn, int(params["id"]), bool(params.get("aprobado", True)))
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
 def _h_siigo_exportar(params: dict) -> dict:
     """Los asientos aprobados del mes en el formato que Siigo importa."""
     periodo = storage_module._norm_periodo(params.get("periodo") or "")
@@ -2000,6 +2040,10 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "siigo_exportar": _h_siigo_exportar,
     "siigo_importar": _h_siigo_importar,
     "siigo_sembrar": _h_siigo_sembrar,
+    "nomina_aprender": _h_nomina_aprender,
+    "nomina_generar": _h_nomina_generar,
+    "nomina_list": _h_nomina_list,
+    "nomina_aprobar": _h_nomina_aprobar,
     "cuentas_empresa": _h_cuentas_empresa,
     "tarifas_list": _h_tarifas_list,
     "tarifas_guardar_concepto": _h_tarifas_guardar_concepto,

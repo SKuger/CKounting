@@ -313,3 +313,22 @@ def test_la_ligadura_ff_no_rompe_el_cufe():
     assert "ﬀ" in texto
     hits = _find_cufes_in_text(texto)
     assert hits and hits[0].value == esperado and hits[0].label == "CUFE"
+
+
+def test_el_qr_que_el_detector_clasico_no_lee_lo_lee_aruco():
+    """La factura POS de buñuelos (2026-09): ningún intento del detector
+    clásico leía su QR; el de Aruco sí. Aquí un QR sintético cualquiera basta
+    para afirmar que el respaldo existe y entrega el texto."""
+    import cv2
+    import numpy as np
+
+    from contab_core.pdf_cufe import _ARUCO, _decode_qrs_in_image
+    if _ARUCO is None:
+        pytest.skip("este OpenCV no trae el detector de Aruco")
+    cufe = "05fd48364dbae620e370753fc06b5dae23d31f0acd5f861834a5356cd9f72f79cffcf7c4859974364d3ebe0d07e79e41"
+    qr = cv2.QRCodeEncoder.create().encode(f"https://catalogo-vpfe.dian.gov.co/document/searchqr?documentkey={cufe}")
+    img = cv2.resize(qr, None, fx=8, fy=8, interpolation=cv2.INTER_NEAREST)
+    img = cv2.copyMakeBorder(img, 40, 40, 40, 40, cv2.BORDER_CONSTANT, value=255)
+    img = cv2.cvtColor(img.astype(np.uint8), cv2.COLOR_GRAY2BGR)
+    pagos = _decode_qrs_in_image(cv2.QRCodeDetector(), img)
+    assert any(cufe in p for p in pagos)

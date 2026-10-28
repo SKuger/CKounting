@@ -223,7 +223,10 @@ def marcar_usada(conn, regla_id: int) -> None:
 
 
 def listar(conn, *, incluir_archivadas: bool = False) -> list[dict[str, Any]]:
-    sql = "SELECT * FROM regla_causacion"
+    # Con el nombre del tercero al lado: con 240 reglas sembradas de golpe, un
+    # NIT solo no le dice nada al contador.
+    sql = ("SELECT r.*, (SELECT t.razon_social FROM tercero t WHERE t.nit = r.tercero_nit"
+           " LIMIT 1) AS tercero_nombre FROM regla_causacion r")
     if not incluir_archivadas:
         sql += " WHERE archivada = 0"
     sql += " ORDER BY naturaleza, tercero_nit IS NULL, tercero_nit, patron"
@@ -245,19 +248,24 @@ def guardar(conn, data: dict[str, Any]) -> dict[str, Any]:
         int(data["concepto_retencion_id"]) if data.get("concepto_retencion_id") else None,
         (data.get("vigencia_desde") or "").strip() or None,
         (data.get("naturaleza") or "compra").strip().lower(),
+        1 if data.get("sin_retencion") else 0,
+        (data.get("iva_codigo") or "").strip() or None,
+        (data.get("retenciones_cliente") or "").strip() or None,
     )
-    if valores[-1] not in ("compra", "venta", "doc_soporte"):
-        raise ValueError(f"Naturaleza desconocida: «{valores[-1]}».")
+    if valores[5] not in ("compra", "venta", "doc_soporte"):
+        raise ValueError(f"Naturaleza desconocida: «{valores[5]}».")
     if rid:
         conn.execute(
             "UPDATE regla_causacion SET tercero_nit = ?, patron = ?, cuenta_puc = ?,"
             " concepto_retencion_id = ?, vigencia_desde = ?, naturaleza = ?,"
+            " sin_retencion = ?, iva_codigo = ?, retenciones_cliente = ?,"
             " updated_at = datetime('now') WHERE id = ?", (*valores, int(rid)))
     else:
         cur = conn.execute(
             "INSERT INTO regla_causacion(tercero_nit, patron, cuenta_puc,"
-            " concepto_retencion_id, vigencia_desde, naturaleza, origen)"
-            " VALUES (?,?,?,?,?,?, 'manual')", valores)
+            " concepto_retencion_id, vigencia_desde, naturaleza, sin_retencion,"
+            " iva_codigo, retenciones_cliente, origen)"
+            " VALUES (?,?,?,?,?,?,?,?,?, 'manual')", valores)
         rid = int(cur.lastrowid)
     conn.commit()
     return dict(conn.execute(

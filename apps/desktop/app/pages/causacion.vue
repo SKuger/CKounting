@@ -426,6 +426,14 @@ onMounted(cargar)
         @click="siigoOpen = true">
         <FileSpreadsheet class="size-3.5" /> Archivo de Siigo
       </Button>
+      <Button size="sm" variant="ghost" title="La nómina del mes, desde su Excel de liquidación"
+        @click="navigateTo({ path: '/nomina', query: { db: dbPath, periodo } })">
+        Nómina
+      </Button>
+      <Button size="sm" variant="ghost" title="Ver y corregir las reglas de esta empresa"
+        @click="navigateTo({ path: '/reglas', query: { db: dbPath } })">
+        Reglas
+      </Button>
       <Button size="sm" variant="ghost" :title="siigoPanel ? 'Cerrar' : 'Tipos de comprobante y consecutivos de Siigo'"
         @click="siigoPanel = !siigoPanel">
         <Settings2 class="size-3.5" /> Siigo

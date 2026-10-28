@@ -57,6 +57,10 @@ export default defineEventHandler(async (event) => {
     return { ok: false, error: `No se pudo guardar el archivo en ${savedPath}: ${String(err)}` }
   }
 
+  // accion=guardar solo deja el archivo y devuelve dónde quedó: la nómina usa
+  // dos archivos (el Excel de nómina y el de carga), y el RPC se llama después.
+  if (accion === 'guardar') return { ok: true, result: { saved: true }, saved_to: savedPath }
+
   try {
     const result = await callSidecar(accion === 'historicos' ? 'siigo_sembrar' : 'siigo_importar', {
       db_path: dbPath,

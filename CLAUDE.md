@@ -50,8 +50,8 @@ El primer flujo concreto, implementado en E1, es el **cruce DIAN ↔ soportes**:
 - **Auto-indexing** de PDFs en `run_validations` y `export_no_conformes` (D-037). El botón "Re-indexar" es solo para depurar.
 - **Contab es el puente; Siigo es el libro contable** (D-096). Contab controla, causa y exporta; los libros oficiales, los estados financieros y la partida doble los hace Siigo. **E6 y E7 quedan aparcadas.**
 - **Tres caminos de ingesta DIAN** —`token`, `robot`, `manual`— hacia una sola interfaz; el manual **nunca se retira** (D-097).
-- **Las credenciales de la DIAN van al llavero del SO**, nunca a la `.db` ni al log (D-098).
-- **El envío a Siigo va por la API de Siigo Nube**, con idempotencia por CUFE (D-099).
+- **No se guarda ningún acceso a la DIAN** (D-133, supersede D-098): el portal manda un enlace de un solo uso al correo; vive en memoria durante la corrida y nunca toca la `.db`, el log ni un error.
+- **El puente a Siigo arranca por el archivo de importación de comprobantes** que el contador ya sube (D-128): estructura en `docs/siigo-import-structure.md`, exportador en `siigo.py`, cuentas e impuestos desde el catálogo de Siigo de cada empresa (D-129). La API de Siigo Nube con idempotencia por CUFE (D-099, D-103) queda **aplazada, no derogada**: el archivo no se lee de vuelta, así que la reconciliación inversa sigue pendiente.
 - **El envío a Siigo va por tipo de documento** (D-103): `/purchases` para factura recibida, `/purchase-support-documents` para el documento soporte, `/journals` para lo que no encaje. Auth `POST /auth` (JWT 24 h) + header `Partner-Id`. Las cuentas viajan por **código PUC** (sin tabla de mapeo); **no hay campo de referencia externa**, así que la idempotencia vive en `siigo_envio` y se verifica listando el periodo.
 - **Los terceros viven por empresa**, no en un catálogo central (D-100) — D-003 sin excepciones.
 - **Toda corrida de ingesta la dispara el contador** (D-101). Sin programador ni ejecución nocturna.

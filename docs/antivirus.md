@@ -25,7 +25,7 @@ que hace el software malicioso de verdad.
 ## Arreglo de raíz (pendiente)
 
 Firmar con un certificado Authenticode. Quita también el aviso de SmartScreen.
-D-098 ya anotó que deja de ser opcional cuando Contab custodie credenciales
+D-098 (hoy superseded por D-133: no hay credenciales que custodiar) anotó que dejaba de ser opcional cuando Contab custodiara credenciales
 fiscales de los clientes del contador: *«a un usuario que está por entregar las
 claves de la DIAN de sus clientes no se le recibe con una advertencia»*.
 
