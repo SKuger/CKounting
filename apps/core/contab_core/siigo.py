@@ -47,7 +47,7 @@ CLASES = ("compra", "nc_compra", "venta", "nc_venta", "doc_soporte")
 ETIQUETAS = {
     "compra": "Factura de compra", "nc_compra": "Nota crédito de compra",
     "venta": "Factura de venta", "nc_venta": "Nota crédito de venta",
-    "doc_soporte": "Documento soporte",
+    "doc_soporte": "Documento soporte", "nomina": "Comprobante de nómina",
 }
 VENCIMIENTO_DIAS = 30
 
@@ -210,6 +210,47 @@ def export_siigo(conn, periodo: str, output_dir: str | Path) -> dict[str, Any]:
             total_credito += credito
             fila += 1
             lineas += 1
+
+    # La nómina aprobada del mes (D-134): un comprobante por quincena, con el
+    # tipo de nómina de la empresa y cada línea con su propio tercero.
+    from . import nomina as nomina_module
+    tipo_nom = (cfg.get("tipo:nomina") or "").strip()
+    for nc in [n for n in nomina_module.listar(conn, periodo) if n["aprobado"]]:
+        if not tipo_nom:
+            faltan.add("tipo:nomina")
+        if not nc.get("siigo_consecutivo") and tipo_nom:
+            ultimo = max(int(config(conn).get(f"ultimo:{tipo_nom}") or 0),
+                         int(conn.execute("SELECT COALESCE(MAX(siigo_consecutivo), 0) FROM nomina_comprobante")
+                             .fetchone()[0]))
+            nc["siigo_consecutivo"] = ultimo + 1
+            conn.execute("UPDATE nomina_comprobante SET siigo_consecutivo = ? WHERE id = ?",
+                         (ultimo + 1, nc["id"]))
+            guardar_config(conn, {f"ultimo:{tipo_nom}": ultimo + 1})
+        fecha = _fecha(nc["fecha"])
+        texto = f"NOMINA {'PRIM' if nc['quincena'] == '1Q' else 'SEG'} QUINCENA {periodo}"
+        comprobantes += 1
+        for ln in nc["lineas"]:
+            debito = money.to_money(ln["debito"] or 0)
+            credito = money.to_money(ln["credito"] or 0)
+            valores = [
+                int(tipo_nom) if tipo_nom.isdigit() else tipo_nom, nc.get("siigo_consecutivo"), fecha,
+                "COP", "", _cuenta(ln.get("cuenta")), _nit(ln.get("tercero")),
+                "", "", "", "", "", "", "", "", "", "", "", "",
+                f"{texto} · {ln.get('descripcion') or ''}", "", debito, credito, texto,
+                money.ZERO, "", "",
+            ]
+            for c, v in enumerate(valores):
+                if isinstance(v, date):
+                    ws.write_datetime(fila, c, _a_datetime(v), fecha_fmt)
+                elif isinstance(v, Decimal):
+                    ws.write_number(fila, c, float(v))
+                else:
+                    ws.write(fila, c, "" if v is None else v)
+            total_debito += debito
+            total_credito += credito
+            fila += 1
+            lineas += 1
+    conn.commit()
     wb.close()
     return {
         "path": str(out), "comprobantes": comprobantes, "lineas": lineas,
@@ -283,6 +324,7 @@ _CLASES_POR_TEXTO = (
     ("nc_venta", ("nota credito", "venta")),
     ("compra", ("factura", "compra")),
     ("venta", ("factura", "venta")),
+    ("nomina", ("nomina",)),
 )
 CONTEXTOS = ("venta", "compra", "dev_venta", "dev_compra")
 

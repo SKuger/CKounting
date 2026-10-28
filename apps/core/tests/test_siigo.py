@@ -249,7 +249,8 @@ def test_el_catalogo_real_se_lee_con_sus_cuatro_contextos(conn, tmp_path):
     assert contextos[("02", "dev_venta")] == "24082004" and contextos[("02", "dev_compra")] == "24080604"
     assert contextos[("17", "compra")] == "23654001" and contextos[("17", "dev_venta")] == "13551520"
     assert {c["clase"]: c["tipo"] for c in cargado.comprobantes} == {
-        "compra": "11", "venta": "12", "nc_compra": "15", "nc_venta": "17", "doc_soporte": "19"}
+        "compra": "11", "venta": "12", "nc_compra": "15", "nc_venta": "17", "doc_soporte": "19",
+        "nomina": "992"}, "la nómina también: el 992 sale en el mismo archivo (D-134)"
 
     vista = siigo.aplicar_catalogo(conn, cargado, dry_run=True)
     assert vista["config"]["iva:19"] == "02", "con bienes y servicios a la misma tarifa, servicios por defecto"
