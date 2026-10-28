@@ -86,3 +86,17 @@ La nómina, las notas contables, la depreciación y los gastos bancarios no sale
 de la DIAN. El archivo que Contab genera lleva **solo lo que causó**; el contador
 sigue añadiendo lo demás a mano en el mismo formato, o se le da un sitio donde
 pegar sus filas para que salga un solo archivo. Eso es una decisión suya.
+
+## Cómo entra el catálogo de cada empresa
+
+El contador manda **un Excel por empresa** y carga las demás él mismo desde el
+panel «Siigo» de la bandeja (`siigo_importar`, con vista previa). Dos hojas,
+leídas por nombre de columna:
+
+- **Impuestos**: `Código`, `Nombre`, `Tipo` (IVA · Retefuente · ReteIVA ·
+  ReteICA · Autorretención), `Tarifa (%)`, `Cuenta`. Los de IVA van a
+  `iva:<tarifa>`; los de retención se cruzan con el concepto **por cuenta** y, si
+  no, por tipo y tarifa, y le ponen su `codigo_siigo`. Lo que no cruza se
+  devuelve con nombre.
+- **Comprobantes**: `Clase` (texto: «factura de compra», «nota crédito de
+  venta», «documento soporte»…), `Tipo en Siigo`, `Último consecutivo`.
