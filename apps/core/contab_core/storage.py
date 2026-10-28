@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import log
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 # Cuánto espera una escritura a que se libere el lock antes de rendirse (ms).
 BUSY_TIMEOUT_MS = 5_000
@@ -340,6 +340,7 @@ CREATE TABLE IF NOT EXISTS regla_causacion (
   -- compra | venta | doc_soporte: la cuenta de una regla es de gasto o de ingreso
   naturaleza            TEXT NOT NULL DEFAULT 'compra',
   iva_codigo            TEXT,              -- qué IVA factura (código de Siigo), aprendido al aprobar
+  retenciones_cliente   TEXT,              -- en ventas: lo que me retiene, códigos de Siigo o 'ninguna' (D-131)
   vigencia_desde        TEXT,
   veces_usada           INTEGER NOT NULL DEFAULT 0,
   -- 'manual'    la escribió el contador
@@ -634,6 +635,20 @@ CREATE INDEX IF NOT EXISTS idx_excel_row_fecha ON excel_row(fecha_emision);
 """
 
 
+def _m016_lo_que_me_retienen(conn: sqlite3.Connection) -> None:
+    """Migración 16 — las retenciones que el cliente le practica a la empresa (D-131).
+
+    En una venta, el cliente retiene: en REAL, retefuente 11 %, ReteIVA 15 %
+    del IVA y ReteICA 2 por mil, en 79 de 90 ventas de tres años. Van al débito
+    en las cuentas 1355 y la cartera queda por el neto. Qué le retiene cada
+    cliente se guarda en su regla como los códigos de Siigo («05,07,11»); la
+    palabra «ninguna» dice que no le retiene, y NULL que no se sabe.
+    """
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(regla_causacion)").fetchall()}
+    if "retenciones_cliente" not in cols:
+        conn.execute("ALTER TABLE regla_causacion ADD COLUMN retenciones_cliente TEXT")
+
+
 def _m015_catalogo_de_siigo(conn: sqlite3.Connection) -> None:
     """Migración 15 — el catálogo de impuestos de Siigo, con sus cuatro cuentas.
 
@@ -913,6 +928,7 @@ MIGRACIONES: list[tuple[int, object]] = [
     (13, _m013_ventas_y_documento_soporte),
     (14, _m014_archivo_de_siigo),
     (15, _m015_catalogo_de_siigo),
+    (16, _m016_lo_que_me_retienen),
 ]
 
 
