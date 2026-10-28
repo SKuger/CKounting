@@ -290,3 +290,95 @@ def test_con_catalogo_las_cuentas_de_iva_y_retencion_salen_de_el(conn, tmp_path)
     filas = _filas(r["path"])[1:]
     assert {f[1] for f in filas if f[0] == 11} == {453}
     assert next(f for f in filas if f[5] == 24082004)[16] == "02"
+
+
+# ─────────────── D-130 · sembrar reglas desde los históricos de Siigo ─────────
+
+def _historicos(ruta: Path, comprobantes):
+    """comprobantes: [(tipo, consecutivo, fecha, nit, [(cuenta, débito, crédito, código)])]"""
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Hoja historicos"
+    ws.append(siigo.COLUMNAS)
+    for tipo, cons, fecha, nit, lineas in comprobantes:
+        for cuenta, deb, cre, cod in lineas:
+            fila = [None] * len(siigo.COLUMNAS)
+            fila[0], fila[1], fila[2], fila[5], fila[6] = tipo, cons, fecha, cuenta, nit
+            fila[16], fila[21], fila[22] = cod, deb, cre
+            ws.append(fila)
+    wb.save(ruta)
+
+
+def _compra(cons, fecha, nit, gasto, con_ret=True):
+    lineas = [(gasto, 1000000, 0, None), (24081501, 190000, 0, "02")]
+    if con_ret:
+        lineas.append((23654001, 0, 25000, "17"))
+    lineas.append((22050501, 0, 1165000 if con_ret else 1190000, None))
+    return (11, cons, fecha, nit, lineas)
+
+
+def test_sembrar_exige_el_catalogo(conn, tmp_path):
+    ruta = tmp_path / "h.xlsx"
+    _historicos(ruta, [_compra(1, "2026-01-05", 800100200, 51953001)])
+    with pytest.raises(ValueError, match="catálogo"):
+        siigo.sembrar_reglas(conn, ruta)
+
+
+def test_sembrar_crea_la_regla_con_cuenta_iva_y_retencion(conn, tmp_path):
+    siigo.guardar_config(conn, {"tipo:compra": "11", "tipo:venta": "12"})
+    concepto = tarifas.listar_conceptos(conn)[0]
+    conn.execute("UPDATE retencion_concepto SET codigo_siigo = '17' WHERE id = ?", (concepto["id"],))
+    conn.commit()
+    ruta = tmp_path / "h.xlsx"
+    _historicos(ruta, [
+        _compra(1, "2026-01-05", 800100200, 51953001),
+        _compra(2, "2026-02-05", 800100200, 51953001),
+        # una venta a un cliente: la cuenta es la del ingreso
+        (12, 9, "2026-02-10", 901111111, [(13050501, 119000, 0, None), (41553001, 0, 100000, None),
+                                          (24080504, 0, 19000, "02")]),
+        # un proveedor que fue a dos cuentas por igual: no se elige
+        _compra(3, "2026-01-07", 811000111, 51352501),
+        _compra(4, "2026-02-07", 811000111, 51953001),
+        # una nota crédito no siembra
+        (15, 5, "2026-03-01", 822000222, [(51953001, 0, 1000, None), (22050501, 1000, 0, None)]),
+    ])
+    vista = siigo.sembrar_reglas(conn, ruta, dry_run=True)
+    assert vista["nuevas"] == 2 and vista["por_clase"] == {"compra": 1, "venta": 1}
+    assert [a["tercero_nit"] for a in vista["ambiguos"]] == ["811000111"]
+    assert vista["comprobantes_ignorados"] == 1
+    assert causacion.listar(conn) == [], "el ensayo no escribe"
+
+    siigo.sembrar_reglas(conn, ruta)
+    reglas = {(r["tercero_nit"], r["naturaleza"]): r for r in causacion.listar(conn)}
+    compra = reglas[("800100200", "compra")]
+    assert compra["cuenta_puc"] == "51953001" and compra["iva_codigo"] == "02"
+    assert compra["concepto_retencion_id"] == concepto["id"] and compra["origen"] == "historico"
+    assert reglas[("901111111", "venta")]["cuenta_puc"] == "41553001"
+
+    # la factura de la muestra es de 800100200: ya sale con la cuenta sembrada
+    asiento.generar(conn, "2026-09")
+    a = next(a for a in asiento.listar(conn, "2026-09") if a["cufe"] == CUFE)
+    assert a["lineas"][0]["cuenta_puc"] == "51953001"
+    assert any(ln["rol"] == "retencion" for ln in a["lineas"])
+
+
+def test_sembrar_no_pisa_lo_que_el_contador_ya_decidio(conn, tmp_path):
+    siigo.guardar_config(conn, {"tipo:compra": "11"})
+    causacion.guardar(conn, {"tercero_nit": "800100200", "cuenta_puc": "51352501"})
+    ruta = tmp_path / "h.xlsx"
+    _historicos(ruta, [_compra(1, "2026-01-05", 800100200, 51953001)])
+    r = siigo.sembrar_reglas(conn, ruta)
+    assert r["nuevas"] == 0 and r["ya_existian"] == 1
+    assert [x["cuenta_puc"] for x in causacion.listar(conn)] == ["51352501"]
+
+
+def test_sembrar_mira_los_comprobantes_recientes(conn, tmp_path):
+    """Un proveedor que cambió de cuenta hace un año va a la de ahora."""
+    siigo.guardar_config(conn, {"tipo:compra": "11"})
+    ruta = tmp_path / "h.xlsx"
+    viejos = [_compra(i, f"2024-{i:02d}-01", 800100200, 51352501) for i in range(1, 11)]
+    nuevos = [_compra(20 + i, f"2026-{i:02d}-01", 800100200, 51953001) for i in range(1, 9)]
+    _historicos(ruta, viejos + nuevos)
+    siigo.sembrar_reglas(conn, ruta)
+    assert causacion.listar(conn)[0]["cuenta_puc"] == "51953001"
