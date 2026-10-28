@@ -50,7 +50,7 @@ EXTRACTION_STATUS_PROTEGIDO = "protegido"
 #       of unlabeled/failed text reads (D-067).
 # 2: el extractor aprende a abrir PDFs con contraseña. Subirlo hace que se
 # re-lean los que quedaron cacheados como «sin texto» sin serlo.
-EXTRACTOR_VERSION = 3  # 3: ligaduras tipográficas (ﬀ) deshechas antes de buscar
+EXTRACTOR_VERSION = 4  # 3: ligaduras (ﬀ) deshechas · 4: QR con el detector de Aruco de respaldo
 
 
 @dataclass(frozen=True)
@@ -238,6 +238,9 @@ def _render_page(page, dpi: int) -> np.ndarray | None:
     return None
 
 
+_ARUCO = cv2.QRCodeDetectorAruco() if hasattr(cv2, "QRCodeDetectorAruco") else None
+
+
 def _decode_qrs_in_image(detector: cv2.QRCodeDetector, img: np.ndarray) -> list[str]:
     """Return all distinct QR payloads decoded in one image."""
     payloads: set[str] = set()
@@ -262,6 +265,16 @@ def _decode_qrs_in_image(detector: cv2.QRCodeDetector, img: np.ndarray) -> list[
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
             data, _pts, _sqr = detector.detectAndDecode(bw)
+            if data:
+                payloads.add(data)
+        except cv2.error:
+            pass
+    if not payloads and _ARUCO is not None:
+        # El detector clásico no leyó el QR de una factura POS real (buñuelos,
+        # 2026-09) a ninguna resolución; el de Aruco, que viene en el mismo
+        # OpenCV, lo lee a todas. Va de último para no cambiar lo que ya leía.
+        try:
+            data, _pts, _sqr = _ARUCO.detectAndDecode(img)
             if data:
                 payloads.add(data)
         except cv2.error:
