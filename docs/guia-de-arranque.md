@@ -99,3 +99,14 @@ dígitos de su PUC). *Exportar aprobados* sigue ahí, como listado simple.
   sirve o no.
 - Si algo no cuadra o no entiende un aviso, no lo apruebe: escríbalo tal cual
   y mándeselo a Samuel. Un aviso que no se entiende es un defecto nuestro.
+
+## La nómina
+
+En la bandeja de causación, **«Nómina»**. La primera vez, *Aprender*: suba el
+Excel de nómina de un mes que ya esté en Siigo y el archivo de carga que tenga
+el comprobante de nómina de ese mes; Contab aprende a qué cuenta va cada
+concepto y la EPS, el fondo, la caja y la ARL de cada empleado. Cada mes, suba
+el Excel de nómina: salen las dos quincenas, cada una dice si cuadra, y al
+aprobarlas entran en el mismo *Archivo de Siigo*. Si un mes paga algo distinto
+a lo de siempre (por ejemplo, a un tercero en nombre de un empleado), ajústelo
+en Siigo: eso no está en el Excel.

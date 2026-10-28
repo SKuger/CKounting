@@ -607,6 +607,9 @@ es volver a subir el archivo, no publicar una versión.)*
       débito y la cartera por el neto (D-131), aprendido por cliente de los
       históricos —con su tarifa si difiere— o elegido al aprobar. Y el
       catálogo y los históricos se leen también en `.ods` (D-132).
+- [x] **4.11** — ✅ 2026-10-28. **La nómina** como comprobante de Siigo, desde
+      el Excel de liquidación, con la plantilla aprendida del 992 ya subido
+      (D-134). Septiembre de REAL: 2Q idéntica, 1Q con un ajuste de un empleado.
 - [ ] ~~4.5 original~~ — The approval tray in the frontend: known documents approved in
       bulk, new ones decided one by one, and **every new decision writes or
       refines a rule**.

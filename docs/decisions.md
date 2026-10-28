@@ -1425,3 +1425,23 @@ mundo que no existe, citada como inmutable en CLAUDE.md. Lo que D-098 derivaba
 de custodiar credenciales —la firma Authenticode— no desaparece, pero cambia
 de motivo: hoy es el aviso del antivirus en cada actualización (D-059,
 `docs/antivirus.md`), no la entrega de claves ajenas.
+
+## D-134 — La nómina se arma desde el Excel de liquidación y se aprende del 992 de Siigo ✅
+
+**Decisión**: la nómina del mes entra al archivo de Siigo como un comprobante por
+quincena (tipo de nómina de la empresa, 992 en REAL), armado desde el **Excel de
+nómina del contador** (hojas «1Q» y «2Q»), no desde la DIAN. Las cuentas, las
+tarifas de provisiones y aportes, y la entidad de cada empleado (EPS, fondo,
+caja, ARL: cuenta y NIT) viven en una plantilla por empresa que **se aprende**
+comparando ese Excel con el 992 que ya está en Siigo para el mismo mes. Por
+empleado, con su cédula como tercero: devengos, provisiones (5105 contra 2510),
+aportes del empleador, neto, retención y deducciones. Por aporte, con la
+entidad como tercero. Redondeo al peso por empleado y concepto. Se aprueba por
+quincena; sin cuentas no se aprueba.
+
+**Por qué**: el contador lo pidió como parte del archivo que sube cada mes, y
+el reporte de la DIAN no trae lo que hace falta (D-127 dejó la nómina fuera de
+la causación por eso). Sobre el septiembre real de REAL, la segunda quincena
+sale **idéntica en sus 80 pares cuenta-tercero** y la primera en 79 de 83: la
+diferencia es un solo empleado cuyos otros pagos de esa quincena fueron, en
+parte, a un tercero — eso no está en el Excel y se ajusta a mano.

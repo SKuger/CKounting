@@ -48,7 +48,7 @@ los de las otras cuatro.
 | 12 | Factura de venta | ingreso `4150xx` · IVA generado `24080504` (imp.) · **retenciones que le practican** `1355xx` (imp., al débito) · clientes `13050501` con prefijo/consecutivo/vencimiento | Parcial: faltan las retenciones que le practican |
 | 17 | Nota crédito de venta | devoluciones `417505xx` · IVA `24082004` · las mismas `1355xx` al revés · clientes | Parcial: otra cuenta de ingreso y otra de IVA |
 | 15 | Nota crédito de compra | lo de la compra, al revés | Sí (la NC recibida ya se causa en negativo) |
-| 992 | Nómina (una por quincena) | ~114 líneas: `5105xx` por empleado, `2370xx`, `2510xx`, `25050501` por empleado, `2365`, `2830`, `2815` | **No**: la fuente es el Excel de nómina del contador, no la DIAN |
+| 992 | Nómina (una por quincena) | ~100 líneas: `5105xx` por empleado, `2370xx` por entidad, `2510xx`, `25050501` por empleado, `2365`, deducciones | **Sí** desde la 0.17 (D-134): desde el Excel de nómina, con la plantilla aprendida del 992 ya subido |
 | 1 | Notas contables (autorretención, amortizaciones) | 2 líneas | No: no sale de ningún dato que tengamos |
 | 2 | Depreciación del mes | 24 líneas, con activo fijo | No |
 | 18 | Gastos bancarios | 14 líneas desde el extracto | No |
