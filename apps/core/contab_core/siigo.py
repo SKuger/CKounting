@@ -519,3 +519,149 @@ def ivas_disponibles(conn) -> list[dict[str, Any]]:
         if fila["tipo"] == "iva" and codigo not in vistos:
             vistos[codigo] = {"codigo": codigo, "nombre": fila["nombre"], "tarifa": fila["tarifa"]}
     return list(vistos.values())
+
+
+# ─────────────────── sembrar reglas desde los históricos de Siigo ─────────────
+# El archivo de carga del contador trae una hoja de históricos: tres años de
+# comprobantes exportados de Siigo. Cada factura de compra dice a qué cuenta fue
+# el gasto de ese proveedor; cada venta, a qué cuenta fue el ingreso. Es la
+# decisión que la bandeja le pediría una vez por tercero, ya tomada. Sembrarla
+# hace que el primer mes de una empresa salga casi todo «listo» (D-130).
+#
+# Lo que NO hace: pisar una regla que ya existe —manual o aprendida al aprobar—,
+# ni elegir cuando el tercero fue a cuentas distintas sin una que domine. Eso
+# se devuelve con nombre, para que lo decida él en la bandeja.
+
+VENTANA_HISTORICO = 10        # los últimos N comprobantes de cada tercero
+DOMINIO_MINIMO = Decimal("0.7")
+ORIGEN_HISTORICO = "historico"
+_NO_GASTO = ("2408", "2365", "2367", "2368", "2205", "1355", "1305", "2335")
+
+
+def _filas_siigo(ruta: str | Path) -> list[dict[str, Any]]:
+    """Todas las filas de todas las hojas que tengan la cabecera del modelo."""
+    from openpyxl import load_workbook
+    wb = load_workbook(Path(ruta), data_only=True, read_only=True)
+    out: list[dict[str, Any]] = []
+    for ws in wb.worksheets:
+        filas = ws.iter_rows(values_only=True)
+        cab = next(filas, None)
+        if not cab or "tipo de comprobante" not in [_plano(v) for v in cab]:
+            continue
+        nombres = [str(v).strip() if v is not None else "" for v in cab]
+        for r in filas:
+            if r and r[0] is not None:
+                out.append({nombres[i]: r[i] for i in range(min(len(nombres), len(r))) if nombres[i]})
+    wb.close()
+    return out
+
+
+def _clase_por_tipo(cfg: dict[str, str]) -> dict[str, str]:
+    return {v.strip(): k.split(":", 1)[1] for k, v in cfg.items()
+            if k.startswith("tipo:") and v.strip()}
+
+
+def sembrar_reglas(conn, ruta: str | Path, *, dry_run: bool = False) -> dict[str, Any]:
+    """Crea una regla por tercero a partir de los comprobantes históricos.
+
+    De cada tercero se miran sus últimos `VENTANA_HISTORICO` comprobantes de
+    compra, documento soporte o venta. Si todos fueron a la misma cuenta —o
+    una pesa al menos el 70 %— se crea la regla con esa cuenta, el código de
+    IVA que traían y el concepto de retención cuyo código de Siigo aparece. Si
+    no, se devuelve como ambiguo. Las notas crédito no siembran: sus cuentas
+    son las de devolución.
+    """
+    cfg = config(conn)
+    clase_por_tipo = _clase_por_tipo(cfg)
+    if not clase_por_tipo:
+        raise ValueError(
+            "Primero cargue el catálogo de Siigo de esta empresa: sin los tipos de "
+            "comprobante no se sabe cuáles son compras, cuáles ventas y cuáles soportes.")
+    concepto_por_codigo = {
+        (r["codigo_siigo"] or "").strip(): r["id"]
+        for r in conn.execute("SELECT id, codigo_siigo FROM retencion_concepto WHERE archivado = 0")
+        if (r["codigo_siigo"] or "").strip()}
+
+    comprobantes: dict[tuple[str, Any], list[dict[str, Any]]] = {}
+    for f in _filas_siigo(ruta):
+        tipo = str(f.get("Tipo de comprobante") or "").strip().replace(".0", "")
+        comprobantes.setdefault((tipo, f.get("Consecutivo comprobante")), []).append(f)
+
+    por_tercero: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    ignorados = 0
+    for (tipo, _cons), lineas in comprobantes.items():
+        clase = clase_por_tipo.get(tipo)
+        if clase not in ("compra", "doc_soporte", "venta"):
+            ignorados += 1
+            continue
+        nit = str(lineas[0].get("Identificación tercero") or "").strip().replace(".0", "").split("-")[0]
+        if not nit:
+            continue
+        cuenta = None
+        mayor = Decimal("0")
+        iva_codigo = None
+        retencion_codigo = None
+        for ln in lineas:
+            c = str(ln.get("Código cuenta contable") or "").strip().replace(".0", "")
+            deb = Decimal(str(ln.get("Débito") or 0))
+            cre = Decimal(str(ln.get("Crédito") or 0))
+            codigo = _codigo(ln.get("Código impuesto")) if ln.get("Código impuesto") not in (None, "") else ""
+            if c.startswith("2408") and codigo:
+                iva_codigo = codigo
+            if c[:4] in ("2365", "2367") and codigo:
+                retencion_codigo = codigo
+            valor = cre if clase == "venta" else deb
+            es_candidata = (c.startswith("4") if clase == "venta" else c[:4] not in _NO_GASTO)
+            if es_candidata and valor > mayor:
+                cuenta, mayor = c, valor
+        if cuenta:
+            por_tercero.setdefault((nit, clase), []).append({
+                "fecha": str(lineas[0].get("Fecha de elaboración") or "")[:10],
+                "cuenta": cuenta, "iva": iva_codigo, "retencion": retencion_codigo})
+
+    nuevas, ya_existian, ambiguos = [], 0, []
+    for (nit, clase), vistos in sorted(por_tercero.items()):
+        vistos = sorted(vistos, key=lambda v: v["fecha"])[-VENTANA_HISTORICO:]
+        conteo: dict[str, int] = {}
+        for v in vistos:
+            conteo[v["cuenta"]] = conteo.get(v["cuenta"], 0) + 1
+        cuenta, n = max(conteo.items(), key=lambda kv: (kv[1], kv[0]))
+        if Decimal(n) / Decimal(len(vistos)) < DOMINIO_MINIMO:
+            ambiguos.append({"tercero_nit": nit, "naturaleza": clase,
+                             "cuentas": sorted(conteo, key=conteo.get, reverse=True)[:4]})
+            continue
+        existe = conn.execute(
+            "SELECT 1 FROM regla_causacion WHERE tercero_nit = ? AND naturaleza = ?"
+            " AND patron IS NULL AND archivada = 0", (nit, clase)).fetchone()
+        if existe:
+            ya_existian += 1
+            continue
+        de_esa = [v for v in vistos if v["cuenta"] == cuenta]
+        iva = next((v["iva"] for v in reversed(de_esa) if v["iva"]), None)
+        ret = next((v["retencion"] for v in reversed(de_esa) if v["retencion"]), None)
+        nuevas.append({
+            "tercero_nit": nit, "naturaleza": clase, "cuenta_puc": cuenta,
+            "iva_codigo": iva if clase != "doc_soporte" else None,
+            "concepto_retencion_id": concepto_por_codigo.get(ret or "") if clase != "venta" else None,
+            "comprobantes": len(vistos),
+        })
+
+    if not dry_run:
+        for r in nuevas:
+            conn.execute(
+                "INSERT INTO regla_causacion(tercero_nit, patron, cuenta_puc, concepto_retencion_id,"
+                " sin_retencion, naturaleza, iva_codigo, origen) VALUES (?, NULL, ?, ?, 0, ?, ?, ?)",
+                (r["tercero_nit"], r["cuenta_puc"], r["concepto_retencion_id"], r["naturaleza"],
+                 r["iva_codigo"], ORIGEN_HISTORICO))
+        conn.commit()
+
+    por_clase: dict[str, int] = {}
+    for r in nuevas:
+        por_clase[r["naturaleza"]] = por_clase.get(r["naturaleza"], 0) + 1
+    return {
+        "source_name": Path(ruta).name,
+        "nuevas": len(nuevas), "por_clase": por_clase,
+        "con_retencion": sum(1 for r in nuevas if r["concepto_retencion_id"]),
+        "ya_existian": ya_existian, "ambiguos": ambiguos,
+        "comprobantes_ignorados": ignorados, "dry_run": dry_run,
+    }

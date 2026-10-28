@@ -1442,6 +1442,16 @@ def _h_siigo_importar(params: dict) -> dict:
         conn.close()
 
 
+def _h_siigo_sembrar(params: dict) -> dict:
+    """Reglas por tercero desde los comprobantes históricos de Siigo (D-130)."""
+    conn = _con(params["db_path"])
+    try:
+        return siigo_module.sembrar_reglas(
+            conn, Path(params["source_path"]), dry_run=bool(params.get("dry_run", False)))
+    finally:
+        conn.close()
+
+
 def _h_siigo_exportar(params: dict) -> dict:
     """Los asientos aprobados del mes en el formato que Siigo importa."""
     periodo = storage_module._norm_periodo(params.get("periodo") or "")
@@ -1987,6 +1997,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "siigo_config": _h_siigo_config,
     "siigo_exportar": _h_siigo_exportar,
     "siigo_importar": _h_siigo_importar,
+    "siigo_sembrar": _h_siigo_sembrar,
     "cuentas_empresa": _h_cuentas_empresa,
     "tarifas_list": _h_tarifas_list,
     "tarifas_guardar_concepto": _h_tarifas_guardar_concepto,
