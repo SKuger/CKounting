@@ -514,11 +514,19 @@ onMounted(cargar)
             <span class="font-mono">{{ c.codigo }}</span> {{ c.nombre }} → <strong>{{ c.concepto }}</strong>
           </li>
         </ul>
-        <ul v-if="catalogoVista.sin_cruce.length" class="mt-2 space-y-0.5 text-xs text-status-warning">
-          <li v-for="c in catalogoVista.sin_cruce" :key="c.codigo">
-            · <span class="font-mono">{{ c.codigo }}</span> {{ c.nombre }}: {{ c.motivo }}
-          </li>
-        </ul>
+        <!-- Un catálogo de Siigo trae decenas de códigos y la empresa usa unos
+             pocos: los que no cruzan no son un error, y en ámbar parecían uno. -->
+        <details v-if="catalogoVista.sin_cruce.length" class="mt-2 text-xs">
+          <summary class="cursor-pointer text-muted-foreground">
+            {{ catalogoVista.sin_cruce.length }} códigos del catálogo no tienen concepto en Tarifas — es normal si
+            esta empresa no los usa. Ver cuáles
+          </summary>
+          <ul class="mt-1 space-y-0.5 text-muted-foreground">
+            <li v-for="c in catalogoVista.sin_cruce" :key="c.codigo">
+              · <span class="font-mono">{{ c.codigo }}</span> {{ c.nombre }}: {{ c.motivo }}
+            </li>
+          </ul>
+        </details>
         <ul v-if="catalogoVista.avisos.length" class="mt-2 space-y-0.5 text-xs text-status-warning">
           <li v-for="(a, i) in catalogoVista.avisos" :key="i">· {{ a }}</li>
         </ul>
