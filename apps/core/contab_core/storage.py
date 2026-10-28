@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import log
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 # Cuánto espera una escritura a que se libere el lock antes de rendirse (ms).
 BUSY_TIMEOUT_MS = 5_000
@@ -315,6 +315,30 @@ CREATE TABLE IF NOT EXISTS asiento_linea (
 );
 CREATE INDEX IF NOT EXISTS ix_asiento_linea ON asiento_linea(asiento_id);
 CREATE TABLE IF NOT EXISTS siigo_config (clave TEXT PRIMARY KEY, valor TEXT);
+CREATE TABLE IF NOT EXISTS nomina_comprobante (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  periodo       TEXT NOT NULL,
+  quincena      TEXT NOT NULL,       -- 1Q | 2Q
+  fecha         TEXT NOT NULL,
+  empleados     INTEGER NOT NULL DEFAULT 0,
+  avisos        TEXT,
+  fuente        TEXT,                -- el nombre del Excel de nómina
+  aprobado      INTEGER NOT NULL DEFAULT 0,
+  aprobado_at   TEXT,
+  siigo_consecutivo INTEGER,
+  generado_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(periodo, quincena)
+);
+CREATE TABLE IF NOT EXISTS nomina_linea (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  comprobante_id INTEGER NOT NULL REFERENCES nomina_comprobante(id) ON DELETE CASCADE,
+  orden          INTEGER NOT NULL DEFAULT 0,
+  cuenta         TEXT,
+  tercero        TEXT,
+  descripcion    TEXT,
+  debito         TEXT NOT NULL DEFAULT '0',
+  credito        TEXT NOT NULL DEFAULT '0'
+);
 CREATE TABLE IF NOT EXISTS siigo_impuesto (
   codigo      TEXT NOT NULL,
   contexto    TEXT NOT NULL,   -- venta | compra | dev_venta | dev_compra
@@ -635,6 +659,17 @@ CREATE INDEX IF NOT EXISTS idx_excel_row_fecha ON excel_row(fecha_emision);
 """
 
 
+def _m017_nomina(conn: sqlite3.Connection) -> None:
+    """Migración 17 — la nómina del mes como comprobante de Siigo (D-134).
+
+    Un comprobante por quincena, generado del Excel de nómina del contador, con
+    sus líneas por empleado y por entidad. Aprobado, sale en el archivo de Siigo
+    con el tipo de comprobante de nómina de la empresa. Las tablas se declaran
+    en SCHEMA_SQL con IF NOT EXISTS; aquí no hay nada que mover.
+    """
+    return None
+
+
 def _m016_lo_que_me_retienen(conn: sqlite3.Connection) -> None:
     """Migración 16 — las retenciones que el cliente le practica a la empresa (D-131).
 
@@ -929,6 +964,7 @@ MIGRACIONES: list[tuple[int, object]] = [
     (14, _m014_archivo_de_siigo),
     (15, _m015_catalogo_de_siigo),
     (16, _m016_lo_que_me_retienen),
+    (17, _m017_nomina),
 ]
 
 
