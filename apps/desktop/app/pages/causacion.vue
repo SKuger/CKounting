@@ -11,7 +11,7 @@
 // De ahí las tres cosas que manda esta pantalla: se ve el asiento ENTERO antes
 // de aprobar, se puede corregir, y al aprobar **se aprende** — aprobar no es
 // marcar una casilla, es enseñarle a Contab lo que él acaba de decidir.
-import { ArrowLeft, RefreshCw, Check, Undo2, ChevronRight, Download } from 'lucide-vue-next'
+import { ArrowLeft, RefreshCw, Check, Undo2, ChevronRight, Download, FileSpreadsheet, Settings2 } from 'lucide-vue-next'
 
 type Linea = { id: number; cuenta_puc: string | null; descripcion: string; debito: string; credito: string }
 // `naturaleza` (D-127): compra, venta o doc_soporte. Decide qué líneas lleva,
@@ -57,6 +57,72 @@ const correccion = reactive({ cuenta_puc: '', patron: '', retencion: '' as strin
 const exportOpen = ref(false)
 const exportando = ref(false)
 
+// El archivo de Siigo (D-128): lo que el contador sube cada mes. Lo que Siigo
+// exige y Contab no deduce —tipos de comprobante, último consecutivo, códigos
+// de IVA— vive en `siigo_config`, por empresa, y se edita en este panel.
+const siigoOpen = ref(false)
+const siigoPanel = ref(false)
+const siigoExportando = ref(false)
+const siigoGuardando = ref(false)
+const CLASES = [
+  { clave: 'compra', etiqueta: 'Factura de compra' },
+  { clave: 'nc_compra', etiqueta: 'Nota crédito de compra' },
+  { clave: 'doc_soporte', etiqueta: 'Documento soporte' },
+  { clave: 'venta', etiqueta: 'Factura de venta' },
+  { clave: 'nc_venta', etiqueta: 'Nota crédito de venta' },
+]
+const IVAS = ['19', '5', '0']
+const siigo = reactive<Record<string, string>>({})
+const tiposUsados = computed(() => [...new Set(CLASES.map((c) => siigo[`tipo:${c.clave}`]).filter(Boolean))])
+
+async function cargarSiigo() {
+  const r = await rpc<{ config: Record<string, string> }>('siigo_config', { db_path: dbPath.value })
+  for (const k of Object.keys(siigo)) delete siigo[k]
+  Object.assign(siigo, r.config)
+}
+
+async function guardarSiigo() {
+  siigoGuardando.value = true
+  try {
+    await rpc('siigo_config', { db_path: dbPath.value, valores: { ...siigo } })
+    await cargarSiigo()
+    siigoPanel.value = false
+  } catch (e) {
+    toast.error('No se pudo guardar', humanError(e))
+  } finally {
+    siigoGuardando.value = false
+  }
+}
+
+async function onSiigoFolder(ruta: string) {
+  siigoOpen.value = false
+  siigoExportando.value = true
+  try {
+    const r = await rpc<{ path: string; comprobantes: number; lineas: number; cuadra: boolean; faltan: string[] }>(
+      'siigo_exportar', { db_path: dbPath.value, periodo: periodo.value, output_dir: ruta })
+    await cargarSiigo()
+    if (r.faltan.length) {
+      toast.error(`${r.comprobantes} comprobantes, pero faltan datos`,
+        'Celdas vacías en el archivo: ' + r.faltan.map(etiquetaFalta).join(', ') + '. Complétalos en «Siigo» o en Tarifas y vuelve a exportar.')
+    } else {
+      toast.success(`${r.comprobantes} comprobantes · ${r.lineas} líneas`,
+        (r.cuadra ? 'El archivo cuadra. ' : 'OJO: el archivo NO cuadra. ') + r.path)
+    }
+  } catch (e) {
+    toast.error('No se pudo armar el archivo de Siigo', humanError(e))
+  } finally {
+    siigoExportando.value = false
+  }
+}
+
+function etiquetaFalta(f: string): string {
+  const [k, v] = f.split(':')
+  if (k === 'tipo') return `tipo de comprobante de ${CLASES.find((c) => c.clave === v)?.etiqueta.toLowerCase() ?? v}`
+  if (k === 'iva') return `código de IVA ${v}%`
+  if (k === 'concepto') return 'código de Siigo de un concepto de retención (en Tarifas)'
+  return f
+}
+
 function humanError(e: unknown): string {
   const anyE = e as { data?: { error?: string }; message?: string }
   return String(anyE?.data?.error ?? anyE?.message ?? e).replace(/^Error:\s*/, '')
@@ -90,6 +156,7 @@ async function cargar() {
     for (const k of Object.keys(cuentas) as (keyof typeof cuentas)[]) cuentas[k] = c[k] || ''
     const info = await rpc<{ razon_social: string }>('open_empresa', { db_path: dbPath.value })
     razonSocial.value = info.razon_social
+    await cargarSiigo()
   } catch (e) {
     toast.error('No se pudo cargar la causación', humanError(e))
   } finally {
@@ -186,6 +253,9 @@ onMounted(cargar)
     <DirectoryPicker v-if="exportOpen" :open="exportOpen" :initial-path="''"
       title="Carpeta donde guardar el Excel de asientos"
       @pick="onExportFolder" @close="exportOpen = false" />
+    <DirectoryPicker v-if="siigoOpen" :open="siigoOpen" :initial-path="''"
+      title="Carpeta donde guardar el archivo para Siigo"
+      @pick="onSiigoFolder" @close="siigoOpen = false" />
     <header class="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
       <NuxtLink :to="{ path: '/empresa', query: { db: dbPath } }"
         class="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground">
@@ -214,6 +284,15 @@ onMounted(cargar)
         @click="exportOpen = true">
         <Download class="size-3.5" /> Exportar {{ aprobados.length }} aprobados
       </Button>
+      <Button size="sm" variant="outline" :disabled="siigoExportando || !aprobados.length"
+        title="Los asientos aprobados en el formato de importación de comprobantes de Siigo"
+        @click="siigoOpen = true">
+        <FileSpreadsheet class="size-3.5" /> Archivo de Siigo
+      </Button>
+      <Button size="sm" variant="ghost" :title="siigoPanel ? 'Cerrar' : 'Tipos de comprobante y consecutivos de Siigo'"
+        @click="siigoPanel = !siigoPanel">
+        <Settings2 class="size-3.5" /> Siigo
+      </Button>
       <span v-if="trabajo.corriendo.value" class="text-xs text-muted-foreground">{{ trabajo.etiqueta.value }}</span>
       <span class="flex-1" />
       <label class="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -232,6 +311,45 @@ onMounted(cargar)
         IVA generado
         <Input v-model="cuentas.cuenta_iva_generado" class="h-8 w-24 font-mono" placeholder="240805" />
       </label>
+    </section>
+
+    <!-- panel de Siigo: nunca un modal -->
+    <section v-if="siigoPanel" class="shrink-0 rounded-lg border border-primary/40 bg-card p-3">
+      <h2 class="text-sm font-semibold">Lo que Siigo exige y Contab no puede adivinar</h2>
+      <p class="mb-3 text-xs text-muted-foreground">
+        Son del catálogo de <strong>esta empresa</strong> en Siigo. El tipo de comprobante es el número con que
+        la empresa registra cada clase de documento; el último consecutivo es el del último comprobante de ese
+        tipo que ya está en Siigo — Contab sigue desde ahí y lo va anotando.
+      </p>
+      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div v-for="c in CLASES" :key="c.clave" class="grid gap-1">
+          <Label class="text-xs">{{ c.etiqueta }} · tipo</Label>
+          <Input v-model="siigo[`tipo:${c.clave}`]" class="h-8 w-24 font-mono" placeholder="11" />
+        </div>
+      </div>
+      <div v-if="tiposUsados.length" class="mt-3 grid gap-3 sm:grid-cols-3">
+        <div v-for="t in tiposUsados" :key="t" class="grid gap-1">
+          <Label class="text-xs">Último consecutivo del tipo {{ t }}</Label>
+          <Input v-model="siigo[`ultimo:${t}`]" class="h-8 w-28 font-mono" placeholder="0" />
+        </div>
+      </div>
+      <div class="mt-3 grid gap-3 sm:grid-cols-4">
+        <div v-for="t in IVAS" :key="t" class="grid gap-1">
+          <Label class="text-xs">Código de IVA {{ t }}%</Label>
+          <Input v-model="siigo[`iva:${t}`]" class="h-8 w-20 font-mono" placeholder="02" />
+        </div>
+        <div class="grid gap-1">
+          <Label class="text-xs">Vencimiento (días)</Label>
+          <Input v-model="siigo['vencimiento_dias']" class="h-8 w-20 font-mono" placeholder="30" />
+        </div>
+      </div>
+      <p class="mt-2 text-xs text-muted-foreground">
+        El código de Siigo de cada <strong>concepto de retención</strong> se pone en Tarifas y UVT, junto a su cuenta.
+      </p>
+      <div class="mt-3 flex gap-2">
+        <Button size="sm" :disabled="siigoGuardando" @click="guardarSiigo">Guardar</Button>
+        <Button size="sm" variant="ghost" :disabled="siigoGuardando" @click="siigoPanel = false">Cancelar</Button>
+      </div>
     </section>
 
     <p v-if="faltanCuentas" class="shrink-0 rounded-md border border-status-warning/40 bg-status-warning-bg px-3 py-2 text-sm">

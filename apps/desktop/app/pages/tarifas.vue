@@ -11,7 +11,7 @@ type Concepto = {
   id: number; concepto: string; aplica_a: string; sobre: string
   tarifa: string | null; tarifa_texto: string | null
   base_minima_uvt: string | null; base_minima_pesos?: string | null
-  cuenta_puc: string | null; vigencia_desde: string | null
+  cuenta_puc: string | null; codigo_siigo: string | null; vigencia_desde: string | null
   observaciones: string | null; fuente: string; archivado: number
 }
 type Uvt = { anio: number; valor: string; norma: string | null; fuente: string }
@@ -122,12 +122,12 @@ const panel = ref<'concepto' | 'uvt' | null>(null)
 // controlado es un error de tipos, y además el usuario escribe texto.
 type Borrador = {
   id: number | null; concepto: string; aplica_a: string; sobre: string
-  tarifa: string; base_minima_uvt: string; cuenta_puc: string
+  tarifa: string; base_minima_uvt: string; cuenta_puc: string; codigo_siigo: string
   vigencia_desde: string; observaciones: string
 }
 const VACIO: Borrador = {
   id: null, concepto: '', aplica_a: 'ambos', sobre: 'base',
-  tarifa: '', base_minima_uvt: '', cuenta_puc: '', vigencia_desde: '', observaciones: '',
+  tarifa: '', base_minima_uvt: '', cuenta_puc: '', codigo_siigo: '', vigencia_desde: '', observaciones: '',
 }
 const borrador = reactive<Borrador>({ ...VACIO })
 const borradorUvt = reactive({ anio: new Date().getFullYear(), valor: '', norma: '' })
@@ -139,7 +139,7 @@ function abrirConcepto(c?: Concepto) {
     Object.assign(borrador, {
       id: c.id, concepto: c.concepto, aplica_a: c.aplica_a, sobre: c.sobre,
       tarifa: c.tarifa ?? '', base_minima_uvt: c.base_minima_uvt ?? '',
-      cuenta_puc: c.cuenta_puc ?? '', vigencia_desde: c.vigencia_desde ?? '',
+      cuenta_puc: c.cuenta_puc ?? '', codigo_siigo: c.codigo_siigo ?? '', vigencia_desde: c.vigencia_desde ?? '',
       observaciones: c.observaciones ?? '',
     })
   }
@@ -244,6 +244,11 @@ onMounted(cargar)
       <div class="grid max-w-4xl gap-3 sm:grid-cols-3">
         <div class="grid gap-1.5 sm:col-span-2"><Label>Concepto</Label><Input v-model="borrador.concepto" /></div>
         <div class="grid gap-1.5"><Label>Cuenta PUC</Label><Input v-model="borrador.cuenta_puc" placeholder="23651503" /></div>
+        <div class="grid gap-1.5">
+          <Label>Código en Siigo</Label>
+          <Input v-model="borrador.codigo_siigo" placeholder="14" />
+          <p class="text-[11px] text-muted-foreground">El código de este impuesto en el catálogo de Siigo de la empresa. Va en el archivo que se importa.</p>
+        </div>
         <div class="grid gap-1.5"><Label>Tarifa (%)</Label><Input v-model="borrador.tarifa" placeholder="11" /></div>
         <div class="grid gap-1.5"><Label>Base mínima (UVT)</Label><Input v-model="borrador.base_minima_uvt" placeholder="vacío = sin mínimo" /></div>
         <div class="grid gap-1.5">
@@ -297,6 +302,7 @@ onMounted(cargar)
             <th class="px-2 py-2 font-normal">Sobre</th>
             <th class="px-2 py-2 text-right font-normal">Base mínima</th>
             <th class="px-2 py-2 font-normal">Cuenta</th>
+            <th class="px-2 py-2 font-normal" title="Código del impuesto en el catálogo de Siigo">Siigo</th>
             <th class="px-2 py-2 font-normal">Desde</th>
             <th class="px-2 py-2" />
           </tr>
@@ -326,6 +332,7 @@ onMounted(cargar)
               <span v-else class="text-muted-foreground">sin mínimo</span>
             </td>
             <td class="px-2 py-1.5 font-mono text-xs">{{ c.cuenta_puc }}</td>
+            <td class="px-2 py-1.5 font-mono text-xs" :class="c.codigo_siigo ? '' : 'text-status-warning'">{{ c.codigo_siigo || 'falta' }}</td>
             <td class="px-2 py-1.5 font-mono text-xs text-muted-foreground">{{ c.vigencia_desde }}</td>
             <td class="whitespace-nowrap px-2 py-1.5 text-right">
               <Button variant="ghost" size="icon-sm" @click="abrirConcepto(c)"><Pencil class="size-3.5" /></Button>
