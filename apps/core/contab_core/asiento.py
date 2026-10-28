@@ -136,6 +136,53 @@ def _codigo_iva(conn, propuesta, iva: Decimal, base: Decimal) -> str | None:
     return (siigo_module.config(conn).get(f"iva:{tarifa}") or "").strip() or None
 
 
+NINGUNA = "ninguna"
+CENTAVO = Decimal("0.01")
+
+
+def _lo_que_me_retienen(catalogo, codigos: str | None, subtotal: Decimal, iva: Decimal,
+                        contexto: str) -> tuple[list[Linea], list[str]]:
+    """En una venta, las retenciones que el cliente le practica a la empresa.
+
+    Van al débito (son un anticipo de impuestos, cuentas 1355) y la cartera
+    queda por el neto. La tarifa sale del catálogo de Siigo: retefuente sobre
+    la base, ReteIVA sobre el IVA, y ReteICA **en por mil** sobre la base —así
+    la trae el catálogo y así salen sus ventas, 2 por mil en 78 de 86 (D-131)—.
+    Con centavos, como en su archivo.
+
+    Un código puede llevar la tarifa del cliente cuando no es la del catálogo:
+    «05:1.8» es ReteICA al 1,8 por mil. Pasa con el ICA de otros municipios.
+    """
+    if codigos is None:
+        return [], ["No se sabe qué le retiene este cliente: la cartera quedó por el total. "
+                    "Elíjalo al aprobar y se recordará."]
+    if codigos.strip().lower() == NINGUNA:
+        return [], []
+    lineas, avisos = [], []
+    for item in [c.strip() for c in codigos.split(",") if c.strip()]:
+        codigo, _, propia = item.partition(":")
+        fila = catalogo.get((codigo, contexto))
+        if not fila:
+            avisos.append(f"El código {codigo} no está en el catálogo de Siigo para {contexto}.")
+            continue
+        tarifa = _d(propia) if propia else _d(fila.get("tarifa"))
+        tipo = fila.get("tipo")
+        if tipo == "reteiva":
+            base, valor = iva, iva * tarifa / 100
+        elif tipo == "reteica":
+            base, valor = subtotal, subtotal * tarifa / 1000
+        elif tipo == "retefuente":
+            base, valor = subtotal, subtotal * tarifa / 100
+        else:
+            continue
+        if not base:
+            continue
+        lineas.append(Linea(fila.get("cuenta"), f"{fila.get('nombre') or codigo} (le retiene el cliente)",
+                            debito=valor.quantize(CENTAVO, rounding=ROUND_HALF_UP),
+                            rol=ROL_RETENCION, base=base, codigo_siigo=codigo))
+    return lineas, avisos
+
+
 def _cuentas_de(info: dict[str, Any]) -> dict[str, str]:
     return {k: (info.get(k) or "").strip() for k in (
         "cuenta_proveedores", "cuenta_iva_descontable",
@@ -231,11 +278,13 @@ def generar(
         if not propuesta.seguro:
             avisos.insert(0, propuesta.por_que)
 
-        contrapartida = cuentas["cuenta_clientes" if documento.get("naturaleza")
-                                == documentos_module.NATURALEZA_VENTA
-                                else "cuenta_proveedores"]
+        es_venta = documento.get("naturaleza") == documentos_module.NATURALEZA_VENTA
+        contrapartida = cuentas["cuenta_clientes" if es_venta else "cuenta_proveedores"]
+        # Con el catálogo cargado, una venta de un cliente del que no se sabe qué
+        # retiene no se aprueba en lote: la cartera saldría por el total.
+        no_se_sabe = bool(es_venta and catalogo and propuesta.retenciones_cliente is None)
         estado = (ESTADO_COMPLETO
-                  if propuesta.seguro and not calculo.revisar and contrapartida
+                  if propuesta.seguro and not calculo.revisar and contrapartida and not no_se_sabe
                   else ESTADO_REVISAR)
         if estado == ESTADO_COMPLETO:
             res.completos += 1
@@ -281,8 +330,10 @@ def _lineas_de(
     nombre = documento.get("tercero_nombre") or documento.get("emisor_nombre")
 
     if naturaleza == documentos_module.NATURALEZA_VENTA:
-        # El cliente debe el total; el ingreso y el IVA generado son el haber.
-        lineas = [Linea(cuentas["cuenta_clientes"] or None, "Clientes", debito=total, rol=ROL_CARTERA)]
+        # El cliente debe el total menos lo que retiene; el ingreso y el IVA
+        # generado son el haber.
+        cartera = Linea(cuentas["cuenta_clientes"] or None, "Clientes", debito=total, rol=ROL_CARTERA)
+        lineas = [cartera]
         lineas.append(Linea(propuesta.cuenta_puc, nombre or "Venta", credito=subtotal, rol=ROL_INGRESO))
         if iva != CERO and responsable_iva:
             cuenta_iva = _cuenta_del_catalogo(catalogo, codigo_iva, contexto) or cuentas["cuenta_iva_generado"]
@@ -293,6 +344,12 @@ def _lineas_de(
                 avisos.append(
                     "Falta la cuenta del IVA generado: el IVA de esta venta no "
                     "quedó en ninguna línea.")
+        if catalogo:
+            retenidas, avisos_ret = _lo_que_me_retienen(
+                catalogo, propuesta.retenciones_cliente, subtotal, iva, contexto)
+            lineas.extend(retenidas)
+            avisos.extend(avisos_ret)
+            cartera.debito = total - sum((x.debito for x in retenidas), CERO)
     else:
         if naturaleza == documentos_module.NATURALEZA_DOC_SOPORTE:
             # Sin IVA: quien no está obligado a facturar no lo cobra. El gasto
@@ -423,6 +480,7 @@ def aprobar(
     sin_retencion: bool = False,
     aprender_regla: bool = True,
     iva_codigo: str | None = None,
+    retenciones_cliente: str | None = None,
 ) -> dict[str, Any]:
     """Da por bueno un asiento, con las correcciones que él haya hecho.
 
@@ -459,7 +517,8 @@ def aprobar(
             # para que las siguientes facturas no vuelvan a preguntarlo.
             sin_retencion=sin_retencion and not es_venta,
             naturaleza=a.get("naturaleza") or documentos_module.NATURALEZA_COMPRA,
-            iva_codigo=iva_codigo)
+            iva_codigo=iva_codigo,
+            retenciones_cliente=(retenciones_cliente or "").strip() or None if es_venta else None)
 
     # Se rehace el asiento con lo corregido y se marca aprobado.
     # El documento puede venir del XML o del Excel: `aprobar` tiene que mirar en
@@ -482,6 +541,8 @@ def aprobar(
             propuesta.sin_retencion = True
         if (iva_codigo or "").strip():
             propuesta.iva_codigo = iva_codigo.strip()
+        if (retenciones_cliente or "").strip():
+            propuesta.retenciones_cliente = retenciones_cliente.strip()
         calculo = _calcular_retenciones(
             conn, perfil=perfil, documento=documento, propuesta=propuesta,
             tercero_decidido=True)   # la está aprobando una persona

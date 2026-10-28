@@ -29,6 +29,7 @@ from typing import Any
 import xlsxwriter
 
 from . import money
+from .hojas import Hoja, leer_hojas
 
 COLUMNAS: list[str] = [
     "Tipo de comprobante", "Consecutivo comprobante", "Fecha de elaboración",
@@ -320,22 +321,22 @@ def _plano(v: Any) -> str:
     return "".join(c for c in t if not unicodedata.combining(c)).strip().lower()
 
 
-def _hoja(wb, *nombres: str):
+def _hoja(hojas: list[Hoja], *nombres: str) -> Hoja | None:
     """La hoja cuyo título O cuya cabecera contenga alguna de las palabras: el
     contador la llamó «Hoja1», y lo que la identifica es la columna «Código»."""
-    for ws in wb.worksheets:
-        if any(n in _plano(ws.title) for n in nombres):
-            return ws
-    for ws in wb.worksheets:
-        for r in ws.iter_rows(max_row=5, values_only=True):
+    for h in hojas:
+        if any(n in _plano(h.titulo) for n in nombres):
+            return h
+    for h in hojas:
+        for r in h.filas[:5]:
             cab = " ".join(_plano(v) for v in r if v is not None)
             if any(n in cab for n in nombres):
-                return ws
+                return h
     return None
 
 
-def _filas_con_cabecera(ws) -> list[dict[str, Any]]:
-    filas = [list(r) for r in ws.iter_rows(values_only=True)]
+def _filas_con_cabecera(hoja: Hoja) -> list[dict[str, Any]]:
+    filas = hoja.filas
     i = next((k for k, r in enumerate(filas)
               if sum(1 for v in r if isinstance(v, str) and v.strip()) >= 2), None)
     if i is None:
@@ -377,12 +378,11 @@ def _tarifa(v: Any) -> str | None:
 
 
 def cargar_catalogo(ruta: str | Path) -> CatalogoCargado:
-    from openpyxl import load_workbook
     ruta = Path(ruta)
-    wb = load_workbook(ruta, data_only=True, read_only=True)
+    hojas = leer_hojas(ruta)
     out = CatalogoCargado(source_name=ruta.name)
 
-    ws = _hoja(wb, "impuesto", "codigo")
+    ws = _hoja(hojas, "impuesto", "codigo")
     if ws is None:
         out.avisos.append("No hay hoja «Impuestos»: no se leen códigos de impuesto.")
     else:
@@ -405,7 +405,7 @@ def cargar_catalogo(ruta: str | Path) -> CatalogoCargado:
             elif out.impuestos[-1]["contexto"] is None and cuenta:
                 out.avisos.append(f"No sé si la cuenta {cuenta} del código {codigo} es de compra o de venta; se guarda sin contexto.")
 
-    ws = _hoja(wb, "comprobante", "clase")
+    ws = _hoja(hojas, "comprobante", "clase")
     if ws is None:
         out.avisos.append("No hay hoja «Comprobantes»: no se leen tipos ni consecutivos.")
     else:
@@ -423,7 +423,6 @@ def cargar_catalogo(ruta: str | Path) -> CatalogoCargado:
                 "clase": clase, "tipo": str(tipo).replace(".0", "").strip(),
                 "ultimo": str(ultimo).replace(".0", "").strip() if ultimo not in (None, "") else "",
             })
-    wb.close()
     return out
 
 
@@ -512,6 +511,13 @@ def catalogo(conn) -> dict[tuple[str, str], dict[str, Any]]:
     return {(r["codigo"], r["contexto"]): dict(r) for r in filas}
 
 
+def retenciones_de_venta(conn) -> list[dict[str, Any]]:
+    """Las retenciones que un cliente puede practicarle, para elegir al aprobar."""
+    return [{"codigo": c, "nombre": f["nombre"], "tipo": f["tipo"], "tarifa": f["tarifa"]}
+            for (c, ctx), f in sorted(catalogo(conn).items(), key=lambda kv: (kv[1]["tipo"] or "", kv[0][0]))
+            if ctx == "venta" and f["tipo"] in ("retefuente", "reteiva", "reteica")]
+
+
 def ivas_disponibles(conn) -> list[dict[str, Any]]:
     """Los códigos de IVA del catálogo, uno por código, para elegir al aprobar."""
     vistos: dict[str, dict[str, Any]] = {}
@@ -540,19 +546,17 @@ _NO_GASTO = ("2408", "2365", "2367", "2368", "2205", "1355", "1305", "2335")
 
 def _filas_siigo(ruta: str | Path) -> list[dict[str, Any]]:
     """Todas las filas de todas las hojas que tengan la cabecera del modelo."""
-    from openpyxl import load_workbook
-    wb = load_workbook(Path(ruta), data_only=True, read_only=True)
     out: list[dict[str, Any]] = []
-    for ws in wb.worksheets:
-        filas = ws.iter_rows(values_only=True)
-        cab = next(filas, None)
-        if not cab or "tipo de comprobante" not in [_plano(v) for v in cab]:
+    for h in leer_hojas(ruta):
+        if not h.filas:
+            continue
+        cab = h.filas[0]
+        if "tipo de comprobante" not in [_plano(v) for v in cab]:
             continue
         nombres = [str(v).strip() if v is not None else "" for v in cab]
-        for r in filas:
+        for r in h.filas[1:]:
             if r and r[0] is not None:
                 out.append({nombres[i]: r[i] for i in range(min(len(nombres), len(r))) if nombres[i]})
-    wb.close()
     return out
 
 
@@ -573,6 +577,23 @@ def sembrar_reglas(conn, ruta: str | Path, *, dry_run: bool = False) -> dict[str
     """
     cfg = config(conn)
     clase_por_tipo = _clase_por_tipo(cfg)
+    cat = catalogo(conn)
+
+    def _tarifa_vista(ln: dict[str, Any], codigo: str) -> str:
+        """La tarifa que de verdad aplicó el cliente, si no es la del catálogo.
+        Retefuente y ReteIVA en %, ReteICA en por mil, como el catálogo."""
+        fila = cat.get((codigo, "venta")) or {}
+        base = Decimal(str(ln.get("Base gravable libro compras/ventas") or 0))
+        valor = Decimal(str(ln.get("Débito") or 0)) or Decimal(str(ln.get("Crédito") or 0))
+        if not base or not fila.get("tarifa"):
+            return ""
+        escala = 1000 if fila.get("tipo") == "reteica" else 100
+        vista = (valor / base * escala).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+        if vista == Decimal(fila["tarifa"]).quantize(Decimal("0.1")):
+            return ""
+        # «10», no «1E+1»: normalize() pasa a notación científica los enteros.
+        return format(vista.normalize(), "f")
+
     if not clase_por_tipo:
         raise ValueError(
             "Primero cargue el catálogo de Siigo de esta empresa: sin los tipos de "
@@ -601,6 +622,7 @@ def sembrar_reglas(conn, ruta: str | Path, *, dry_run: bool = False) -> dict[str
         mayor = Decimal("0")
         iva_codigo = None
         retencion_codigo = None
+        le_retienen: dict[str, str] = {}
         for ln in lineas:
             c = str(ln.get("Código cuenta contable") or "").strip().replace(".0", "")
             deb = Decimal(str(ln.get("Débito") or 0))
@@ -610,6 +632,11 @@ def sembrar_reglas(conn, ruta: str | Path, *, dry_run: bool = False) -> dict[str
                 iva_codigo = codigo
             if c[:4] in ("2365", "2367") and codigo:
                 retencion_codigo = codigo
+            if c.startswith("1355") and codigo and codigo not in le_retienen:
+                tarifa = _tarifa_vista(ln, codigo)
+                # Una línea en cero no es una retención: el cliente no la practicó.
+                if tarifa != "0":
+                    le_retienen[codigo] = tarifa
             valor = cre if clase == "venta" else deb
             es_candidata = (c.startswith("4") if clase == "venta" else c[:4] not in _NO_GASTO)
             if es_candidata and valor > mayor:
@@ -617,7 +644,9 @@ def sembrar_reglas(conn, ruta: str | Path, *, dry_run: bool = False) -> dict[str
         if cuenta:
             por_tercero.setdefault((nit, clase), []).append({
                 "fecha": str(lineas[0].get("Fecha de elaboración") or "")[:10],
-                "cuenta": cuenta, "iva": iva_codigo, "retencion": retencion_codigo})
+                "cuenta": cuenta, "iva": iva_codigo, "retencion": retencion_codigo,
+                "le_retienen": ",".join(
+                    f"{c}:{t}" if t else c for c, t in sorted(le_retienen.items())) or "ninguna"})
 
     nuevas, ya_existian, ambiguos = [], 0, []
     for (nit, clase), vistos in sorted(por_tercero.items()):
@@ -639,10 +668,15 @@ def sembrar_reglas(conn, ruta: str | Path, *, dry_run: bool = False) -> dict[str
         de_esa = [v for v in vistos if v["cuenta"] == cuenta]
         iva = next((v["iva"] for v in reversed(de_esa) if v["iva"]), None)
         ret = next((v["retencion"] for v in reversed(de_esa) if v["retencion"]), None)
+        conjuntos: dict[str, int] = {}
+        for v in de_esa:
+            conjuntos[v["le_retienen"]] = conjuntos.get(v["le_retienen"], 0) + 1
+        le_retienen = max(conjuntos.items(), key=lambda kv: kv[1])[0] if clase == "venta" else None
         nuevas.append({
             "tercero_nit": nit, "naturaleza": clase, "cuenta_puc": cuenta,
             "iva_codigo": iva if clase != "doc_soporte" else None,
             "concepto_retencion_id": concepto_por_codigo.get(ret or "") if clase != "venta" else None,
+            "retenciones_cliente": le_retienen,
             "comprobantes": len(vistos),
         })
 
@@ -650,9 +684,10 @@ def sembrar_reglas(conn, ruta: str | Path, *, dry_run: bool = False) -> dict[str
         for r in nuevas:
             conn.execute(
                 "INSERT INTO regla_causacion(tercero_nit, patron, cuenta_puc, concepto_retencion_id,"
-                " sin_retencion, naturaleza, iva_codigo, origen) VALUES (?, NULL, ?, ?, 0, ?, ?, ?)",
+                " sin_retencion, naturaleza, iva_codigo, retenciones_cliente, origen)"
+                " VALUES (?, NULL, ?, ?, 0, ?, ?, ?, ?)",
                 (r["tercero_nit"], r["cuenta_puc"], r["concepto_retencion_id"], r["naturaleza"],
-                 r["iva_codigo"], ORIGEN_HISTORICO))
+                 r["iva_codigo"], r["retenciones_cliente"], ORIGEN_HISTORICO))
         conn.commit()
 
     por_clase: dict[str, int] = {}
