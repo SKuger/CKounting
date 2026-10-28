@@ -1360,3 +1360,21 @@ cuatro cuentas distintas. Una «cuenta del IVA descontable» por empresa era una
 simplificación que ya estaba mal para la nota crédito de venta y lo estaba para
 bienes contra servicios. Leer la cuenta del catálogo es lo único que coincide
 con lo que Siigo espera, y es lo que el contador ya tiene escrito.
+
+## D-130 — Las reglas se siembran desde los históricos de Siigo ✅
+
+**Decisión**: el archivo de carga de Siigo del contador, con su hoja de
+históricos, crea una regla por tercero: la cuenta del gasto (o del ingreso, en
+una venta) a la que fueron sus últimos 10 comprobantes, si todos fueron a la
+misma o una pesa al menos el 70 %; el código de IVA que traían, y el concepto de
+retención cuyo código de Siigo aparece en ellos. Las reglas llevan
+`origen = 'historico'`. No se pisa una regla que ya exista, no se elige cuando
+no hay cuenta dominante (se devuelve como ambiguo) y las notas crédito no
+siembran. Exige el catálogo cargado: sin los tipos de comprobante no se sabe
+qué es compra, qué venta y qué soporte.
+
+**Por qué**: el primer mes de cada empresa costaba una decisión por proveedor,
+y esas decisiones ya estaban tomadas en Siigo. Sobre la copia de REAL: 240
+reglas de 266 terceros (9 ambiguos), y el julio pasó de 0 a 42 documentos con
+regla de 50. Los últimos 10 y no todos: un proveedor que cambió de cuenta hace
+un año tiene que ir a la de ahora.
