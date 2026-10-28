@@ -10,6 +10,7 @@ type Regla = {
   id: number; tercero_nit: string | null; tercero_nombre: string | null; patron: string | null
   cuenta_puc: string; concepto_retencion_id: number | null; sin_retencion: number
   naturaleza: Naturaleza; iva_codigo: string | null; retenciones_cliente: string | null
+  cuenta_no_gravada?: string | null
   origen: string; veces_usada: number; archivada: number
 }
 type Concepto = { id: number; concepto: string; sobre: string }
@@ -81,7 +82,7 @@ async function cargar() {
 
 // El panel de edición guarda TEXTO; `retencion` es '' (no dicho), 'ninguna' o el id.
 const abierta = ref<number | null>(null)
-const borrador = reactive({ cuenta_puc: '', patron: '', iva_codigo: '', retencion: '', retenciones_cliente: '' })
+const borrador = reactive({ cuenta_puc: '', patron: '', iva_codigo: '', retencion: '', retenciones_cliente: '', cuenta_no_gravada: '' })
 const guardando = ref(false)
 
 function editar(r: Regla) {
@@ -91,6 +92,7 @@ function editar(r: Regla) {
     cuenta_puc: r.cuenta_puc, patron: r.patron || '', iva_codigo: r.iva_codigo || '',
     retencion: r.sin_retencion ? 'ninguna' : (r.concepto_retencion_id ? String(r.concepto_retencion_id) : ''),
     retenciones_cliente: r.retenciones_cliente || '',
+    cuenta_no_gravada: r.cuenta_no_gravada || '',
   })
 }
 
@@ -105,6 +107,7 @@ async function guardar(r: Regla) {
         sin_retencion: borrador.retencion === 'ninguna',
         concepto_retencion_id: borrador.retencion && borrador.retencion !== 'ninguna' ? Number(borrador.retencion) : null,
         retenciones_cliente: borrador.retenciones_cliente,
+        cuenta_no_gravada: borrador.cuenta_no_gravada,
       },
     })
     abierta.value = null
@@ -212,6 +215,10 @@ onMounted(cargar)
                   <div class="grid gap-1">
                     <Label class="text-xs">{{ r.naturaleza === 'venta' ? 'Cuenta del ingreso' : 'Cuenta del gasto' }}</Label>
                     <Input v-model="borrador.cuenta_puc" class="h-8 w-32 font-mono" />
+                  </div>
+                  <div class="grid gap-1" title="Cuando la factura trae una parte sin IVA, esa parte va a esta cuenta">
+                    <Label class="text-xs">Cuenta de la parte sin IVA</Label>
+                    <Input v-model="borrador.cuenta_no_gravada" class="h-8 w-32 font-mono" placeholder="si la hay" />
                   </div>
                   <div class="grid gap-1">
                     <Label class="text-xs">Solo cuando la factura diga…</Label>
