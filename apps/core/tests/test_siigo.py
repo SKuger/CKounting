@@ -7,6 +7,7 @@ código y base; que exportar dos veces no cambie un consecutivo; y que lo que
 falte se diga con nombre en vez de inventarse.
 """
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -382,3 +383,135 @@ def test_sembrar_mira_los_comprobantes_recientes(conn, tmp_path):
     _historicos(ruta, viejos + nuevos)
     siigo.sembrar_reglas(conn, ruta)
     assert causacion.listar(conn)[0]["cuenta_puc"] == "51953001"
+
+
+# ──────────── D-131 · lo que el cliente le retiene a la empresa en una venta ───
+
+def _catalogo_de_ventas(conn, tmp_path):
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Hoja1"
+    ws.append(["Código", "Nombre", "Tipo de impuesto", "Tarifa", "Cuenta", "Descripción"])
+    for f in [(2, "IVA SERVICIOS 19%", "IVA", 19, 24080504, "Iva generado venta de servicios 19%"),
+              (11, "COMISIONES 11", "Retefuente", 11, 13551507, "Comisiones declarantes 11%"),
+              (7, "RETEIVA SERVICIOS", "ReteIVA", 15, 13551703, "IVA retenido 15% - Servicios"),
+              (5, "RETICA MDE 2", "ReteICA", 0.02, 13551801, "Reteica Medellín 2"),
+              (11, "COMISIONES 11", "Retefuente", 11, 13551508, "Dev Ret. Fte. Comisiones declarantes 11")]:
+        ws.append(list(f))
+    ws2 = wb.create_sheet("Hoja2")
+    ws2.append(["Clase", "Tipo", "Ultimo Consecutivo"])
+    ws2.append(["Factura de venta", 12, 198])
+    ruta = tmp_path / "cat.xlsx"
+    wb.save(ruta)
+    siigo.aplicar_catalogo(conn, siigo.cargar_catalogo(ruta))
+    conn.execute("UPDATE empresa_info SET cuenta_clientes='13050501', cuenta_iva_generado='24080504'")
+    conn.execute(
+        "INSERT INTO excel_row(load_id,row_index,cufe_cude,tipo_doc,data_json,periodo) VALUES (1,1,?,?,?,'2026-09')",
+        ("v" * 96, "Factura electrónica",
+         '{"Grupo":"Emitido","NIT Emisor":"900181831","NIT Receptor":"860037013","Nombre Receptor":"CLIENTE",'
+         '"Prefijo":"FELE","Folio":"426","Fecha Emisión":"2026-09-02","Total":"772310","IVA":"123310"}'))
+    conn.commit()
+
+
+def test_la_venta_lleva_lo_que_le_retiene_el_cliente_y_la_cartera_por_el_neto(conn, tmp_path):
+    """Los números son los de una venta real de su archivo de septiembre."""
+    _catalogo_de_ventas(conn, tmp_path)
+    causacion.guardar(conn, {"tercero_nit": "860037013", "cuenta_puc": "41503001", "naturaleza": "venta"})
+    conn.execute("UPDATE regla_causacion SET retenciones_cliente = '05,07,11', iva_codigo = '02'")
+    conn.commit()
+    asiento.generar(conn, "2026-09")
+    v = next(a for a in asiento.listar(conn, "2026-09") if a["cufe"] == "v" * 96)
+    assert v["estado"] == "completo"
+    por_cuenta = {ln["cuenta_puc"]: ln for ln in v["lineas"]}
+    assert Decimal(por_cuenta["13551507"]["debito"]) == Decimal("71390.00")
+    assert Decimal(por_cuenta["13551703"]["debito"]) == Decimal("18496.50")
+    assert Decimal(por_cuenta["13551801"]["debito"]) == Decimal("1298.00"), "ReteICA en por mil"
+    assert Decimal(por_cuenta["13050501"]["debito"]) == Decimal("681125.50")
+    assert sum(Decimal(ln["debito"]) for ln in v["lineas"]) == sum(Decimal(ln["credito"]) for ln in v["lineas"])
+
+    asiento.aprobar(conn, v["id"], cuenta_puc="41503001")
+    filas = [f for f in _filas(siigo.export_siigo(conn, "2026-09", tmp_path)["path"])[1:] if f[0] == 12]
+    reteiva = next(f for f in filas if f[5] == 13551703)
+    assert reteiva[16] == "07" and reteiva[24] == 123310, "código y base (el IVA) en la línea"
+
+
+def test_sin_saber_que_le_retiene_la_venta_queda_por_revisar(conn, tmp_path):
+    _catalogo_de_ventas(conn, tmp_path)
+    causacion.guardar(conn, {"tercero_nit": "860037013", "cuenta_puc": "41503001", "naturaleza": "venta"})
+    asiento.generar(conn, "2026-09")
+    v = next(a for a in asiento.listar(conn, "2026-09") if a["cufe"] == "v" * 96)
+    assert v["estado"] == "revisar"
+    assert any("qué le retiene" in x for x in v["avisos"])
+
+    asiento.aprobar(conn, v["id"], cuenta_puc="41503001", retenciones_cliente="ninguna")
+    assert causacion.listar(conn)[0]["retenciones_cliente"] == "ninguna"
+    asiento.generar(conn, "2026-09")
+    v = asiento.listar_uno(conn, v["id"])
+    assert not any(ln["rol"] == "retencion" for ln in v["lineas"])
+
+
+def test_sembrar_aprende_lo_que_retiene_cada_cliente(conn, tmp_path):
+    _catalogo_de_ventas(conn, tmp_path)
+    ruta = tmp_path / "h.xlsx"
+    venta = lambda cons, f: (12, cons, f, 860037013, [  # noqa: E731
+        (41503001, 0, 649000, None), (24080504, 0, 123310, "02"),
+        (13551507, 71390, 0, "11"), (13551703, 18496.5, 0, "07"), (13551801, 1298, 0, "05"),
+        (13050501, 681125.5, 0, None)])
+    _historicos(ruta, [venta(1, "2026-08-02"), venta(2, "2026-09-02")])
+    siigo.sembrar_reglas(conn, ruta)
+    regla = causacion.listar(conn)[0]
+    assert regla["retenciones_cliente"] == "05,07,11" and regla["iva_codigo"] == "02"
+
+
+def test_un_cliente_que_retiene_el_ica_a_otra_tarifa_la_conserva(conn, tmp_path):
+    """La venta FELE-426 de su septiembre: ReteICA 1.168,20 sobre 649.000 = 1,8
+    por mil, con el mismo código 05 que en otras ventas es 2 por mil."""
+    _catalogo_de_ventas(conn, tmp_path)
+    ruta = tmp_path / "h.xlsx"
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Hoja historicos"
+    ws.append(siigo.COLUMNAS)
+    for cuenta, deb, cre, cod, base in [
+            (41503001, 0, 649000, None, 0), (24080504, 0, 123310, "02", 649000),
+            (13551507, 71390, 0, "11", 649000), (13551703, 18496.5, 0, "07", 123310),
+            (13551801, 1168.2, 0, "05", 649000), (13050501, 681255.3, 0, None, 0)]:
+        fila = [None] * len(siigo.COLUMNAS)
+        fila[0], fila[1], fila[2], fila[5], fila[6] = 12, 426, "2026-09-02", cuenta, 860037013
+        fila[16], fila[21], fila[22], fila[24] = cod, deb, cre, base
+        ws.append(fila)
+    wb.save(ruta)
+    siigo.sembrar_reglas(conn, ruta)
+    assert causacion.listar(conn)[0]["retenciones_cliente"] == "05:1.8,07,11"
+
+    asiento.generar(conn, "2026-09")
+    v = next(a for a in asiento.listar(conn, "2026-09") if a["cufe"] == "v" * 96)
+    por_cuenta = {ln["cuenta_puc"]: Decimal(ln["debito"]) for ln in v["lineas"]}
+    assert por_cuenta["13551801"] == Decimal("1168.20")
+    assert por_cuenta["13050501"] == Decimal("681255.30"), "la cartera, al centavo, como en su archivo"
+
+
+@pytest.mark.parametrize("ica, base, esperado", [
+    (6490, 649000, "05:10,07,11"),     # 10 por mil: sin notación científica
+    (0, 649000, "07,11"),              # una línea en cero no es retención
+])
+def test_la_tarifa_propia_del_cliente_se_escribe_legible(conn, tmp_path, ica, base, esperado):
+    _catalogo_de_ventas(conn, tmp_path)
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Hoja historicos"
+    ws.append(siigo.COLUMNAS)
+    for cuenta, deb, cre, cod, b in [
+            (41503001, 0, 649000, None, 0), (13551507, 71390, 0, "11", 649000),
+            (13551703, 18496.5, 0, "07", 123310), (13551801, ica, 0, "05", base)]:
+        fila = [None] * len(siigo.COLUMNAS)
+        fila[0], fila[1], fila[2], fila[5], fila[6] = 12, 1, "2026-09-02", cuenta, 860037013
+        fila[16], fila[21], fila[22], fila[24] = cod, deb, cre, b
+        ws.append(fila)
+    ruta = tmp_path / "h.xlsx"
+    wb.save(ruta)
+    siigo.sembrar_reglas(conn, ruta)
+    assert causacion.listar(conn)[0]["retenciones_cliente"] == esperado

@@ -1371,6 +1371,7 @@ def _h_asiento_aprobar(params: dict) -> dict:
             sin_retencion=bool(params.get("sin_retencion")),
             aprender_regla=bool(params.get("aprender_regla", True)),
             iva_codigo=(params.get("iva_codigo") or "").strip() or None,
+            retenciones_cliente=(params.get("retenciones_cliente") or "").strip() or None,
         )
     finally:
         conn.close()
@@ -1423,6 +1424,7 @@ def _h_siigo_config(params: dict) -> dict:
             siigo_module.guardar_config(conn, dict(params["valores"]))
         return {"config": siigo_module.config(conn),
                 "ivas": siigo_module.ivas_disponibles(conn),
+                "retenciones_venta": siigo_module.retenciones_de_venta(conn),
                 "catalogo_cargado": bool(siigo_module.catalogo(conn))}
     finally:
         conn.close()
