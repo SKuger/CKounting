@@ -13,7 +13,10 @@
 // marcar una casilla, es enseñarle a Contab lo que él acaba de decidir.
 import { ArrowLeft, RefreshCw, Check, Undo2, ChevronRight, Download, FileSpreadsheet, Settings2, UploadCloud } from 'lucide-vue-next'
 
-type Linea = { id: number; cuenta_puc: string | null; descripcion: string; debito: string; credito: string }
+type Linea = {
+  id: number; cuenta_puc: string | null; descripcion: string; debito: string; credito: string
+  rol: string | null; codigo_siigo: string | null
+}
 // `naturaleza` (D-127): compra, venta o doc_soporte. Decide qué líneas lleva,
 // quién es el tercero y qué se le pregunta al contador al aprobar.
 type Naturaleza = 'compra' | 'venta' | 'doc_soporte'
@@ -52,7 +55,7 @@ const conceptos = ref<Concepto[]>([])
 // es '' (no ha dicho), 'ninguna' (dijo que no se retiene) o el id del concepto.
 // Sin esto la regla aprendida no contaba como decisión, y aprobar la primera
 // factura de un proveedor no liberaba las siguientes.
-const correccion = reactive({ cuenta_puc: '', patron: '', retencion: '' as string, aprender_regla: true })
+const correccion = reactive({ cuenta_puc: '', patron: '', retencion: '' as string, aprender_regla: true, iva_codigo: '' })
 
 const exportOpen = ref(false)
 const exportando = ref(false)
@@ -73,12 +76,21 @@ const CLASES = [
 ]
 const IVAS = ['19', '5', '0']
 const siigo = reactive<Record<string, string>>({})
+// Los códigos de IVA del catálogo de Siigo (bienes/servicios, 19/5). Qué IVA
+// factura un proveedor es lo único del IVA que el documento no dice; se elige
+// al aprobar y la regla lo recuerda.
+type Iva = { codigo: string; nombre: string; tarifa: string | null }
+const ivas = ref<Iva[]>([])
+const catalogoCargado = ref(false)
 const tiposUsados = computed(() => [...new Set(CLASES.map((c) => siigo[`tipo:${c.clave}`]).filter(Boolean))])
 
 async function cargarSiigo() {
-  const r = await rpc<{ config: Record<string, string> }>('siigo_config', { db_path: dbPath.value })
+  const r = await rpc<{ config: Record<string, string>; ivas: Iva[]; catalogo_cargado: boolean }>(
+    'siigo_config', { db_path: dbPath.value })
   for (const k of Object.keys(siigo)) delete siigo[k]
   Object.assign(siigo, r.config)
+  ivas.value = r.ivas || []
+  catalogoCargado.value = !!r.catalogo_cargado
 }
 
 async function guardarSiigo() {
@@ -241,6 +253,7 @@ function abrir(a: Asiento) {
   correccion.patron = ''
   correccion.retencion = ''
   correccion.aprender_regla = true
+  correccion.iva_codigo = a.lineas.find((l) => l.rol === 'iva')?.codigo_siigo || ''
 }
 
 async function aprobar(a: Asiento) {
@@ -253,6 +266,7 @@ async function aprobar(a: Asiento) {
       concepto_retencion_id: correccion.retencion && correccion.retencion !== 'ninguna' ? correccion.retencion : '',
       sin_retencion: correccion.retencion === 'ninguna',
       aprender_regla: correccion.aprender_regla,
+      iva_codigo: correccion.iva_codigo,
       ...cuentas,
     })
     abierto.value = null
@@ -422,6 +436,10 @@ onMounted(cargar)
           <Input v-model="siigo[`ultimo:${t}`]" class="h-8 w-28 font-mono" placeholder="0" />
         </div>
       </div>
+      <p v-if="catalogoCargado" class="mt-3 text-xs text-status-success">
+        Catálogo de impuestos cargado: la cuenta del IVA y de cada retención sale de él según el comprobante
+        (venta, compra o devolución). Las cuentas de arriba quedan de respaldo.
+      </p>
       <div class="mt-3 grid gap-3 sm:grid-cols-4">
         <div v-for="t in IVAS" :key="t" class="grid gap-1">
           <Label class="text-xs">Código de IVA {{ t }}%</Label>
@@ -521,6 +539,13 @@ onMounted(cargar)
                     <option v-for="c in conceptos" :key="c.id" :value="String(c.id)">
                       {{ c.concepto }}<template v-if="c.aplica_a && c.aplica_a !== 'ambos'"> · {{ c.aplica_a === 'declarantes' ? 'declarantes' : 'no declarantes' }}</template>
                     </option>
+                  </select>
+                </div>
+                <div v-if="ivas.length && a.lineas.some((l) => l.rol === 'iva')" class="grid gap-1">
+                  <Label class="text-xs">IVA (código de Siigo)</Label>
+                  <select v-model="correccion.iva_codigo" class="h-8 rounded-md border border-border bg-background px-2 text-xs">
+                    <option value="">— el de la tarifa —</option>
+                    <option v-for="i in ivas" :key="i.codigo" :value="i.codigo">{{ i.codigo }} · {{ i.nombre }}</option>
                   </select>
                 </div>
                 <div class="grid gap-1">
