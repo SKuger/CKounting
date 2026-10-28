@@ -145,3 +145,63 @@ def test_la_nota_credito_va_en_positivo_con_las_columnas_al_reves(conn, tmp_path
     assert cartera[19] == "NCRS-136"
     assert cartera[2].date() == date(2026, 9, 14)
     assert cartera[15].date() == date(2026, 10, 14), "vence a los 30 días"
+
+
+# ───────────────── el catálogo de Siigo, desde el Excel de cada empresa ─────────
+
+def _excel_catalogo(ruta: Path):
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Impuestos"
+    ws.append(["Código", "Nombre", "Tipo", "Tarifa (%)", "Cuenta"])
+    ws.append([2, "IVA 19%", "IVA", 19, 24081501])
+    ws.append(["01", "IVA 5%", "IVA", "5", "24081001"])
+    ws.append([14, "Retención compras 3,5%", "Retefuente", 3.5, 23653003])
+    ws.append(["09", "Retención compras 2,5%", "Retefuente", "2,5", ""])
+    ws.append(["07", "ReteIVA", "ReteIVA", 15, 13551703])
+    ws.append(["100", "Autorretención", "Autorretención", 0.8, 23657501])
+    ws2 = wb.create_sheet("Comprobantes")
+    ws2.append(["Clase", "Tipo en Siigo", "Último consecutivo"])
+    ws2.append(["Factura de compra", 11, 874])
+    ws2.append(["Nota crédito de compra", 15, 22])
+    ws2.append(["Factura de venta", 12, 439])
+    ws2.append(["Nota crédito de venta", 17, 140])
+    ws2.append(["Documento soporte", 19, 262])
+    ws2.append(["Depreciación", 2, 9])
+    wb.save(ruta)
+
+
+def test_el_catalogo_se_lee_y_se_cruza_con_los_conceptos(conn, tmp_path):
+    ruta = tmp_path / "Siigo REAL.xlsx"
+    _excel_catalogo(ruta)
+    cargado = siigo.cargar_catalogo(ruta)
+    assert [i["codigo"] for i in cargado.impuestos] == ["02", "01", "14", "09", "07", "100"]
+    assert cargado.impuestos[0]["tarifa"] == "19" and cargado.impuestos[3]["tarifa"] == "2.5"
+    assert any("Depreciacion".lower() in a.lower() or "depreciación" in a.lower() for a in cargado.avisos)
+
+    vista = siigo.aplicar_catalogo(conn, cargado, dry_run=True)
+    assert vista["config"]["iva:19"] == "02" and vista["config"]["iva:5"] == "01"
+    assert vista["config"]["tipo:compra"] == "11" and vista["config"]["ultimo:11"] == "874"
+    assert vista["config"]["tipo:doc_soporte"] == "19"
+    # el concepto de la prueba es «Compras.» al 2,5 % con cuenta 23654001: cruza por tarifa
+    assert [c["codigo"] for c in vista["conceptos_cruzados"]] == ["09"]
+    assert {x["codigo"] for x in vista["sin_cruce"]} == {"14", "07", "100"}
+    assert siigo.config(conn) == {}, "el ensayo no escribe"
+
+    siigo.aplicar_catalogo(conn, cargado)
+    assert siigo.config(conn)["tipo:nc_venta"] == "17"
+    assert tarifas.listar_conceptos(conn)[0]["codigo_siigo"] == "09"
+
+
+def test_con_el_catalogo_cargado_el_archivo_sale_completo(conn, tmp_path):
+    ruta = tmp_path / "Siigo REAL.xlsx"
+    _excel_catalogo(ruta)
+    siigo.aplicar_catalogo(conn, siigo.cargar_catalogo(ruta))
+    _aprobar_la_compra(conn)
+    r = siigo.export_siigo(conn, "2026-09", tmp_path)
+    assert r["faltan"] == []
+    filas = _filas(r["path"])[1:]
+    assert {f[1] for f in filas} == {875}, "sigue al 874 del catálogo"
+    ret = next(f for f in filas if f[5] == 23654001)
+    assert ret[16] == "09"

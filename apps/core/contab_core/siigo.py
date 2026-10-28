@@ -20,6 +20,7 @@ y no cambia: exportar dos veces el mismo mes produce el mismo archivo.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
@@ -249,3 +250,181 @@ def _cuenta(valor: str | None) -> Any:
 def _nit(valor: str | None) -> Any:
     v = (valor or "").strip().split("-")[0]
     return int(v) if v.isdigit() else v
+
+
+# ─────────────────────────── el catálogo, desde su Excel ──────────────────────
+# El contador manda UNA empresa y carga las otras él mismo. El archivo es el que
+# se le pidió el 2026-10-28: hoja «Impuestos» (Código, Nombre, Tipo, Tarifa,
+# Cuenta) y hoja «Comprobantes» (Clase, Tipo en Siigo, Último consecutivo). Se
+# lee por nombre de columna, sin importar el orden ni las mayúsculas, para que
+# un export de Siigo con cabeceras parecidas también entre.
+
+
+@dataclass
+class CatalogoCargado:
+    source_name: str
+    impuestos: list[dict[str, Any]] = field(default_factory=list)
+    comprobantes: list[dict[str, Any]] = field(default_factory=list)
+    avisos: list[str] = field(default_factory=list)
+
+
+_TIPOS_IMPUESTO = {
+    "iva": "iva", "retefuente": "retefuente", "retencion": "retefuente",
+    "retención": "retefuente", "reteiva": "reteiva", "reteica": "reteica",
+    "autorretencion": "autorretencion", "autorretención": "autorretencion",
+}
+_CLASES_POR_TEXTO = (
+    ("doc_soporte", ("soporte",)),
+    ("nc_compra", ("nota", "compra")),
+    ("nc_venta", ("nota", "venta")),
+    ("compra", ("compra",)),
+    ("venta", ("venta",)),
+)
+
+
+def _plano(v: Any) -> str:
+    import unicodedata
+    t = unicodedata.normalize("NFKD", str(v or ""))
+    return "".join(c for c in t if not unicodedata.combining(c)).strip().lower()
+
+
+def _hoja(wb, *nombres: str):
+    for ws in wb.worksheets:
+        if any(n in _plano(ws.title) for n in nombres):
+            return ws
+    return None
+
+
+def _filas_con_cabecera(ws) -> list[dict[str, Any]]:
+    filas = [list(r) for r in ws.iter_rows(values_only=True)]
+    i = next((k for k, r in enumerate(filas)
+              if sum(1 for v in r if isinstance(v, str) and v.strip()) >= 2), None)
+    if i is None:
+        return []
+    cab = [_plano(v) for v in filas[i]]
+    out = []
+    for r in filas[i + 1:]:
+        if not any(v is not None and str(v).strip() for v in r):
+            continue
+        out.append({cab[c]: r[c] for c in range(min(len(cab), len(r))) if cab[c]})
+    return out
+
+
+def _col(fila: dict[str, Any], *claves: str) -> Any:
+    for k, v in fila.items():
+        if any(c in k for c in claves):
+            return v
+    return None
+
+
+def _codigo(v: Any) -> str:
+    """'2' y 2.0 se guardan como '02': Siigo los imprime con dos dígitos."""
+    t = str(v).strip() if v is not None else ""
+    if t.endswith(".0"):
+        t = t[:-2]
+    return t.zfill(2) if t.isdigit() and len(t) < 2 else t
+
+
+def _tarifa(v: Any) -> str | None:
+    if v in (None, ""):
+        return None
+    try:
+        d = Decimal(str(v).replace("%", "").replace(",", ".").strip())
+    except Exception:
+        return None
+    if d < 1 and d > 0:
+        d = d * 100     # celda con formato de porcentaje: 0.19 es 19 %
+    return str(d.normalize())
+
+
+def cargar_catalogo(ruta: str | Path) -> CatalogoCargado:
+    from openpyxl import load_workbook
+    ruta = Path(ruta)
+    wb = load_workbook(ruta, data_only=True, read_only=True)
+    out = CatalogoCargado(source_name=ruta.name)
+
+    ws = _hoja(wb, "impuesto")
+    if ws is None:
+        out.avisos.append("No hay hoja «Impuestos»: no se leen códigos de impuesto.")
+    else:
+        for f in _filas_con_cabecera(ws):
+            codigo = _codigo(_col(f, "codigo", "código"))
+            if not codigo:
+                continue
+            tipo = _TIPOS_IMPUESTO.get(_plano(_col(f, "tipo")).replace(" ", ""), "")
+            out.impuestos.append({
+                "codigo": codigo, "nombre": str(_col(f, "nombre", "descripcion") or "").strip(),
+                "tipo": tipo, "tarifa": _tarifa(_col(f, "tarifa")),
+                "cuenta": str(_col(f, "cuenta") or "").strip().replace(".0", ""),
+            })
+            if not tipo:
+                out.avisos.append(f"El código {codigo} no dice de qué tipo es (IVA, Retefuente…); no se puede cruzar.")
+
+    ws = _hoja(wb, "comprobante")
+    if ws is None:
+        out.avisos.append("No hay hoja «Comprobantes»: no se leen tipos ni consecutivos.")
+    else:
+        for f in _filas_con_cabecera(ws):
+            texto = _plano(_col(f, "clase", "nombre", "descripcion"))
+            clase = next((c for c, palabras in _CLASES_POR_TEXTO
+                          if all(p in texto for p in palabras)), None)
+            tipo = _col(f, "tipo")
+            if clase is None or tipo in (None, ""):
+                if texto:
+                    out.avisos.append(f"No sé a qué clase corresponde «{texto}»; se salta.")
+                continue
+            ultimo = _col(f, "ultimo", "último", "consecutivo")
+            out.comprobantes.append({
+                "clase": clase, "tipo": str(tipo).replace(".0", "").strip(),
+                "ultimo": str(ultimo).replace(".0", "").strip() if ultimo not in (None, "") else "",
+            })
+    wb.close()
+    return out
+
+
+def aplicar_catalogo(conn, cargado: CatalogoCargado, *, dry_run: bool = False) -> dict[str, Any]:
+    """Cruza el catálogo con lo que la empresa ya tiene y, si no es ensayo, escribe.
+
+    Un impuesto se cruza con un concepto de retención **por cuenta** primero y,
+    si no, por tipo y tarifa. Lo que no cruza se devuelve con nombre: un código
+    sin concepto no es un error, es un concepto que el contador no cargó.
+    """
+    conceptos = [dict(r) for r in conn.execute(
+        "SELECT id, concepto, sobre, tarifa, cuenta_puc, codigo_siigo FROM retencion_concepto"
+        " WHERE archivado = 0")]
+    cruzados, sin_cruce, ivas = [], [], {}
+    for imp in cargado.impuestos:
+        if imp["tipo"] == "iva":
+            if imp["tarifa"]:
+                ivas[f"iva:{imp['tarifa']}"] = imp["codigo"]
+            continue
+        if imp["tipo"] not in ("retefuente", "reteiva"):
+            sin_cruce.append({**imp, "motivo": "Contab no aplica este tipo de impuesto"})
+            continue
+        sobre = "iva" if imp["tipo"] == "reteiva" else "base"
+        c = next((c for c in conceptos if imp["cuenta"] and (c["cuenta_puc"] or "") == imp["cuenta"]), None)
+        if c is None and imp["tarifa"]:
+            c = next((c for c in conceptos if c["sobre"] == sobre and c["tarifa"]
+                      and Decimal(str(c["tarifa"])) == Decimal(imp["tarifa"])), None)
+        if c is None:
+            sin_cruce.append({**imp, "motivo": "ningún concepto de retención con esa cuenta ni esa tarifa"})
+            continue
+        cruzados.append({**imp, "concepto_id": c["id"], "concepto": c["concepto"]})
+
+    config_nueva: dict[str, str] = dict(ivas)
+    for cp in cargado.comprobantes:
+        config_nueva[f"tipo:{cp['clase']}"] = cp["tipo"]
+        if cp["ultimo"]:
+            config_nueva[f"ultimo:{cp['tipo']}"] = cp["ultimo"]
+
+    if not dry_run:
+        for x in cruzados:
+            conn.execute("UPDATE retencion_concepto SET codigo_siigo = ?, updated_at = datetime('now')"
+                         " WHERE id = ?", (x["codigo"], x["concepto_id"]))
+        guardar_config(conn, config_nueva)
+        conn.commit()
+    return {
+        "source_name": cargado.source_name,
+        "conceptos_cruzados": cruzados, "sin_cruce": sin_cruce,
+        "config": config_nueva, "avisos": cargado.avisos, "dry_run": dry_run,
+    }
