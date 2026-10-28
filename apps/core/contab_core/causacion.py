@@ -58,6 +58,8 @@ class Propuesta:
     concepto_nuevo: bool = False
     # El contador dijo que a esto NO se le retiene. Distinto de «no lo ha dicho».
     sin_retencion: bool = False
+    # Qué IVA factura (código del catálogo de Siigo: bienes o servicios, 19 o 5).
+    iva_codigo: str | None = None
 
     def como_dict(self) -> dict[str, Any]:
         return {
@@ -65,7 +67,7 @@ class Propuesta:
             "concepto_retencion_id": self.concepto_retencion_id,
             "regla_id": self.regla_id, "por_que": self.por_que, "seguro": self.seguro,
             "concepto_nuevo": self.concepto_nuevo,
-            "sin_retencion": self.sin_retencion,
+            "sin_retencion": self.sin_retencion, "iva_codigo": self.iva_codigo,
         }
 
 
@@ -150,6 +152,7 @@ def proponer(conn, documento: dict[str, Any]) -> Propuesta:
         cuenta_puc=mejor["cuenta_puc"],
         concepto_retencion_id=mejor["concepto_retencion_id"],
         sin_retencion=bool(mejor["sin_retencion"]),
+        iva_codigo=(mejor["iva_codigo"] or None) if "iva_codigo" in mejor else None,
         regla_id=mejor["id"], por_que=por_que, seguro=True,
     )
 
@@ -164,6 +167,7 @@ def aprender(
     sin_retencion: bool = False,
     vigencia_desde: str | None = None,
     naturaleza: str = "compra",
+    iva_codigo: str | None = None,
 ) -> dict[str, Any]:
     """Guarda lo que el contador decidió, para no volvérselo a preguntar.
 
@@ -185,17 +189,19 @@ def aprender(
     if ya:
         conn.execute(
             "UPDATE regla_causacion SET cuenta_puc = ?, concepto_retencion_id = ?,"
-            " sin_retencion = ?, archivada = 0, updated_at = datetime('now')"
-            " WHERE id = ?",
-            (cuenta_puc, concepto_retencion_id, 1 if sin_retencion else 0, ya[0]))
+            " sin_retencion = ?, iva_codigo = COALESCE(?, iva_codigo), archivada = 0,"
+            " updated_at = datetime('now') WHERE id = ?",
+            (cuenta_puc, concepto_retencion_id, 1 if sin_retencion else 0,
+             (iva_codigo or "").strip() or None, ya[0]))
         rid = ya[0]
     else:
         cur = conn.execute(
             "INSERT INTO regla_causacion(tercero_nit, patron, cuenta_puc,"
-            " concepto_retencion_id, sin_retencion, vigencia_desde, origen, naturaleza)"
-            " VALUES (?,?,?,?,?,?,?,?)",
+            " concepto_retencion_id, sin_retencion, vigencia_desde, origen, naturaleza,"
+            " iva_codigo) VALUES (?,?,?,?,?,?,?,?,?)",
             (tercero_nit, patron, cuenta_puc, concepto_retencion_id,
-             1 if sin_retencion else 0, vigencia_desde, ORIGEN_APRENDIDA, naturaleza))
+             1 if sin_retencion else 0, vigencia_desde, ORIGEN_APRENDIDA, naturaleza,
+             (iva_codigo or "").strip() or None))
         rid = int(cur.lastrowid)
     conn.commit()
     return dict(conn.execute(

@@ -52,6 +52,7 @@ from . import causacion as causacion_module
 from . import documentos as documentos_module
 from . import perfil_fiscal as perfil_module
 from . import retenciones as retenciones_module
+from . import siigo as siigo_module
 from . import terceros as terceros_module
 
 ESTADO_COMPLETO = "completo"
@@ -75,6 +76,7 @@ class Linea:
     rol: str | None = None
     base: Decimal | None = None
     concepto_id: int | None = None
+    codigo_siigo: str | None = None
 
 
 @dataclass
@@ -117,6 +119,21 @@ def _d(v: Any) -> Decimal:
 
 def _pesos(v: Decimal) -> Decimal:
     return v.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+
+
+def _cuenta_del_catalogo(catalogo, codigo: str | None, contexto: str) -> str | None:
+    fila = catalogo.get(((codigo or "").strip(), contexto)) if codigo else None
+    return (fila or {}).get("cuenta") or None
+
+
+def _codigo_iva(conn, propuesta, iva: Decimal, base: Decimal) -> str | None:
+    """El código de IVA de esta línea: el de la regla, o el de la tarifa."""
+    if propuesta.iva_codigo:
+        return propuesta.iva_codigo
+    if not base:
+        return None
+    tarifa = (abs(iva) / abs(base) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    return (siigo_module.config(conn).get(f"iva:{tarifa}") or "").strip() or None
 
 
 def _cuentas_de(info: dict[str, Any]) -> dict[str, str]:
@@ -164,6 +181,8 @@ def generar(
 
     cuentas = _cuentas_de(dict(conn.execute("SELECT * FROM empresa_info").fetchone() or {}))
     perfil = perfil_module.perfil_vigente(conn, fecha=f"{periodo}-01")
+    catalogo = siigo_module.catalogo(conn)
+    codigos_concepto = _codigos_concepto(conn)
 
     if not cuentas["cuenta_proveedores"]:
         res.avisos.append(
@@ -200,7 +219,10 @@ def generar(
 
         lineas, avisos = _lineas_de(
             documento, propuesta, calculo, cuentas=cuentas,
-            responsable_iva=bool(perfil and perfil.get("responsable_iva")))
+            responsable_iva=bool(perfil and perfil.get("responsable_iva")),
+            catalogo=catalogo, codigo_iva=_codigo_iva(
+                conn, propuesta, _d(documento.get("total_impuestos")), _d(documento.get("subtotal"))),
+            codigos_concepto=codigos_concepto)
         avisos = [*avisos, *calculo.avisos]
         if documento.get("origen") == documentos_module.ORIGEN_EXCEL:
             avisos.append(
@@ -229,6 +251,11 @@ def generar(
     return res.como_dict()
 
 
+def _codigos_concepto(conn) -> dict[int, str]:
+    return {r["id"]: (r["codigo_siigo"] or "").strip()
+            for r in conn.execute("SELECT id, codigo_siigo FROM retencion_concepto")}
+
+
 def _lineas_de(
     documento: dict[str, Any],
     propuesta: causacion_module.Propuesta,
@@ -236,9 +263,18 @@ def _lineas_de(
     *,
     cuentas: dict[str, str],
     responsable_iva: bool,
+    catalogo: dict | None = None,
+    codigo_iva: str | None = None,
+    codigos_concepto: dict[int, str] | None = None,
 ) -> tuple[list[Linea], list[str]]:
+    """Las líneas del asiento. Con el catálogo de Siigo cargado, la cuenta del
+    IVA y de cada retención sale de él según el contexto —venta, compra o su
+    devolución—; sin catálogo, de las cuentas de la empresa y del concepto."""
     avisos: list[str] = []
+    catalogo = catalogo or {}
+    codigos_concepto = codigos_concepto or {}
     naturaleza = documento.get("naturaleza") or documentos_module.NATURALEZA_COMPRA
+    contexto = siigo_module.contexto_de(naturaleza, documento.get("tipo"))
     subtotal = _pesos(_d(documento.get("subtotal")))
     iva = _pesos(_d(documento.get("total_impuestos")))
     total = _pesos(_d(documento.get("total")))
@@ -249,9 +285,10 @@ def _lineas_de(
         lineas = [Linea(cuentas["cuenta_clientes"] or None, "Clientes", debito=total, rol=ROL_CARTERA)]
         lineas.append(Linea(propuesta.cuenta_puc, nombre or "Venta", credito=subtotal, rol=ROL_INGRESO))
         if iva != CERO and responsable_iva:
-            if cuentas["cuenta_iva_generado"]:
-                lineas.append(Linea(cuentas["cuenta_iva_generado"], "IVA generado",
-                                    credito=iva, rol=ROL_IVA, base=subtotal))
+            cuenta_iva = _cuenta_del_catalogo(catalogo, codigo_iva, contexto) or cuentas["cuenta_iva_generado"]
+            if cuenta_iva:
+                lineas.append(Linea(cuenta_iva, "IVA generado", credito=iva, rol=ROL_IVA,
+                                    base=subtotal, codigo_siigo=codigo_iva))
             else:
                 avisos.append(
                     "Falta la cuenta del IVA generado: el IVA de esta venta no "
@@ -268,9 +305,10 @@ def _lineas_de(
         lineas = [Linea(propuesta.cuenta_puc, nombre or "Compra", debito=subtotal, rol=ROL_GASTO)]
 
         if iva > CERO and responsable_iva:
-            if cuentas["cuenta_iva_descontable"]:
-                lineas.append(Linea(cuentas["cuenta_iva_descontable"], "IVA descontable",
-                                    debito=iva, rol=ROL_IVA, base=subtotal))
+            cuenta_iva = _cuenta_del_catalogo(catalogo, codigo_iva, contexto) or cuentas["cuenta_iva_descontable"]
+            if cuenta_iva:
+                lineas.append(Linea(cuenta_iva, "IVA descontable", debito=iva, rol=ROL_IVA,
+                                    base=subtotal, codigo_siigo=codigo_iva))
             else:
                 avisos.append(
                     "Falta la cuenta del IVA descontable: el IVA de esta factura no "
@@ -278,8 +316,11 @@ def _lineas_de(
 
         retenido = CERO
         for r in calculo.retenciones:
-            lineas.append(Linea(r.cuenta_puc, f"{r.concepto} ({r.tarifa}%)", credito=r.valor,
-                                rol=ROL_RETENCION, base=r.base, concepto_id=r.concepto_id))
+            codigo = codigos_concepto.get(r.concepto_id or 0) or None
+            cuenta = _cuenta_del_catalogo(catalogo, codigo, contexto) or r.cuenta_puc
+            lineas.append(Linea(cuenta, f"{r.concepto} ({r.tarifa}%)", credito=r.valor,
+                                rol=ROL_RETENCION, base=r.base, concepto_id=r.concepto_id,
+                                codigo_siigo=codigo))
             retenido += r.valor
 
         # El crédito al proveedor es el resto: así cuadra por construcción.
@@ -317,9 +358,9 @@ def _escribir_lineas(conn, asiento_id: int, lineas: list[Linea]) -> None:
     for orden, ln in enumerate(lineas):
         conn.execute(
             "INSERT INTO asiento_linea(asiento_id, orden, cuenta_puc, descripcion,"
-            " debito, credito, rol, base, concepto_id) VALUES (?,?,?,?,?,?,?,?,?)",
+            " debito, credito, rol, base, concepto_id, codigo_siigo) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (asiento_id, orden, ln.cuenta_puc, ln.descripcion, str(ln.debito), str(ln.credito),
-             ln.rol, str(ln.base) if ln.base is not None else None, ln.concepto_id))
+             ln.rol, str(ln.base) if ln.base is not None else None, ln.concepto_id, ln.codigo_siigo))
 
 
 # ─────────────────────────────── lectura ───────────────────────────────────────
@@ -381,6 +422,7 @@ def aprobar(
     cuenta_iva_generado: str | None = None,
     sin_retencion: bool = False,
     aprender_regla: bool = True,
+    iva_codigo: str | None = None,
 ) -> dict[str, Any]:
     """Da por bueno un asiento, con las correcciones que él haya hecho.
 
@@ -416,7 +458,8 @@ def aprobar(
             # «A este proveedor no se le retiene», dicho por él. Va a la regla
             # para que las siguientes facturas no vuelvan a preguntarlo.
             sin_retencion=sin_retencion and not es_venta,
-            naturaleza=a.get("naturaleza") or documentos_module.NATURALEZA_COMPRA)
+            naturaleza=a.get("naturaleza") or documentos_module.NATURALEZA_COMPRA,
+            iva_codigo=iva_codigo)
 
     # Se rehace el asiento con lo corregido y se marca aprobado.
     # El documento puede venir del XML o del Excel: `aprobar` tiene que mirar en
@@ -437,12 +480,18 @@ def aprobar(
             propuesta.sin_retencion = False
         elif sin_retencion:
             propuesta.sin_retencion = True
+        if (iva_codigo or "").strip():
+            propuesta.iva_codigo = iva_codigo.strip()
         calculo = _calcular_retenciones(
             conn, perfil=perfil, documento=documento, propuesta=propuesta,
             tercero_decidido=True)   # la está aprobando una persona
         lineas, avisos = _lineas_de(
             documento, propuesta, calculo, cuentas=_cuentas_de(info),
-            responsable_iva=bool(perfil and perfil.get("responsable_iva")))
+            responsable_iva=bool(perfil and perfil.get("responsable_iva")),
+            catalogo=siigo_module.catalogo(conn),
+            codigo_iva=_codigo_iva(conn, propuesta, _d(documento.get("total_impuestos")),
+                                   _d(documento.get("subtotal"))),
+            codigos_concepto=_codigos_concepto(conn))
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("DELETE FROM asiento_linea WHERE asiento_id = ?", (a["id"],))
         _escribir_lineas(conn, a["id"], lineas)

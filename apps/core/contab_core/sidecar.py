@@ -1370,6 +1370,7 @@ def _h_asiento_aprobar(params: dict) -> dict:
             cuenta_iva_generado=(params.get("cuenta_iva_generado") or "").strip() or None,
             sin_retencion=bool(params.get("sin_retencion")),
             aprender_regla=bool(params.get("aprender_regla", True)),
+            iva_codigo=(params.get("iva_codigo") or "").strip() or None,
         )
     finally:
         conn.close()
@@ -1419,8 +1420,10 @@ def _h_siigo_config(params: dict) -> dict:
     conn = _con(params["db_path"])
     try:
         if params.get("valores"):
-            return {"config": siigo_module.guardar_config(conn, dict(params["valores"]))}
-        return {"config": siigo_module.config(conn)}
+            siigo_module.guardar_config(conn, dict(params["valores"]))
+        return {"config": siigo_module.config(conn),
+                "ivas": siigo_module.ivas_disponibles(conn),
+                "catalogo_cargado": bool(siigo_module.catalogo(conn))}
     finally:
         conn.close()
 
