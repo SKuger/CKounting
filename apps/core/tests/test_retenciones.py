@@ -123,13 +123,28 @@ def test_un_concepto_sin_minimo_retiene_desde_el_primer_peso(conn):
     assert rf[0].valor == Decimal("5500"), "11% de 50.000"
 
 
-def test_el_concepto_que_no_aplica_a_ese_tercero_no_se_usa(conn):
-    """«Compras.» de declarantes, con un tercero que no lo es."""
+def test_el_concepto_que_eligio_se_aplica_aunque_el_tercero_no_sea_gran_contribuyente(conn):
+    """Hasta la 0.17 «declarante» se leía como «gran contribuyente» (O-13): a un
+    proveedor común, «Compras de declarantes» no se le aplicaba y el asiento
+    salía completo y sin retención. Lo vio el ensayo de la guía de octubre."""
     r = retenciones.calcular(conn, perfil=PERFIL, documento=doc(),
                              tercero={"responsabilidades": ["O-48"]},
                              concepto_id=ident("Compras.", conn))
-    assert [x for x in r.retenciones if x.tipo == "retefuente"] == []
-    assert any("no aplica" in a for a in r.avisos)
+    rf = [x for x in r.retenciones if x.tipo == "retefuente"]
+    assert [x.valor for x in rf] == [Decimal("25000")]
+    assert not r.revisar
+
+
+def test_un_concepto_de_no_declarantes_a_una_empresa_se_marca(conn):
+    """Una empresa siempre declara renta: «no declarantes» a una empresa es un
+    error casi seguro. Se calcula igual, pero no se aprueba en lote."""
+    conn.execute("UPDATE retencion_concepto SET aplica_a = 'no_declarantes' WHERE concepto = 'Compras.'")
+    r = retenciones.calcular(conn, perfil=PERFIL, documento=doc(emisor_nit="800100200"),
+                             concepto_id=ident("Compras.", conn))
+    assert r.revisar and any("no declarantes" in a for a in r.avisos)
+    persona = retenciones.calcular(conn, perfil=PERFIL, documento=doc(emisor_nit="1000000003"),
+                                   concepto_id=ident("Compras.", conn))
+    assert not any("no declarantes" in a for a in persona.avisos), "de una persona natural no se sabe"
 
 
 def test_una_empresa_que_no_es_agente_no_retiene(conn):
