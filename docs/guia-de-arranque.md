@@ -70,9 +70,16 @@ tres grupos: **por decidir**, **listos para aprobar** y **aprobados**.
    - Lo que esté en rojo o con aviso amarillo es para mirar antes de aprobar.
      Aprobar por error se deshace con la flecha.
 
-**9. Exportar.** *Exportar aprobados* deja un Excel —`asientos-AAAA-MM.xlsx`,
-una fila por línea de asiento— en la carpeta que elija. Ese archivo es el que
-se lleva a Siigo. Contab le dice si el archivo cuadra.
+**9. El archivo de Siigo.** *Archivo de Siigo* deja `siigo-AAAA-MM.xlsx` en la
+carpeta que elija, en el mismo formato de importación de comprobantes que usted
+sube hoy. La primera vez, pulse **«Siigo»** y escriba lo que Contab no puede
+adivinar: el **tipo de comprobante** de cada clase (compras, ventas, notas,
+documento soporte), el **último consecutivo** de cada tipo que ya está en
+Siigo, y el **código de IVA** de cada tarifa. El código de Siigo de cada
+concepto de retención se escribe en *Tarifas y UVT*, junto a su cuenta. Si al
+exportar falta alguno, Contab se lo dice y deja la celda vacía: no inventa
+códigos. Las cuentas van tal como las escribió (use las subcuentas de 8
+dígitos de su PUC). *Exportar aprobados* sigue ahí, como listado simple.
 
 ## Qué esperar
 

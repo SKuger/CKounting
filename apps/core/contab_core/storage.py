@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import log
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 # Cuánto espera una escritura a que se libere el lock antes de rendirse (ms).
 BUSY_TIMEOUT_MS = 5_000
@@ -248,6 +248,7 @@ CREATE TABLE IF NOT EXISTS retencion_concepto (
   tarifa_texto    TEXT,               -- lo que decía el Excel cuando no era un número
   base_minima_uvt TEXT,               -- NULL = no hay mínimo: se retiene desde el primer peso
   cuenta_puc      TEXT,
+  codigo_siigo    TEXT,               -- el código de este impuesto en el catálogo de Siigo (D-128)
   vigencia_desde  TEXT,               -- 'AAAA-MM-DD'
   observaciones   TEXT,
   fuente          TEXT NOT NULL DEFAULT 'manual',   -- 'excel' | 'manual'
@@ -288,6 +289,9 @@ CREATE TABLE IF NOT EXISTS asiento_propuesto (
   regla_id      INTEGER,
   -- compra | venta | doc_soporte (D-127): qué líneas lleva y quién es el tercero
   naturaleza    TEXT NOT NULL DEFAULT 'compra',
+  numero        TEXT,                -- el número del documento, como lo imprime (D-128)
+  tipo_doc      TEXT,                -- factura | nota_credito
+  siigo_consecutivo INTEGER,         -- el que se le dio al exportar; no cambia ni se repite
   aprobado      INTEGER NOT NULL DEFAULT 0,
   aprobado_at   TEXT,
   generado_at   TEXT NOT NULL DEFAULT (datetime('now')),
@@ -303,9 +307,13 @@ CREATE TABLE IF NOT EXISTS asiento_linea (
   descripcion   TEXT,
   -- TEXT y Decimal: el REAL de SQLite es float y ahí se pierde el céntimo (D-075)
   debito        TEXT NOT NULL DEFAULT '0',
-  credito       TEXT NOT NULL DEFAULT '0'
+  credito       TEXT NOT NULL DEFAULT '0',
+  rol           TEXT,                -- gasto | ingreso | iva | retencion | cartera (D-128)
+  base          TEXT,                -- la base de una línea de impuesto o retención
+  concepto_id   INTEGER              -- el concepto de retención, para su código de Siigo
 );
 CREATE INDEX IF NOT EXISTS ix_asiento_linea ON asiento_linea(asiento_id);
+CREATE TABLE IF NOT EXISTS siigo_config (clave TEXT PRIMARY KEY, valor TEXT);
 
 CREATE TABLE IF NOT EXISTS regla_causacion (
   id                    INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -614,6 +622,34 @@ CREATE INDEX IF NOT EXISTS idx_excel_row_fecha ON excel_row(fecha_emision);
 """
 
 
+def _m014_archivo_de_siigo(conn: sqlite3.Connection) -> None:
+    """Migración 14 — lo que el archivo de importación de Siigo exige (D-128).
+
+    El archivo (`docs/siigo-import-structure.md`) pide cosas que el asiento no
+    guardaba: **qué es cada línea** (gasto, IVA, retención, cartera) y su base,
+    para ponerle el código de impuesto y la base gravable; el **número del
+    documento**, que va en la línea de cartera y en la descripción; y el
+    **consecutivo de Siigo** que se le asignó al exportar, que no puede cambiar
+    ni repetirse entre dos exportaciones.
+
+    `siigo_config` es clave-valor a propósito: los tipos de comprobante, los
+    últimos consecutivos y los códigos de IVA son del catálogo de cada empresa en
+    Siigo y no se deducen; una tabla por cada uno sería esquema para tres filas.
+    """
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(retencion_concepto)").fetchall()}
+    if "codigo_siigo" not in cols:
+        conn.execute("ALTER TABLE retencion_concepto ADD COLUMN codigo_siigo TEXT")
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(asiento_propuesto)").fetchall()}
+    for col, ddl in (("numero", "TEXT"), ("tipo_doc", "TEXT"), ("siigo_consecutivo", "INTEGER")):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE asiento_propuesto ADD COLUMN {col} {ddl}")
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(asiento_linea)").fetchall()}
+    for col, ddl in (("rol", "TEXT"), ("base", "TEXT"), ("concepto_id", "INTEGER")):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE asiento_linea ADD COLUMN {col} {ddl}")
+    conn.execute("CREATE TABLE IF NOT EXISTS siigo_config (clave TEXT PRIMARY KEY, valor TEXT)")
+
+
 def _m013_ventas_y_documento_soporte(conn: sqlite3.Connection) -> None:
     """Migración 13 — lo que la empresa emite también se causa (D-127).
 
@@ -827,6 +863,7 @@ MIGRACIONES: list[tuple[int, object]] = [
     (11, _m011_asiento_y_cuentas_de_la_empresa),
     (12, _m012_regla_sin_retencion),
     (13, _m013_ventas_y_documento_soporte),
+    (14, _m014_archivo_de_siigo),
 ]
 
 

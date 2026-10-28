@@ -1318,3 +1318,28 @@ lleva su naturaleza porque el mismo NIT puede ser cliente y proveedor, y la
 cuenta de cada cosa es otra: sin eso, aprobar la venta pisaría la regla del
 gasto. La retención en el documento soporte no la mencionó —habló de cuentas—;
 se deja elegible, y si no la quiere es un clic en «ninguna».
+
+## D-128 — El puente a Siigo arranca por el archivo de importación, no por la API ✅
+
+**Decisión**: la salida hacia Siigo es, primero, el **archivo de importación de
+comprobantes contables** que el contador ya sube cada mes (27 columnas, una fila
+por línea; estructura verificada en `docs/siigo-import-structure.md`). Contab lo
+arma desde los asientos aprobados. D-099 (API) queda aplazada, no derogada: el
+archivo no se lee de vuelta, así que la reconciliación inversa sigue pendiente.
+
+Lo que el archivo exige y Contab no deduce vive por empresa en `siigo_config`:
+el tipo de comprobante de cada clase (compra, NC de compra, venta, NC de venta,
+documento soporte), el último consecutivo de cada tipo, el código de IVA por
+tarifa y los días de vencimiento. El código de Siigo de cada concepto de
+retención va junto a su cuenta, en las tarifas. Cada línea del asiento guarda su
+**rol** (gasto, ingreso, IVA, retención, cartera), su base y su concepto; cada
+asiento guarda el número del documento y el **consecutivo de Siigo** que se le
+dio al exportar, que no cambia ni se repite.
+
+**Por qué**: lo decidió el dueño el 2026-10-28 con el contador: «hasta donde
+hemos hecho vamos genial, pero falta el archivo que él sube a Siigo». Es lo que
+cierra el mes hoy, sin credencial ni sandbox. Lo que falta para que el archivo
+salga completo —códigos de impuesto, tipos de comprobante, las retenciones que
+le practican a la empresa en sus ventas, la nómina— se pide con nombre en vez
+de inventarse: una celda vacía que él rellena es mejor que un código supuesto
+que Siigo acepta y contabiliza mal.

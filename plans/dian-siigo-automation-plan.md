@@ -589,6 +589,13 @@ es volver a subir el archivo, no publicar una versión.)*
       compra sin IVA, y la venta —con su nota crédito— contra clientes, ingreso
       e IVA generado; el tercero es el receptor y las reglas llevan naturaleza.
       La nómina no. Lo pidió el contador con su primer mes real delante.
+- [x] **4.7** — ✅ 2026-10-28. **El archivo de Siigo** (D-128): los asientos
+      aprobados en el formato de importación de comprobantes que el contador ya
+      sube, con tipo, consecutivo, número de factura, vencimiento, código de
+      impuesto y base por línea. Lo que no se deduce se configura por empresa
+      y, si falta, el archivo lo dice en vez de inventarlo.
+      Pendiente: las retenciones que le practican a la empresa en sus ventas
+      (una regla por cliente), y la nómina (fuente: su Excel, no la DIAN).
 - [ ] ~~4.5 original~~ — The approval tray in the frontend: known documents approved in
       bulk, new ones decided one by one, and **every new decision writes or
       refines a rule**.

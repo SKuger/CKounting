@@ -59,12 +59,22 @@ ESTADO_REVISAR = "revisar"
 CERO = Decimal("0")
 
 
+# Qué es cada línea. El archivo de Siigo (D-128) necesita saberlo para poner el
+# código de impuesto y la base gravable en las de IVA y retención, y el número
+# de la factura con su vencimiento en la de cartera.
+ROL_GASTO, ROL_INGRESO, ROL_IVA, ROL_RETENCION, ROL_CARTERA = (
+    "gasto", "ingreso", "iva", "retencion", "cartera")
+
+
 @dataclass
 class Linea:
     cuenta_puc: str | None
     descripcion: str
     debito: Decimal = CERO
     credito: Decimal = CERO
+    rol: str | None = None
+    base: Decimal | None = None
+    concepto_id: int | None = None
 
 
 @dataclass
@@ -236,11 +246,12 @@ def _lineas_de(
 
     if naturaleza == documentos_module.NATURALEZA_VENTA:
         # El cliente debe el total; el ingreso y el IVA generado son el haber.
-        lineas = [Linea(cuentas["cuenta_clientes"] or None, "Clientes", debito=total)]
-        lineas.append(Linea(propuesta.cuenta_puc, nombre or "Venta", credito=subtotal))
+        lineas = [Linea(cuentas["cuenta_clientes"] or None, "Clientes", debito=total, rol=ROL_CARTERA)]
+        lineas.append(Linea(propuesta.cuenta_puc, nombre or "Venta", credito=subtotal, rol=ROL_INGRESO))
         if iva != CERO and responsable_iva:
             if cuentas["cuenta_iva_generado"]:
-                lineas.append(Linea(cuentas["cuenta_iva_generado"], "IVA generado", credito=iva))
+                lineas.append(Linea(cuentas["cuenta_iva_generado"], "IVA generado",
+                                    credito=iva, rol=ROL_IVA, base=subtotal))
             else:
                 avisos.append(
                     "Falta la cuenta del IVA generado: el IVA de esta venta no "
@@ -254,11 +265,12 @@ def _lineas_de(
                     f"Este documento soporte trae IVA por {iva} pesos; un no obligado "
                     "no lo cobra. Se causó el total como gasto.")
             subtotal, iva = (total if total != CERO else subtotal), CERO
-        lineas = [Linea(propuesta.cuenta_puc, nombre or "Compra", debito=subtotal)]
+        lineas = [Linea(propuesta.cuenta_puc, nombre or "Compra", debito=subtotal, rol=ROL_GASTO)]
 
         if iva > CERO and responsable_iva:
             if cuentas["cuenta_iva_descontable"]:
-                lineas.append(Linea(cuentas["cuenta_iva_descontable"], "IVA descontable", debito=iva))
+                lineas.append(Linea(cuentas["cuenta_iva_descontable"], "IVA descontable",
+                                    debito=iva, rol=ROL_IVA, base=subtotal))
             else:
                 avisos.append(
                     "Falta la cuenta del IVA descontable: el IVA de esta factura no "
@@ -266,13 +278,15 @@ def _lineas_de(
 
         retenido = CERO
         for r in calculo.retenciones:
-            lineas.append(Linea(r.cuenta_puc, f"{r.concepto} ({r.tarifa}%)", credito=r.valor))
+            lineas.append(Linea(r.cuenta_puc, f"{r.concepto} ({r.tarifa}%)", credito=r.valor,
+                                rol=ROL_RETENCION, base=r.base, concepto_id=r.concepto_id))
             retenido += r.valor
 
         # El crédito al proveedor es el resto: así cuadra por construcción.
         base_credito = total if total > CERO else subtotal + iva
         por_pagar = _pesos(base_credito - retenido)
-        lineas.append(Linea(cuentas["cuenta_proveedores"] or None, "Proveedores", credito=por_pagar))
+        lineas.append(Linea(cuentas["cuenta_proveedores"] or None, "Proveedores",
+                            credito=por_pagar, rol=ROL_CARTERA))
 
     descuadre = sum(x.debito for x in lineas) - sum(x.credito for x in lineas)
     if descuadre != CERO:
@@ -289,18 +303,23 @@ def _escribir(conn, periodo, documento, estado, avisos, regla_id, lineas,
         conn.execute("DELETE FROM asiento_propuesto WHERE id = ?", (asiento_id,))
     cur = conn.execute(
         "INSERT INTO asiento_propuesto(periodo, cufe, tercero_nit, fecha, estado,"
-        " avisos, regla_id, naturaleza) VALUES (?,?,?,?,?,?,?,?)",
+        " avisos, regla_id, naturaleza, numero, tipo_doc) VALUES (?,?,?,?,?,?,?,?,?,?)",
         (periodo, documento["cufe"],
          documento.get("tercero_nit") or documento.get("emisor_nit"),
          documento.get("fecha_emision"), estado,
          json.dumps(avisos, ensure_ascii=False) if avisos else None, regla_id,
-         documento.get("naturaleza") or documentos_module.NATURALEZA_COMPRA))
-    aid = int(cur.lastrowid)
+         documento.get("naturaleza") or documentos_module.NATURALEZA_COMPRA,
+         documento.get("numero"), documento.get("tipo")))
+    _escribir_lineas(conn, int(cur.lastrowid), lineas)
+
+
+def _escribir_lineas(conn, asiento_id: int, lineas: list[Linea]) -> None:
     for orden, ln in enumerate(lineas):
         conn.execute(
             "INSERT INTO asiento_linea(asiento_id, orden, cuenta_puc, descripcion,"
-            " debito, credito) VALUES (?,?,?,?,?,?)",
-            (aid, orden, ln.cuenta_puc, ln.descripcion, str(ln.debito), str(ln.credito)))
+            " debito, credito, rol, base, concepto_id) VALUES (?,?,?,?,?,?,?,?,?)",
+            (asiento_id, orden, ln.cuenta_puc, ln.descripcion, str(ln.debito), str(ln.credito),
+             ln.rol, str(ln.base) if ln.base is not None else None, ln.concepto_id))
 
 
 # ─────────────────────────────── lectura ───────────────────────────────────────
@@ -426,12 +445,7 @@ def aprobar(
             responsable_iva=bool(perfil and perfil.get("responsable_iva")))
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("DELETE FROM asiento_linea WHERE asiento_id = ?", (a["id"],))
-        for orden, ln in enumerate(lineas):
-            conn.execute(
-                "INSERT INTO asiento_linea(asiento_id, orden, cuenta_puc, descripcion,"
-                " debito, credito) VALUES (?,?,?,?,?,?)",
-                (a["id"], orden, ln.cuenta_puc, ln.descripcion,
-                 str(ln.debito), str(ln.credito)))
+        _escribir_lineas(conn, a["id"], lineas)
         conn.execute(
             "UPDATE asiento_propuesto SET avisos = ? WHERE id = ?",
             (json.dumps(avisos, ensure_ascii=False) if avisos else None, a["id"]))
