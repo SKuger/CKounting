@@ -177,3 +177,13 @@ def test_el_pase_lo_que_pase_gana_aunque_el_concepto_cambie(conn):
                        patron="monitoreo")
     p = causacion.proponer(conn, doc(desc="Cualquier otra cosa"))
     assert p.seguro is True and p.cuenta_puc == "513535"
+
+
+def test_editar_una_regla_conserva_iva_y_lo_que_retiene_el_cliente(conn):
+    """La pantalla de reglas manda el registro entero; nada se pierde al guardar."""
+    r = causacion.guardar(conn, {"tercero_nit": "860037013", "cuenta_puc": "41503001",
+                                 "naturaleza": "venta", "iva_codigo": "02",
+                                 "retenciones_cliente": "05:1.8,07,11"})
+    r = causacion.guardar(conn, {**r, "cuenta_puc": "41553001"})
+    assert (r["cuenta_puc"], r["iva_codigo"], r["retenciones_cliente"]) == ("41553001", "02", "05:1.8,07,11")
+    assert causacion.listar(conn)[0]["tercero_nombre"] is None, "sin el tercero en el catálogo, sin nombre"
