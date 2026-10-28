@@ -20,7 +20,7 @@ y tiene que cuadrar: en 482 líneas de un mes no hay uno descuadrado.
 | 4 | `Sigla moneda` | `COP` siempre. | Fijo |
 | 5 | `Tasa de cambio` | Vacío. | — |
 | 6 | `Código cuenta contable` | Subcuenta del PUC de la empresa, **8 dígitos** (`22050501`, `24081501`, `53052001`). Nunca 6. | Contab, de la regla / las cuentas de la empresa / las tarifas |
-| 7 | `Identificación tercero` | NIT o cédula sin DV, en **todas** las líneas del comprobante. | Contab |
+| 7 | `Identificación tercero` | NIT o cédula sin DV, en **todas** las líneas del comprobante. Por defecto el del documento; una línea puede llevar otro si el contador lo eligió en la bandeja (D-135). | Contab |
 | 8-12 | `Sucursal`, `Código producto`, `Código de bodega`, `Acción`, `Cantidad producto` | Vacíos. | — |
 | 13 | `Prefijo` | Prefijo de la factura, **solo en la línea de cartera** (2205 en compras, 1305 en ventas). | Contab, del número del documento |
 | 14 | `Consecutivo` | Número de la factura, misma línea. | Contab |

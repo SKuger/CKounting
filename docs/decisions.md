@@ -1445,3 +1445,36 @@ la causación por eso). Sobre el septiembre real de REAL, la segunda quincena
 sale **idéntica en sus 80 pares cuenta-tercero** y la primera en 79 de 83: la
 diferencia es un solo empleado cuyos otros pagos de esa quincena fueron, en
 parte, a un tercero — eso no está en el Excel y se ajusta a mano.
+
+## D-135 — La bandeja de causación se edita, y el IVA va por tarifa ✅
+
+**Decisión** (2026-10-28, por cinco observaciones del contador):
+
+- **Cada línea del asiento se edita**: cuenta, concepto, valor y **tercero**.
+  Se agregan y se quitan líneas. Una línea con otro tercero —la cartera de una
+  factura que se le debe a otro NIT— sale con ese NIT en el archivo de Siigo y
+  en el Excel de asientos; vacía es el tercero del documento.
+- **Guardar no es aprobar.** Guardado, el asiento queda `editado` y armar la
+  propuesta del mes ya no lo pisa; queda listo si cuadra y tiene todas sus
+  cuentas. «Descartar cambios» vuelve a lo que dicen las reglas.
+- **Se aprueba uno a uno o lo marcado.** El bloque salta lo que no está listo y
+  lo cuenta. Un asiento que no cuadra o con una línea sin cuenta no se aprueba.
+  Aprobar uno guardado aprende la regla igual que aprobarlo en el momento, y
+  conserva el concepto de retención que la regla ya tenía.
+- **El IVA va por tarifa cuando el XML trae el desglose**: una línea por tarifa
+  con su código y su cuenta del catálogo, y la parte sin IVA en una línea
+  propia («Parte no gravada») cuya cuenta se escribe una vez y la regla la
+  recuerda (`cuenta_no_gravada`). El impuesto al consumo es mayor valor del
+  gasto y no entra al ReteIVA. Sin XML —el reporte de la DIAN no da tarifas—
+  sale una sola línea de IVA, como antes, y se reparte a mano en el editor.
+- Cambiar la retención o el IVA arriba del editor rehace los impuestos y la
+  cartera; el reparto que él hizo a mano se conserva.
+
+**Por qué**: el contador quiere verificar antes de aprobar y repartir lo que una
+sola cuenta por regla no cubre (facturas de D1 con 19 %, 5 % y excluidos). La
+cuenta de cada tarifa y de cada devolución ya estaba en el catálogo (D-129); lo
+que faltaba era que un documento pudiera tener más de una.
+
+**Pendiente**: la plantilla de reparto por tercero (plan 4.13) espera su
+respuesta sobre cómo repartir el valor.
+
