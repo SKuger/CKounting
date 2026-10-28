@@ -1425,6 +1425,20 @@ def _h_siigo_config(params: dict) -> dict:
         conn.close()
 
 
+def _h_siigo_importar(params: dict) -> dict:
+    """El catálogo de Siigo de la empresa desde su Excel. `dry_run` enseña sin escribir."""
+    source = Path(params["source_path"])
+    try:
+        cargado = siigo_module.cargar_catalogo(source)
+    except Exception as exc:
+        raise ValueError(f"No se pudo leer el archivo: {exc}") from exc
+    conn = _con(params["db_path"])
+    try:
+        return siigo_module.aplicar_catalogo(conn, cargado, dry_run=bool(params.get("dry_run", False)))
+    finally:
+        conn.close()
+
+
 def _h_siigo_exportar(params: dict) -> dict:
     """Los asientos aprobados del mes en el formato que Siigo importa."""
     periodo = storage_module._norm_periodo(params.get("periodo") or "")
@@ -1969,6 +1983,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "asiento_exportar": _h_asiento_exportar,
     "siigo_config": _h_siigo_config,
     "siigo_exportar": _h_siigo_exportar,
+    "siigo_importar": _h_siigo_importar,
     "cuentas_empresa": _h_cuentas_empresa,
     "tarifas_list": _h_tarifas_list,
     "tarifas_guardar_concepto": _h_tarifas_guardar_concepto,

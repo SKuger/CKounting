@@ -72,8 +72,10 @@ tres grupos: **por decidir**, **listos para aprobar** y **aprobados**.
 
 **9. El archivo de Siigo.** *Archivo de Siigo* deja `siigo-AAAA-MM.xlsx` en la
 carpeta que elija, en el mismo formato de importación de comprobantes que usted
-sube hoy. La primera vez, pulse **«Siigo»** y escriba lo que Contab no puede
-adivinar: el **tipo de comprobante** de cada clase (compras, ventas, notas,
+sube hoy. La primera vez, pulse **«Siigo»** y suba el Excel con el catálogo de esa
+empresa (hoja «Impuestos»: código, nombre, tipo, tarifa, cuenta; hoja
+«Comprobantes»: clase, tipo en Siigo, último consecutivo) — Contab le enseña
+qué leyó antes de guardar—, o escriba a mano lo que Contab no puede adivinar: el **tipo de comprobante** de cada clase (compras, ventas, notas,
 documento soporte), el **último consecutivo** de cada tipo que ya está en
 Siigo, y el **código de IVA** de cada tarifa. El código de Siigo de cada
 concepto de retención se escribe en *Tarifas y UVT*, junto a su cuenta. Si al
