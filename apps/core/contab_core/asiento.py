@@ -43,6 +43,7 @@ y se deshace a mano. Si faltan, el asiento sale marcado diciendo cuál.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
@@ -65,6 +66,10 @@ CERO = Decimal("0")
 # de la factura con su vencimiento en la de cartera.
 ROL_GASTO, ROL_INGRESO, ROL_IVA, ROL_RETENCION, ROL_CARTERA = (
     "gasto", "ingreso", "iva", "retencion", "cartera")
+# La parte de un documento que no lleva IVA, cuando la otra sí: va a su propia
+# cuenta (lo pidió el contador el 2026-10-28, con las facturas de D1).
+ROL_NO_GRAVADO = "no_gravado"
+ROLES = (ROL_GASTO, ROL_INGRESO, ROL_IVA, ROL_RETENCION, ROL_CARTERA, ROL_NO_GRAVADO)
 
 
 @dataclass
@@ -77,6 +82,9 @@ class Linea:
     base: Decimal | None = None
     concepto_id: int | None = None
     codigo_siigo: str | None = None
+    # None = el tercero del asiento. Otro NIT cuando la cartera es de otro: la
+    # factura la emite uno y se le debe a otro (el contador, 2026-10-28).
+    tercero_nit: str | None = None
 
 
 @dataclass
@@ -138,6 +146,76 @@ def _codigo_iva(conn, propuesta, iva: Decimal, base: Decimal) -> str | None:
 
 NINGUNA = "ninguna"
 CENTAVO = Decimal("0.01")
+
+
+def _tarifa_txt(t: Decimal) -> str:
+    """19.00 → «19»; 2.5 → «2.5». Es la llave de `iva:<tarifa>` en la config."""
+    return format(t.normalize(), "f") if t != t.to_integral() else str(int(t))
+
+
+@dataclass
+class Desglose:
+    """El IVA de un documento por tarifa, y lo que no es IVA (el impuesto al consumo).
+
+    Solo lo trae el XML. El reporte de la DIAN da un IVA total sin tarifa, y
+    con eso no se puede partir: el asiento sale con una sola línea de IVA y la
+    tarifa se deduce de dividir IVA entre base.
+    """
+    ivas: list[tuple[str, Decimal, Decimal]]   # (tarifa, base, valor), solo las que tienen IVA
+    base_gravada: Decimal
+    otros: Decimal                             # INC y demás: no es IVA descontable
+
+    @property
+    def iva(self) -> Decimal:
+        return sum((v for _t, _b, v in self.ivas), CERO)
+
+
+def desglose_de(documento: dict[str, Any]) -> Desglose | None:
+    por_tarifa: dict[str, list[Decimal]] = {}
+    otros = CERO
+    for imp in documento.get("impuestos") or []:
+        if imp.get("es_retencion"):
+            continue
+        tipo = str(imp.get("tipo") or "").strip()
+        valor = _d(imp.get("valor"))
+        if tipo == "01":
+            if imp.get("tarifa") in (None, ""):
+                return None
+            acc = por_tarifa.setdefault(_tarifa_txt(_d(imp["tarifa"])), [CERO, CERO])
+            acc[0] += _d(imp.get("base"))
+            acc[1] += valor
+        elif tipo == "00":
+            return None       # un total sin desglose: no se sabe qué es
+        else:
+            otros += valor
+    if not por_tarifa and otros == CERO:
+        return None
+    ivas = [(t, _pesos(b), _pesos(v)) for t, (b, v) in sorted(
+        por_tarifa.items(), key=lambda kv: -_d(kv[0])) if v != CERO]
+    return Desglose(ivas=ivas, base_gravada=sum((b for _t, b, _v in ivas), CERO),
+                    otros=_pesos(otros))
+
+
+def config_iva(conn) -> dict[str, Any]:
+    """Qué código de Siigo lleva cada tarifa, y qué tarifa tiene cada código."""
+    cfg = siigo_module.config(conn)
+    return {
+        "por_tarifa": {k[4:]: (v or "").strip() for k, v in cfg.items()
+                       if k.startswith("iva:") and (v or "").strip()},
+        "tarifa_de": {i["codigo"]: _tarifa_txt(_d(i["tarifa"]))
+                      for i in siigo_module.ivas_disponibles(conn) if i.get("tarifa")},
+    }
+
+
+def _codigo_de_tarifa(cfg: dict[str, Any], propuesta, tarifa: str, unica: bool) -> str | None:
+    """El código de la regla si es de esa tarifa (bienes o servicios lo decide
+    él); si no, el que la empresa tiene para la tarifa."""
+    elegido = (propuesta.iva_codigo or "").strip()
+    if elegido:
+        suya = cfg["tarifa_de"].get(elegido)
+        if suya == tarifa or (suya is None and unica):
+            return elegido
+    return cfg["por_tarifa"].get(tarifa) or None
 
 
 def _lo_que_me_retienen(catalogo, codigos: str | None, subtotal: Decimal, iva: Decimal,
@@ -202,6 +280,10 @@ def _calcular_retenciones(conn, *, perfil, documento, propuesta, tercero_decidid
         return retenciones_module.Calculo()
     tercero = terceros_module.obtener(conn, documento.get("tercero_nit") or "")
     visto = documento
+    partes = desglose_de(documento)
+    if partes is not None and partes.otros != CERO:
+        # El ReteIVA es sobre el IVA; el impuesto al consumo no entra.
+        visto = {**documento, "total_impuestos": str(partes.iva) if partes.iva else None}
     if naturaleza == documentos_module.NATURALEZA_DOC_SOPORTE:
         visto = {**documento, "emisor_responsabilidades": None,
                  "subtotal": documento.get("total"), "total_impuestos": None}
@@ -226,10 +308,8 @@ def generar(
     avisa = progreso or (lambda _m: None)
     res = Resumen(periodo=periodo)
 
-    cuentas = _cuentas_de(dict(conn.execute("SELECT * FROM empresa_info").fetchone() or {}))
-    perfil = perfil_module.perfil_vigente(conn, fecha=f"{periodo}-01")
-    catalogo = siigo_module.catalogo(conn)
-    codigos_concepto = _codigos_concepto(conn)
+    ctx = _contexto(conn, periodo)
+    cuentas, perfil = ctx["cuentas"], ctx["perfil"]
 
     if not cuentas["cuenta_proveedores"]:
         res.avisos.append(
@@ -250,42 +330,19 @@ def generar(
         avisa(f"Proponiendo {i} de {len(docs)}…")
         cufe = documento["cufe"]
         ya = conn.execute(
-            "SELECT id, aprobado FROM asiento_propuesto WHERE periodo = ? AND cufe = ?",
-            (periodo, cufe)).fetchone()
-        if ya and ya["aprobado"]:
-            res.total += 1
-            res.completos += 1
+            "SELECT id, aprobado, editado, estado FROM asiento_propuesto"
+            " WHERE periodo = ? AND cufe = ?", (periodo, cufe)).fetchone()
+        res.total += 1
+        # Lo aprobado y lo que él guardó a mano no se rehace: sería borrarle el trabajo.
+        if ya and (ya["aprobado"] or ya["editado"]):
+            if ya["aprobado"] or ya["estado"] == ESTADO_COMPLETO:
+                res.completos += 1
+            else:
+                res.revisar += 1
             continue
 
-        res.total += 1
-
         propuesta = causacion_module.proponer(conn, documento)
-        calculo = _calcular_retenciones(
-            conn, perfil=perfil, documento=documento, propuesta=propuesta,
-            tercero_decidido=_ya_lo_decidio(propuesta))
-
-        lineas, avisos = _lineas_de(
-            documento, propuesta, calculo, cuentas=cuentas,
-            responsable_iva=bool(perfil and perfil.get("responsable_iva")),
-            catalogo=catalogo, codigo_iva=_codigo_iva(
-                conn, propuesta, _d(documento.get("total_impuestos")), _d(documento.get("subtotal"))),
-            codigos_concepto=codigos_concepto)
-        avisos = [*avisos, *calculo.avisos]
-        if documento.get("origen") == documentos_module.ORIGEN_EXCEL:
-            avisos.append(
-                "Sin el XML de este documento: se propuso con el total y el IVA "
-                "del reporte de la DIAN, sin el detalle por línea.")
-        if not propuesta.seguro:
-            avisos.insert(0, propuesta.por_que)
-
-        es_venta = documento.get("naturaleza") == documentos_module.NATURALEZA_VENTA
-        contrapartida = cuentas["cuenta_clientes" if es_venta else "cuenta_proveedores"]
-        # Con el catálogo cargado, una venta de un cliente del que no se sabe qué
-        # retiene no se aprueba en lote: la cartera saldría por el total.
-        no_se_sabe = bool(es_venta and catalogo and propuesta.retenciones_cliente is None)
-        estado = (ESTADO_COMPLETO
-                  if propuesta.seguro and not calculo.revisar and contrapartida and not no_se_sabe
-                  else ESTADO_REVISAR)
+        lineas, avisos, estado = _armar(conn, ctx, documento, propuesta, tercero_decidido=None)
         if estado == ESTADO_COMPLETO:
             res.completos += 1
             if propuesta.regla_id:
@@ -298,6 +355,51 @@ def generar(
 
     conn.commit()
     return res.como_dict()
+
+
+def _contexto(conn, periodo: str) -> dict[str, Any]:
+    """Lo que no cambia de un documento a otro del mes: se lee una vez."""
+    return {
+        "cuentas": _cuentas_de(dict(conn.execute("SELECT * FROM empresa_info").fetchone() or {})),
+        "perfil": perfil_module.perfil_vigente(conn, fecha=f"{periodo}-01"),
+        "catalogo": siigo_module.catalogo(conn),
+        "codigos_concepto": _codigos_concepto(conn),
+        "iva": config_iva(conn),
+    }
+
+
+def _armar(conn, ctx, documento, propuesta, *, tercero_decidido: bool | None):
+    """Las líneas, los avisos y el estado de un documento con esta propuesta."""
+    perfil, cuentas, catalogo = ctx["perfil"], ctx["cuentas"], ctx["catalogo"]
+    calculo = _calcular_retenciones(
+        conn, perfil=perfil, documento=documento, propuesta=propuesta,
+        tercero_decidido=(_ya_lo_decidio(propuesta) if tercero_decidido is None
+                          else tercero_decidido))
+    lineas, avisos = _lineas_de(
+        documento, propuesta, calculo, cuentas=cuentas,
+        responsable_iva=bool(perfil and perfil.get("responsable_iva")),
+        catalogo=catalogo, codigo_iva=_codigo_iva(
+            conn, propuesta, _d(documento.get("total_impuestos")), _d(documento.get("subtotal"))),
+        codigos_concepto=ctx["codigos_concepto"], iva_cfg=ctx["iva"])
+    avisos = [*avisos, *calculo.avisos]
+    if documento.get("origen") == documentos_module.ORIGEN_EXCEL:
+        avisos.append(
+            "Sin el XML de este documento: se propuso con el total y el IVA "
+            "del reporte de la DIAN, sin el detalle por línea ni por tarifa.")
+    if not propuesta.seguro:
+        avisos.insert(0, propuesta.por_que)
+
+    es_venta = documento.get("naturaleza") == documentos_module.NATURALEZA_VENTA
+    contrapartida = cuentas["cuenta_clientes" if es_venta else "cuenta_proveedores"]
+    # Con el catálogo cargado, una venta de un cliente del que no se sabe qué
+    # retiene no se aprueba en lote: la cartera saldría por el total.
+    no_se_sabe = bool(es_venta and catalogo and propuesta.retenciones_cliente is None)
+    sin_cuenta = any(not ln.cuenta_puc for ln in lineas)
+    estado = (ESTADO_COMPLETO
+              if (propuesta.seguro and not calculo.revisar and contrapartida
+                  and not no_se_sabe and not sin_cuenta)
+              else ESTADO_REVISAR)
+    return lineas, avisos, estado
 
 
 def _codigos_concepto(conn) -> dict[int, str]:
@@ -315,6 +417,7 @@ def _lineas_de(
     catalogo: dict | None = None,
     codigo_iva: str | None = None,
     codigos_concepto: dict[int, str] | None = None,
+    iva_cfg: dict[str, Any] | None = None,
 ) -> tuple[list[Linea], list[str]]:
     """Las líneas del asiento. Con el catálogo de Siigo cargado, la cuenta del
     IVA y de cada retención sale de él según el contexto —venta, compra o su
@@ -328,22 +431,61 @@ def _lineas_de(
     iva = _pesos(_d(documento.get("total_impuestos")))
     total = _pesos(_d(documento.get("total")))
     nombre = documento.get("tercero_nombre") or documento.get("emisor_nombre")
+    iva_cfg = iva_cfg or {"por_tarifa": {}, "tarifa_de": {}}
+
+    # El IVA por tarifa, si el XML lo trae: una línea por tarifa con su código
+    # y su cuenta, y la parte sin IVA aparte (D1: 19 %, 5 % y excluidos en la
+    # misma factura). Sin desglose, una sola línea como antes.
+    partes = desglose_de(documento) if naturaleza != documentos_module.NATURALEZA_DOC_SOPORTE else None
+    otros = CERO
+    if partes is not None:
+        unica = len(partes.ivas) == 1
+        tramos = [(t, b, v, _codigo_de_tarifa(iva_cfg, propuesta, t, unica)) for t, b, v in partes.ivas]
+        iva, otros = partes.iva, partes.otros
+        no_gravado = subtotal - partes.base_gravada if partes.ivas and responsable_iva else CERO
+        if no_gravado < Decimal("1"):
+            no_gravado = CERO
+    else:
+        tramos = [(None, subtotal, iva, codigo_iva)] if iva != CERO else []
+        no_gravado = CERO
+
+    def lineas_de_iva(lado: str, etiqueta: str, respaldo: str) -> list[Linea]:
+        salida = []
+        for t, b, v, codigo in tramos:
+            cuenta = _cuenta_del_catalogo(catalogo, codigo, contexto) or respaldo or None
+            if not cuenta:
+                avisos.append(f"Falta la cuenta del {etiqueta}"
+                              + (f" al {t} %" if t else "") + ": elíjala en la línea.")
+            ln = Linea(cuenta, etiqueta + (f" {t}%" if t and len(tramos) > 1 else ""),
+                       rol=ROL_IVA, base=b, codigo_siigo=codigo)
+            setattr(ln, lado, v)
+            salida.append(ln)
+        return salida
+
+    def la_parte_sin_iva(lado: str) -> list[Linea]:
+        if no_gravado == CERO:
+            return []
+        if not propuesta.cuenta_no_gravada:
+            avisos.append(
+                f"{no_gravado} pesos de este documento no llevan IVA y van a su propia "
+                "cuenta: escríbala en la línea «Parte no gravada» y se recordará.")
+        ln = Linea(propuesta.cuenta_no_gravada, "Parte no gravada", rol=ROL_NO_GRAVADO)
+        setattr(ln, lado, no_gravado)
+        return [ln]
 
     if naturaleza == documentos_module.NATURALEZA_VENTA:
         # El cliente debe el total menos lo que retiene; el ingreso y el IVA
         # generado son el haber.
         cartera = Linea(cuentas["cuenta_clientes"] or None, "Clientes", debito=total, rol=ROL_CARTERA)
         lineas = [cartera]
-        lineas.append(Linea(propuesta.cuenta_puc, nombre or "Venta", credito=subtotal, rol=ROL_INGRESO))
+        lineas.append(Linea(propuesta.cuenta_puc, nombre or "Venta",
+                            credito=subtotal - no_gravado, rol=ROL_INGRESO))
+        lineas.extend(la_parte_sin_iva("credito"))
         if iva != CERO and responsable_iva:
-            cuenta_iva = _cuenta_del_catalogo(catalogo, codigo_iva, contexto) or cuentas["cuenta_iva_generado"]
-            if cuenta_iva:
-                lineas.append(Linea(cuenta_iva, "IVA generado", credito=iva, rol=ROL_IVA,
-                                    base=subtotal, codigo_siigo=codigo_iva))
-            else:
-                avisos.append(
-                    "Falta la cuenta del IVA generado: el IVA de esta venta no "
-                    "quedó en ninguna línea.")
+            lineas.extend(lineas_de_iva("credito", "IVA generado", cuentas["cuenta_iva_generado"]))
+        if otros != CERO:
+            avisos.append(f"Esta venta trae {otros} pesos de impuesto al consumo: elija su cuenta.")
+            lineas.append(Linea(None, "Impuesto al consumo", credito=otros))
         if catalogo:
             retenidas, avisos_ret = _lo_que_me_retienen(
                 catalogo, propuesta.retenciones_cliente, subtotal, iva, contexto)
@@ -359,17 +501,17 @@ def _lineas_de(
                     f"Este documento soporte trae IVA por {iva} pesos; un no obligado "
                     "no lo cobra. Se causó el total como gasto.")
             subtotal, iva = (total if total != CERO else subtotal), CERO
-        lineas = [Linea(propuesta.cuenta_puc, nombre or "Compra", debito=subtotal, rol=ROL_GASTO)]
+            tramos = []
+        lineas = [Linea(propuesta.cuenta_puc, nombre or "Compra",
+                        debito=subtotal - no_gravado, rol=ROL_GASTO)]
+        lineas.extend(la_parte_sin_iva("debito"))
+        if otros != CERO:
+            # El impuesto al consumo no se descuenta: es mayor valor del gasto.
+            lineas.append(Linea(propuesta.cuenta_puc, "Impuesto al consumo (mayor valor del gasto)",
+                                debito=otros, rol=ROL_GASTO))
 
         if iva > CERO and responsable_iva:
-            cuenta_iva = _cuenta_del_catalogo(catalogo, codigo_iva, contexto) or cuentas["cuenta_iva_descontable"]
-            if cuenta_iva:
-                lineas.append(Linea(cuenta_iva, "IVA descontable", debito=iva, rol=ROL_IVA,
-                                    base=subtotal, codigo_siigo=codigo_iva))
-            else:
-                avisos.append(
-                    "Falta la cuenta del IVA descontable: el IVA de esta factura no "
-                    "quedó en ninguna línea.")
+            lineas.extend(lineas_de_iva("debito", "IVA descontable", cuentas["cuenta_iva_descontable"]))
 
         retenido = CERO
         for r in calculo.retenciones:
@@ -381,7 +523,7 @@ def _lineas_de(
             retenido += r.valor
 
         # El crédito al proveedor es el resto: así cuadra por construcción.
-        base_credito = total if total > CERO else subtotal + iva
+        base_credito = total if total > CERO else subtotal + iva + otros
         por_pagar = _pesos(base_credito - retenido)
         lineas.append(Linea(cuentas["cuenta_proveedores"] or None, "Proveedores",
                             credito=por_pagar, rol=ROL_CARTERA))
@@ -415,9 +557,11 @@ def _escribir_lineas(conn, asiento_id: int, lineas: list[Linea]) -> None:
     for orden, ln in enumerate(lineas):
         conn.execute(
             "INSERT INTO asiento_linea(asiento_id, orden, cuenta_puc, descripcion,"
-            " debito, credito, rol, base, concepto_id, codigo_siigo) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            " debito, credito, rol, base, concepto_id, codigo_siigo, tercero_nit)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (asiento_id, orden, ln.cuenta_puc, ln.descripcion, str(ln.debito), str(ln.credito),
-             ln.rol, str(ln.base) if ln.base is not None else None, ln.concepto_id, ln.codigo_siigo))
+             ln.rol, str(ln.base) if ln.base is not None else None, ln.concepto_id, ln.codigo_siigo,
+             ln.tercero_nit))
 
 
 # ─────────────────────────────── lectura ───────────────────────────────────────
@@ -466,6 +610,178 @@ def resumen(conn, periodo: str) -> dict[str, Any]:
 # Así que aprobar no es marcar una casilla: es **enseñarle a Contab** lo que
 # acaba de decidir, para no volvérselo a preguntar.
 
+# Lo que él puede corregir antes de dar el visto bueno. Se guarda con el asiento
+# (`correccion`) para que aprobarlo después —uno a uno o en bloque— aprenda lo
+# mismo que si lo hubiera aprobado en el momento.
+CAMPOS_CORRECCION = ("cuenta_puc", "patron", "concepto_retencion_id", "sin_retencion",
+                     "aprender_regla", "iva_codigo", "retenciones_cliente")
+
+
+def _uno(conn, asiento_id: int) -> dict[str, Any]:
+    fila = conn.execute(
+        "SELECT * FROM asiento_propuesto WHERE id = ?", (int(asiento_id),)).fetchone()
+    if fila is None:
+        raise ValueError(f"El asiento {asiento_id} no existe.")
+    return dict(fila)
+
+
+def _documento_de(conn, a: dict[str, Any]) -> dict[str, Any] | None:
+    # El documento puede venir del XML o del Excel: hay que mirar en los dos
+    # sitios. Buscándolo solo por XML, en un mes sin XML la corrección del
+    # contador no se aplicaba a ninguna línea — y él la veía ignorada.
+    return next((d for d in documentos_module.documentos_a_causar(conn, a["periodo"])
+                 if d["cufe"] == a["cufe"]), None)
+
+
+def _propuesta_corregida(conn, documento, c: dict[str, Any]):
+    propuesta = causacion_module.proponer(conn, documento)
+    if c.get("cuenta_puc"):
+        propuesta.cuenta_puc = str(c["cuenta_puc"]).strip()
+        propuesta.seguro = True
+    if c.get("concepto_retencion_id"):
+        propuesta.concepto_retencion_id = int(c["concepto_retencion_id"])
+        propuesta.sin_retencion = False
+    elif c.get("sin_retencion"):
+        propuesta.sin_retencion = True
+    if (c.get("iva_codigo") or "").strip():
+        propuesta.iva_codigo = c["iva_codigo"].strip()
+    if (c.get("retenciones_cliente") or "").strip():
+        propuesta.retenciones_cliente = c["retenciones_cliente"].strip()
+    return propuesta
+
+
+def _guardar_cuentas_empresa(conn, nuevas: dict[str, str | None]) -> None:
+    if any(nuevas.values()):
+        actual = dict(conn.execute("SELECT * FROM empresa_info").fetchone() or {})
+        conn.execute(
+            "UPDATE empresa_info SET cuenta_proveedores = ?, cuenta_iva_descontable = ?,"
+            " cuenta_clientes = ?, cuenta_iva_generado = ?",
+            tuple((nuevas.get(k) or actual.get(k) or "").strip() or None for k in (
+                "cuenta_proveedores", "cuenta_iva_descontable",
+                "cuenta_clientes", "cuenta_iva_generado")))
+
+
+def _linea_dict(ln: Linea) -> dict[str, Any]:
+    return {"cuenta_puc": ln.cuenta_puc, "descripcion": ln.descripcion,
+            "debito": str(ln.debito), "credito": str(ln.credito), "rol": ln.rol,
+            "base": str(ln.base) if ln.base is not None else None,
+            "concepto_id": ln.concepto_id, "codigo_siigo": ln.codigo_siigo,
+            "tercero_nit": ln.tercero_nit}
+
+
+def previsualizar(conn, asiento_id: int, **correccion) -> dict[str, Any]:
+    """Cómo quedaría el asiento con esta cuenta, retención o IVA. No guarda nada:
+    es lo que la bandeja pone en el editor cuando él cambia un desplegable."""
+    a = _uno(conn, asiento_id)
+    documento = _documento_de(conn, a)
+    if documento is None:
+        raise ValueError("No se encontró el documento de este asiento en el mes.")
+    ctx = _contexto(conn, a["periodo"])
+    for k in ("cuenta_proveedores", "cuenta_iva_descontable", "cuenta_clientes", "cuenta_iva_generado"):
+        if (correccion.get(k) or "").strip():
+            ctx["cuentas"][k] = correccion[k].strip()
+    propuesta = _propuesta_corregida(conn, documento, correccion)
+    lineas, avisos, estado = _armar(conn, ctx, documento, propuesta, tercero_decidido=True)
+    return {"lineas": [_linea_dict(x) for x in lineas], "avisos": avisos, "estado": estado}
+
+
+_NIT = re.compile(r"^\d{5,15}$")
+
+
+def _leer_lineas(lineas: list[dict[str, Any]]) -> list[Linea]:
+    """Las líneas que él escribió, validadas. Lo que no se puede guardar se
+    rechaza con su motivo; lo que solo impide aprobar (falta una cuenta, no
+    cuadra) se guarda y deja el asiento por revisar."""
+    salida: list[Linea] = []
+    for n, x in enumerate(lineas, 1):
+        cuenta = re.sub(r"\s", "", str(x.get("cuenta_puc") or "")) or None
+        if cuenta and not cuenta.isdigit():
+            raise ValueError(f"Línea {n}: la cuenta «{cuenta}» no es un número del PUC.")
+        try:
+            debito = _d(str(x.get("debito") or "0").replace(",", ""))
+            credito = _d(str(x.get("credito") or "0").replace(",", ""))
+        except Exception as exc:
+            raise ValueError(f"Línea {n}: el valor no es un número.") from exc
+        # Negativo sí puede ser: una nota crédito del reporte va en negativo (D-045).
+        if debito and credito:
+            raise ValueError(f"Línea {n}: una línea va al débito o al crédito, no a los dos.")
+        if not debito and not credito and not cuenta:
+            continue          # una fila vacía que agregó y no llenó
+        tercero = str(x.get("tercero_nit") or "").strip().split("-")[0].replace(".", "") or None
+        if tercero and not _NIT.match(tercero):
+            raise ValueError(f"Línea {n}: «{x.get('tercero_nit')}» no es un NIT o cédula.")
+        rol = x.get("rol") if x.get("rol") in ROLES else None
+        base = x.get("base")
+        salida.append(Linea(
+            cuenta, str(x.get("descripcion") or "").strip(), debito=debito, credito=credito,
+            rol=rol, base=_d(base) if base not in (None, "") else None,
+            concepto_id=int(x["concepto_id"]) if x.get("concepto_id") else None,
+            codigo_siigo=(str(x.get("codigo_siigo") or "").strip() or None),
+            tercero_nit=tercero))
+    if not salida:
+        raise ValueError("Un asiento sin líneas no se puede guardar.")
+    return salida
+
+
+def _problemas(lineas: list[Linea]) -> list[str]:
+    problemas = []
+    sin = sum(1 for x in lineas if not x.cuenta_puc)
+    if sin:
+        problemas.append(f"{sin} línea{'s' if sin > 1 else ''} sin cuenta.")
+    descuadre = sum((x.debito for x in lineas), CERO) - sum((x.credito for x in lineas), CERO)
+    if descuadre != CERO:
+        lado = "el débito" if descuadre > CERO else "el crédito"
+        problemas.append(f"El asiento no cuadra por {abs(descuadre)} pesos: sobra en {lado}.")
+    return problemas
+
+
+def guardar(conn, asiento_id: int, lineas: list[dict[str, Any]],
+            correccion: dict[str, Any] | None = None, **cuentas_empresa) -> dict[str, Any]:
+    """Guarda las líneas como él las dejó, sin aprobar.
+
+    Lo pidió el contador el 2026-10-28: «antes de aprobar un registro, un botón
+    de guardar el movimiento». Guardado, el asiento ya no lo pisa volver a armar
+    la propuesta; queda listo si cuadra y tiene todas sus cuentas.
+    """
+    a = _uno(conn, asiento_id)
+    if a["aprobado"]:
+        raise ValueError("Este asiento ya está aprobado: deshaga la aprobación para cambiarlo.")
+    nuevas = _leer_lineas(lineas)
+    _guardar_cuentas_empresa(conn, cuentas_empresa)
+    problemas = _problemas(nuevas)
+    c = {k: (correccion or {}).get(k) for k in CAMPOS_CORRECCION if (correccion or {}).get(k) not in (None, "")}
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("DELETE FROM asiento_linea WHERE asiento_id = ?", (a["id"],))
+    _escribir_lineas(conn, a["id"], nuevas)
+    conn.execute(
+        "UPDATE asiento_propuesto SET editado = 1, correccion = ?, estado = ?, avisos = ?"
+        " WHERE id = ?",
+        (json.dumps(c, ensure_ascii=False) if c else None,
+         ESTADO_REVISAR if problemas else ESTADO_COMPLETO,
+         json.dumps(problemas, ensure_ascii=False) if problemas else None, a["id"]))
+    conn.commit()
+    return listar_uno(conn, a["id"])
+
+
+def descartar(conn, asiento_id: int) -> dict[str, Any]:
+    """Olvida lo guardado a mano y vuelve a la propuesta de las reglas."""
+    a = _uno(conn, asiento_id)
+    if a["aprobado"]:
+        raise ValueError("Este asiento ya está aprobado: deshaga la aprobación primero.")
+    documento = _documento_de(conn, a)
+    if documento is None:
+        raise ValueError("No se encontró el documento de este asiento en el mes.")
+    ctx = _contexto(conn, a["periodo"])
+    propuesta = causacion_module.proponer(conn, documento)
+    lineas, avisos, estado = _armar(conn, ctx, documento, propuesta, tercero_decidido=None)
+    _escribir(conn, a["periodo"], documento, estado, avisos, propuesta.regla_id,
+              lineas, asiento_id=a["id"])
+    conn.commit()
+    nuevo = conn.execute("SELECT id FROM asiento_propuesto WHERE periodo = ? AND cufe = ?",
+                         (a["periodo"], a["cufe"])).fetchone()
+    return listar_uno(conn, nuevo["id"])
+
+
 def aprobar(
     conn,
     asiento_id: int,
@@ -481,84 +797,68 @@ def aprobar(
     aprender_regla: bool = True,
     iva_codigo: str | None = None,
     retenciones_cliente: str | None = None,
+    lineas: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Da por bueno un asiento, con las correcciones que él haya hecho.
 
     Lo que corrija se guarda **para esta empresa**: las cuentas viven en su
     propia base (D-003), así que «las cuentas pueden variar por cada empresa»
     sale gratis — no hay una tabla común que pudiera mezclarlas.
+
+    Con `lineas`, o si el asiento ya estaba guardado a mano, las líneas son las
+    suyas y no se rehacen: solo se aprende la regla y se aprueba. Un asiento
+    que no cuadra o con una línea sin cuenta no se aprueba.
     """
-    fila = conn.execute(
-        "SELECT * FROM asiento_propuesto WHERE id = ?", (int(asiento_id),)).fetchone()
-    if fila is None:
-        raise ValueError(f"El asiento {asiento_id} no existe.")
-    a = dict(fila)
+    a = _uno(conn, asiento_id)
+    if a["aprobado"]:
+        return listar_uno(conn, a["id"])
+    dados = {"cuenta_puc": cuenta_puc, "patron": patron,
+             "concepto_retencion_id": concepto_retencion_id, "sin_retencion": sin_retencion,
+             "aprender_regla": aprender_regla, "iva_codigo": iva_codigo,
+             "retenciones_cliente": retenciones_cliente}
+    cuentas_empresa = {"cuenta_proveedores": cuenta_proveedores,
+                       "cuenta_iva_descontable": cuenta_iva_descontable,
+                       "cuenta_clientes": cuenta_clientes,
+                       "cuenta_iva_generado": cuenta_iva_generado}
+    if lineas is not None:
+        a = guardar(conn, a["id"], lineas, dados, **cuentas_empresa)
+    else:
+        _guardar_cuentas_empresa(conn, cuentas_empresa)
 
-    # Las cuentas de la empresa, si las acaba de escribir en esta pantalla.
-    nuevas = {"cuenta_proveedores": cuenta_proveedores,
-              "cuenta_iva_descontable": cuenta_iva_descontable,
-              "cuenta_clientes": cuenta_clientes,
-              "cuenta_iva_generado": cuenta_iva_generado}
-    if any(nuevas.values()):
-        actual = dict(conn.execute("SELECT * FROM empresa_info").fetchone() or {})
-        conn.execute(
-            "UPDATE empresa_info SET cuenta_proveedores = ?, cuenta_iva_descontable = ?,"
-            " cuenta_clientes = ?, cuenta_iva_generado = ?",
-            tuple((nuevas[k] or actual.get(k) or "").strip() or None for k in nuevas))
-
-    es_venta = (a.get("naturaleza") or "compra") == documentos_module.NATURALEZA_VENTA
-    # La regla, para que la próxima factura de este tercero salga sola.
-    if aprender_regla and cuenta_puc and a.get("tercero_nit"):
-        causacion_module.aprender(
-            conn, cuenta_puc=cuenta_puc, tercero_nit=a["tercero_nit"],
-            patron=(patron or "").strip() or None,
-            concepto_retencion_id=None if es_venta else concepto_retencion_id,
-            # «A este proveedor no se le retiene», dicho por él. Va a la regla
-            # para que las siguientes facturas no vuelvan a preguntarlo.
-            sin_retencion=sin_retencion and not es_venta,
-            naturaleza=a.get("naturaleza") or documentos_module.NATURALEZA_COMPRA,
-            iva_codigo=iva_codigo,
-            retenciones_cliente=(retenciones_cliente or "").strip() or None if es_venta else None)
-
-    # Se rehace el asiento con lo corregido y se marca aprobado.
-    # El documento puede venir del XML o del Excel: `aprobar` tiene que mirar en
-    # los dos sitios. Buscándolo solo por XML, en un mes sin XML la corrección
-    # del contador no se aplicaba a ninguna línea — y él la veía ignorada.
-    documento = next(
-        (d for d in documentos_module.documentos_a_causar(conn, a["periodo"])
-         if d["cufe"] == a["cufe"]), None)
-    if documento is not None:
-        info = dict(conn.execute("SELECT * FROM empresa_info").fetchone() or {})
-        perfil = perfil_module.perfil_vigente(conn, fecha=f"{a['periodo']}-01")
-        propuesta = causacion_module.proponer(conn, documento)
-        if cuenta_puc:
-            propuesta.cuenta_puc = cuenta_puc
-            propuesta.seguro = True
-        if concepto_retencion_id:
-            propuesta.concepto_retencion_id = concepto_retencion_id
-            propuesta.sin_retencion = False
-        elif sin_retencion:
-            propuesta.sin_retencion = True
-        if (iva_codigo or "").strip():
-            propuesta.iva_codigo = iva_codigo.strip()
-        if (retenciones_cliente or "").strip():
-            propuesta.retenciones_cliente = retenciones_cliente.strip()
-        calculo = _calcular_retenciones(
-            conn, perfil=perfil, documento=documento, propuesta=propuesta,
-            tercero_decidido=True)   # la está aprobando una persona
-        lineas, avisos = _lineas_de(
-            documento, propuesta, calculo, cuentas=_cuentas_de(info),
-            responsable_iva=bool(perfil and perfil.get("responsable_iva")),
-            catalogo=siigo_module.catalogo(conn),
-            codigo_iva=_codigo_iva(conn, propuesta, _d(documento.get("total_impuestos")),
-                                   _d(documento.get("subtotal"))),
-            codigos_concepto=_codigos_concepto(conn))
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("DELETE FROM asiento_linea WHERE asiento_id = ?", (a["id"],))
-        _escribir_lineas(conn, a["id"], lineas)
-        conn.execute(
-            "UPDATE asiento_propuesto SET avisos = ? WHERE id = ?",
-            (json.dumps(avisos, ensure_ascii=False) if avisos else None, a["id"]))
+    if a["editado"]:
+        guardada = json.loads(a["correccion"]) if a.get("correccion") else {}
+        # Lo que eligió al guardar, salvo que ahora diga otra cosa.
+        c = dict(guardada)
+        for k, v in dados.items():
+            if k != "aprender_regla" and v not in (None, "", False):
+                c[k] = v
+        if "aprender_regla" not in c:
+            c["aprender_regla"] = aprender_regla
+        propias = [Linea(r["cuenta_puc"], r["descripcion"] or "", debito=_d(r["debito"]),
+                         credito=_d(r["credito"]), rol=r["rol"])
+                   for r in conn.execute("SELECT * FROM asiento_linea WHERE asiento_id = ?"
+                                         " ORDER BY orden", (a["id"],))]
+        problemas = _problemas(propias)
+        if problemas:
+            raise ValueError("No se puede aprobar: " + " ".join(problemas))
+        principal = next((x for x in propias if x.rol in (ROL_GASTO, ROL_INGRESO)), None)
+        sin_iva = next((x for x in propias if x.rol == ROL_NO_GRAVADO and x.cuenta_puc), None)
+        _aprender(conn, a, cuenta_puc=c.get("cuenta_puc") or (principal.cuenta_puc if principal else None),
+                  correccion=c, cuenta_no_gravada=sin_iva.cuenta_puc if sin_iva else None)
+    else:
+        _aprender(conn, a, cuenta_puc=cuenta_puc, correccion=dados, cuenta_no_gravada=None)
+        # Se rehace el asiento con lo corregido.
+        documento = _documento_de(conn, a)
+        if documento is not None:
+            ctx = _contexto(conn, a["periodo"])
+            propuesta = _propuesta_corregida(conn, documento, dados)
+            nuevas, avisos, _estado = _armar(conn, ctx, documento, propuesta, tercero_decidido=True)
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute("DELETE FROM asiento_linea WHERE asiento_id = ?", (a["id"],))
+            _escribir_lineas(conn, a["id"], nuevas)
+            conn.execute(
+                "UPDATE asiento_propuesto SET avisos = ? WHERE id = ?",
+                (json.dumps(avisos, ensure_ascii=False) if avisos else None, a["id"]))
 
     conn.execute(
         "UPDATE asiento_propuesto SET aprobado = 1, estado = ?,"
@@ -567,17 +867,71 @@ def aprobar(
     return listar_uno(conn, a["id"])
 
 
-def aprobar_lote(conn, periodo: str) -> dict[str, Any]:
-    """Aprueba de un golpe lo que ya estaba completo. Lo marcado NO se toca."""
-    ids = [r["id"] for r in conn.execute(
-        "SELECT id FROM asiento_propuesto WHERE periodo = ? AND estado = ?"
-        " AND aprobado = 0", (periodo, ESTADO_COMPLETO)).fetchall()]
-    for i in ids:
-        conn.execute(
-            "UPDATE asiento_propuesto SET aprobado = 1, aprobado_at = datetime('now')"
-            " WHERE id = ?", (i,))
+def _aprender(conn, a, *, cuenta_puc, correccion, cuenta_no_gravada) -> None:
+    """La regla, para que la próxima factura de este tercero salga sola."""
+    if not (correccion.get("aprender_regla", True) and cuenta_puc and a.get("tercero_nit")):
+        return
+    es_venta = (a.get("naturaleza") or "compra") == documentos_module.NATURALEZA_VENTA
+    concepto = correccion.get("concepto_retencion_id")
+    sin_retencion = bool(correccion.get("sin_retencion"))
+    if not concepto and not sin_retencion and not es_venta:
+        # No eligió retención en esta pantalla: se conserva lo que ya se sabía
+        # —la de las líneas, o la de la regla—. Sin esto, guardar un asiento
+        # editado y aprobarlo le borraba el concepto a la regla del proveedor.
+        fila = conn.execute(
+            "SELECT concepto_id FROM asiento_linea WHERE asiento_id = ? AND rol = ?"
+            " AND concepto_id IS NOT NULL LIMIT 1", (a["id"], ROL_RETENCION)).fetchone()
+        regla = conn.execute(
+            "SELECT concepto_retencion_id, sin_retencion FROM regla_causacion WHERE id = ?",
+            (a.get("regla_id") or 0,)).fetchone()
+        if fila:
+            concepto = fila["concepto_id"]
+        elif regla:
+            concepto, sin_retencion = regla["concepto_retencion_id"], bool(regla["sin_retencion"])
+    causacion_module.aprender(
+        conn, cuenta_puc=cuenta_puc, tercero_nit=a["tercero_nit"],
+        patron=(correccion.get("patron") or "").strip() or None,
+        concepto_retencion_id=None if es_venta or not concepto else int(concepto),
+        # «A este proveedor no se le retiene», dicho por él. Va a la regla
+        # para que las siguientes facturas no vuelvan a preguntarlo.
+        sin_retencion=sin_retencion and not es_venta,
+        naturaleza=a.get("naturaleza") or documentos_module.NATURALEZA_COMPRA,
+        iva_codigo=correccion.get("iva_codigo"),
+        retenciones_cliente=((correccion.get("retenciones_cliente") or "").strip() or None)
+        if es_venta else None,
+        cuenta_no_gravada=cuenta_no_gravada)
+
+
+def aprobar_lote(conn, periodo: str, ids: list[int] | None = None) -> dict[str, Any]:
+    """Aprueba de un golpe los marcados, o todos los listos si no marcó ninguno.
+
+    Solo entra lo que está listo: lo que falta decidir no se aprueba en bloque.
+    Uno guardado a mano aprende su regla igual que si lo aprobara solo.
+    """
+    sql = ("SELECT id, estado, editado FROM asiento_propuesto WHERE periodo = ?"
+           " AND aprobado = 0")
+    args: list[Any] = [periodo]
+    if ids is not None:
+        sql += f" AND id IN ({','.join('?' * len(ids))})" if ids else " AND 0"
+        args += [int(i) for i in ids]
+    aprobados, omitidos = 0, 0
+    for fila in conn.execute(sql, args).fetchall():
+        if fila["estado"] != ESTADO_COMPLETO:
+            omitidos += 1
+            continue
+        if fila["editado"]:
+            try:
+                aprobar(conn, fila["id"])
+            except ValueError:
+                omitidos += 1
+                continue
+        else:
+            conn.execute(
+                "UPDATE asiento_propuesto SET aprobado = 1, aprobado_at = datetime('now')"
+                " WHERE id = ?", (fila["id"],))
+        aprobados += 1
     conn.commit()
-    return {"aprobados": len(ids), **resumen(conn, periodo)}
+    return {"aprobados": aprobados, "omitidos": omitidos, **resumen(conn, periodo)}
 
 
 def desaprobar(conn, asiento_id: int) -> dict[str, Any]:
