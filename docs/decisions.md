@@ -1343,3 +1343,20 @@ salga completo —códigos de impuesto, tipos de comprobante, las retenciones qu
 le practican a la empresa en sus ventas, la nómina— se pide con nombre en vez
 de inventarse: una celda vacía que él rellena es mejor que un código supuesto
 que Siigo acepta y contabiliza mal.
+
+## D-129 — La cuenta del impuesto la decide el catálogo de Siigo, por contexto ✅
+
+**Decisión**: con el catálogo de impuestos de la empresa cargado
+(`siigo_impuesto`: código × contexto → cuenta), la cuenta de cada línea de IVA
+y de retención sale de ahí según el contexto del asiento —venta, compra,
+devolución en venta, devolución en compra—. Las cuentas de IVA de la empresa
+(D-127) y la cuenta del concepto de retención quedan de respaldo cuando no hay
+catálogo. Qué IVA factura un tercero (bienes o servicios) es una decisión del
+contador que la regla recuerda (`iva_codigo`); servicios es el valor por
+defecto cuando hay dos códigos para la misma tarifa.
+
+**Por qué**: el catálogo real (2026-10-28) trae cada código cuatro veces con
+cuatro cuentas distintas. Una «cuenta del IVA descontable» por empresa era una
+simplificación que ya estaba mal para la nota crédito de venta y lo estaba para
+bienes contra servicios. Leer la cuenta del catálogo es lo único que coincide
+con lo que Siigo espera, y es lo que el contador ya tiene escrito.

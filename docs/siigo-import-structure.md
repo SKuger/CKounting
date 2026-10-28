@@ -87,6 +87,27 @@ de la DIAN. El archivo que Contab genera lleva **solo lo que causó**; el contad
 sigue añadiendo lo demás a mano en el mismo formato, o se le da un sitio donde
 pegar sus filas para que salga un solo archivo. Eso es una decisión suya.
 
+## El catálogo real: un código, cuatro cuentas
+
+El catálogo que mandó el contador el 2026-10-28 (106 filas, hojas «Hoja1» y
+«Hoja2») enseñó que **un código de impuesto de Siigo no tiene una cuenta: tiene
+cuatro**, una por contexto, y el archivo las trae como cuatro bloques sin
+columna que lo diga:
+
+| Contexto | Cómo se reconoce | IVA 19 % servicios (`02`) | Compras 2,5 % (`17`) |
+|---|---|---|---|
+| venta | cuenta `1355…` (lo que me retienen) o `2408 05…` | `24080504` | `13551519` |
+| compra | cuenta `2365/2367/2368…` o `2408 1…` | `24081501` | `23654001` |
+| dev_venta | como venta, con «Dev» en la descripción | `24082004` | `13551520` |
+| dev_compra | como compra, con «Dev» en la descripción | `24080604` | `23654002` |
+
+Con el catálogo cargado (`siigo_impuesto`), **la cuenta de cada línea de IVA y
+de retención sale de él** según el contexto del asiento; las cuatro cuentas de
+la empresa (D-127) quedan de respaldo. Y como hay dos códigos de IVA por
+tarifa —bienes y servicios—, qué IVA factura un proveedor es lo único del IVA
+que el documento no dice: se elige al aprobar y la regla lo recuerda
+(`regla_causacion.iva_codigo`); servicios es el valor por defecto.
+
 ## Cómo entra el catálogo de cada empresa
 
 El contador manda **un Excel por empresa** y carga las demás él mismo desde el
