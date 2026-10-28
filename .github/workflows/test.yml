@@ -1,12 +1,16 @@
 name: Tests
 
-# Corre en cada push y cada PR sobre main/develop. Es la red de seguridad que faltaba:
-# hasta ahora los tests de Python solo corrían si alguien se acordaba localmente.
+# Corre en cada push a develop y a las ramas de trabajo. Es la red de seguridad que
+# faltaba: hasta ahora los tests de Python solo corrían si alguien se acordaba localmente.
+#
+# Solo `push`, sin `pull_request` ni `main` (2026-10-28): con los dos disparadores,
+# cada commit de un PR develop→main corría la batería completa DOS veces, y otra más
+# al mergear — tres corridas con dos trabajos en Windows por cambio. En octubre eso
+# agotó la cuota gratis de Actions de la cuenta y bloqueó los releases cuatro días.
+# El PR igual muestra los checks: son del mismo commit, vengan del evento que vengan.
 on:
   push:
-    branches: ['main', 'develop', 'fix/**', 'feat/**']
-  pull_request:
-    branches: ['main', 'develop']
+    branches: ['develop', 'fix/**', 'feat/**']
 
 concurrency:
   group: tests-${{ github.ref }}
