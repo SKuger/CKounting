@@ -123,11 +123,15 @@ def test_la_cuenta_de_la_parte_sin_iva_se_aprende_al_aprobar(conn):
     regla = causacion.proponer(conn, {"tercero_nit": "800100200", "naturaleza": "compra"})
     assert regla.cuenta_no_gravada == "51953501"
 
-    # El mes siguiente la misma factura ya sale completa.
+    # El mes siguiente la cuenta se propone, pero el asiento queda para que él
+    # la mire: «depende de la factura» (el contador, 2026-10-29).
     asiento.desaprobar(conn, a["id"])
     asiento.descartar(conn, a["id"])
     a = _uno(conn)
-    assert a["estado"] == asiento.ESTADO_COMPLETO, a["avisos"]
+    sin_iva = next(x for x in a["lineas"] if x["rol"] == "no_gravado")
+    assert sin_iva["cuenta_puc"] == "51953501"
+    assert a["estado"] == asiento.ESTADO_REVISAR
+    assert any("depende de la factura" in x for x in a["avisos"])
 
 
 def test_cada_tarifa_toma_su_codigo_y_su_cuenta_del_catalogo(conn):
@@ -200,7 +204,7 @@ def test_se_pueden_agregar_y_quitar_lineas(conn):
     sin_la_nueva = [x for x in g["lineas"] if x["cuenta_puc"] != "51352001"]
     g = asiento.guardar(conn, a["id"], sin_la_nueva)
     assert g["estado"] == asiento.ESTADO_REVISAR
-    assert any("no cuadra por 500000 pesos: sobra en el crédito" in x for x in g["avisos"])
+    assert any("no cuadra por 500.000 pesos: sobra en el crédito" in x for x in g["avisos"])
 
 
 def test_un_asiento_que_no_cuadra_se_guarda_pero_no_se_aprueba(conn):
@@ -320,3 +324,118 @@ def test_aprobar_un_asiento_editado_no_le_borra_la_retencion_a_la_regla(conn):
     asiento.aprobar(conn, a["id"], lineas=lineas)
     regla = causacion.proponer(conn, {"tercero_nit": "800100200", "naturaleza": "compra"})
     assert regla.concepto_retencion_id == concepto
+
+
+# ───────────── sin XML: la tarifa sale del PDF o se deduce (2026-10-29) ─────────
+
+TABLA_PDF = """
+                     [DISCRIMINACIÓN DE IMPUESTOS]
+                     DESCRIPCION BASE/CANT IMPUESTO
+                         IVA 5%: 40.000,00 2.000,00
+                         IVA 0%: 10.000,00      0,00
+                        IVA 19%: 10.000,00 1.900,00
+"""
+
+
+def test_la_tabla_de_impuestos_del_pdf_se_lee_y_se_verifica():
+    from contab_core import pdf_impuestos as p
+    filas = p.desglose_del_texto(TABLA_PDF)
+    assert [(str(t), str(b), str(v)) for t, b, v in filas] == [
+        ("5", "40000.00", "2000.00"), ("0", "10000.00", "0.00"), ("19", "10000.00", "1900.00")]
+    assert p.verificar(filas, subtotal=Decimal("60000"), iva=Decimal("3900"))
+    assert not p.verificar(filas, subtotal=Decimal("60000"), iva=Decimal("3950")), \
+        "si no da el IVA del reporte, no se usa"
+    assert not p.verificar(filas, subtotal=Decimal("50000"), iva=Decimal("3900")), \
+        "las bases no pueden pasar del subtotal"
+
+
+def test_los_montos_se_leen_con_punto_o_coma():
+    from contab_core.pdf_impuestos import _monto
+    assert _monto("14.487,39") == _monto("14,487.39") == Decimal("14487.39")
+    assert _monto("1.500.000") == Decimal("1500000")
+
+
+def _de_excel(subtotal, iva):
+    total = Decimal(subtotal) + Decimal(iva)
+    return {"cufe": "c" * 96, "naturaleza": "compra", "subtotal": subtotal,
+            "total_impuestos": iva, "total": str(total), "origen": "excel",
+            "impuestos": [{"tipo": "01", "base": subtotal, "tarifa": None, "valor": iva}]}
+
+
+def test_sin_xml_la_factura_mixta_toma_las_tarifas_del_pdf(conn, monkeypatch):
+    from contab_core import pdf_impuestos as p
+    monkeypatch.setattr(p, "desglose_del_pdf", lambda *a, **k: p.desglose_del_texto(TABLA_PDF))
+    doc, aviso = asiento._con_tarifas(conn, {"nit": ""}, _de_excel("60000", "3900"))
+    partes = asiento.desglose_de(doc)
+    assert [t for t, _b, _v in partes.ivas] == ["19", "5"]
+    assert partes.base_gravada == Decimal("50000"), "lo del 0 % queda sin IVA"
+    assert "del PDF" in aviso
+
+
+def test_sin_pdf_una_tarifa_parcial_se_deduce(conn, monkeypatch):
+    """La compra de septiembre: 125.700 con IVA de 2.388,30 → base 12.570 al 19 %."""
+    from contab_core import pdf_impuestos as p
+    monkeypatch.setattr(p, "desglose_del_pdf", lambda *a, **k: None)
+    doc, aviso = asiento._con_tarifas(conn, {"nit": ""}, _de_excel("125700", "2388.30"))
+    partes = asiento.desglose_de(doc)
+    assert partes.ivas == [("19", Decimal("12570.00"), Decimal("2388.30"))]
+    assert "19 %" in aviso
+
+
+def test_si_no_se_puede_saber_la_tarifa_se_dice(conn, monkeypatch):
+    from contab_core import pdf_impuestos as p
+    monkeypatch.setattr(p, "desglose_del_pdf", lambda *a, **k: None)
+    doc, aviso = asiento._con_tarifas(conn, {"nit": ""}, _de_excel("80044.53", "4985.46"))
+    assert asiento.desglose_de(doc) is None
+    assert "Repártelo en las líneas" in aviso
+
+
+def test_con_el_19_por_ciento_entero_no_se_busca_nada(conn, monkeypatch):
+    from contab_core import pdf_impuestos as p
+
+    def no(*a, **k):
+        raise AssertionError("no tenía que abrir el PDF")
+    monkeypatch.setattr(p, "desglose_del_pdf", no)
+    _doc, aviso = asiento._con_tarifas(conn, {"nit": ""}, _de_excel("100000", "19000"))
+    assert aviso is None
+
+
+def test_los_centavos_del_documento_se_conservan(conn):
+    doc = conn.execute("SELECT id FROM documento").fetchone()["id"]
+    conn.execute("DELETE FROM documento_impuesto WHERE documento_id = ? AND linea_id IS NULL"
+                 " AND es_retencion = 0", (doc,))
+    conn.execute("INSERT INTO documento_impuesto(documento_id, tipo, nombre, base, tarifa, valor)"
+                 " VALUES (?, '01', 'IVA', '12570', '19.00', '2388.30')", (doc,))
+    conn.execute("UPDATE documento SET subtotal = '125700', total_impuestos = '2388.30',"
+                 " total = '128088.30' WHERE id = ?", (doc,))
+    conn.commit()
+    asiento.generar(conn, "2026-09")
+    lineas = _uno(conn)["lineas"]
+    iva = next(x for x in lineas if x["rol"] == "iva")
+    assert Decimal(iva["debito"]) == Decimal("2388.30")
+    assert _cuadra(lineas)
+
+
+# ─────────────────────────── el archivo de Siigo ──────────────────────────────
+
+def test_un_aprobado_que_no_cuadra_no_sale_en_el_archivo(conn, tmp_path):
+    asiento.generar(conn, "2026-09")
+    a = _uno(conn)
+    asiento.aprobar(conn, a["id"])
+    # Como uno aprobado en una versión vieja, sin su línea de IVA.
+    conn.execute("DELETE FROM asiento_linea WHERE asiento_id = ? AND rol = 'iva'", (a["id"],))
+    conn.commit()
+    siigo.guardar_config(conn, {"tipo:compra": "11", "ultimo:11": "0"})
+    r = siigo.export_siigo(conn, "2026-09", tmp_path)
+    assert r["comprobantes"] == 0 and len(r["no_salen"]) == 1
+    assert _uno(conn)["siigo_consecutivo"] is None, "no gasta consecutivo"
+
+
+def test_lo_aprobado_sin_numero_lo_recupera_al_volver_a_armar(conn):
+    asiento.generar(conn, "2026-09")
+    a = _uno(conn)
+    asiento.aprobar(conn, a["id"])
+    conn.execute("UPDATE asiento_propuesto SET numero = NULL WHERE id = ?", (a["id"],))
+    conn.commit()
+    asiento.generar(conn, "2026-09")
+    assert _uno(conn)["numero"]

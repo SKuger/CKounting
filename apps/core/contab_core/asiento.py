@@ -51,6 +51,7 @@ from typing import Any
 
 from . import causacion as causacion_module
 from . import documentos as documentos_module
+from . import pdf_impuestos
 from . import perfil_fiscal as perfil_module
 from . import retenciones as retenciones_module
 from . import siigo as siigo_module
@@ -125,6 +126,21 @@ def _d(v: Any) -> Decimal:
     return v if isinstance(v, Decimal) else Decimal(str(v))
 
 
+def _centavos(v: Decimal) -> Decimal:
+    """Los valores del documento van como los trae, con centavos: así los
+    registra el contador (9 de 16 líneas de IVA de sus compras de septiembre)."""
+    return v.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _plata(v: Decimal) -> str:
+    """2388.3 → «2.388,30»; 500000 → «500.000». Como se lee en Colombia."""
+    q = _centavos(v)
+    entero = int(abs(q))
+    centavos = int((abs(q) - entero) * 100)
+    texto = f"{entero:,}".replace(",", ".") + (f",{centavos:02d}" if centavos else "")
+    return ("-" if q < 0 else "") + texto
+
+
 def _pesos(v: Decimal) -> Decimal:
     return v.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
 
@@ -190,10 +206,10 @@ def desglose_de(documento: dict[str, Any]) -> Desglose | None:
             otros += valor
     if not por_tarifa and otros == CERO:
         return None
-    ivas = [(t, _pesos(b), _pesos(v)) for t, (b, v) in sorted(
+    ivas = [(t, _centavos(b), _centavos(v)) for t, (b, v) in sorted(
         por_tarifa.items(), key=lambda kv: -_d(kv[0])) if v != CERO]
     return Desglose(ivas=ivas, base_gravada=sum((b for _t, b, _v in ivas), CERO),
-                    otros=_pesos(otros))
+                    otros=_centavos(otros))
 
 
 def config_iva(conn) -> dict[str, Any]:
@@ -335,6 +351,12 @@ def generar(
         res.total += 1
         # Lo aprobado y lo que él guardó a mano no se rehace: sería borrarle el trabajo.
         if ya and (ya["aprobado"] or ya["editado"]):
+            # Lo aprobado en una versión vieja no tenía número ni tipo: sin el
+            # número, el archivo de Siigo salía sin la factura en la cartera.
+            conn.execute(
+                "UPDATE asiento_propuesto SET numero = COALESCE(numero, ?),"
+                " tipo_doc = COALESCE(tipo_doc, ?) WHERE id = ?",
+                (documento.get("numero"), documento.get("tipo"), ya["id"]))
             if ya["aprobado"] or ya["estado"] == ESTADO_COMPLETO:
                 res.completos += 1
             else:
@@ -357,6 +379,58 @@ def generar(
     return res.como_dict()
 
 
+TARIFAS_IVA = (Decimal("19"), Decimal("5"))
+
+
+def _deducir_tarifa(subtotal: Decimal, iva: Decimal) -> list[tuple[Decimal, Decimal, Decimal]] | None:
+    """Sin XML ni PDF legible: si el IVA es el 19 % exacto de una parte del
+    subtotal, esa parte es la gravada y el resto no lleva IVA. Así salió la
+    compra de 125.700 con IVA de 2.388,30 que el contador registró con base
+    12.570. El 5 % no se intenta: con centavos casi cualquier IVA lo «es»."""
+    t = Decimal("19")
+    base = _centavos(abs(iva) * 100 / t)
+    if base != base.to_integral() or base >= abs(subtotal):
+        return None
+    if _centavos(base * t / 100) != abs(iva):
+        return None
+    return [(t, base, abs(iva))]
+
+
+def _con_tarifas(conn, ctx, documento) -> tuple[dict[str, Any], str | None]:
+    """El documento con su IVA por tarifa, cuando el reporte no lo trae.
+
+    Primero el XML (ya lo trae); si no, la tabla de impuestos del PDF, verificada
+    contra el reporte; si no, una tarifa parcial deducida. Si el IVA es el 19 o
+    el 5 % del subtotal entero no hay nada que buscar."""
+    if desglose_de(documento) is not None:
+        return documento, None
+    if (documento.get("naturaleza") or "compra") == documentos_module.NATURALEZA_DOC_SOPORTE:
+        return documento, None
+    subtotal, iva = _d(documento.get("subtotal")), _d(documento.get("total_impuestos"))
+    if iva == CERO or subtotal == CERO:
+        return documento, None
+    tasa = abs(iva) / abs(subtotal) * 100
+    if any(abs(tasa - t) < Decimal("0.05") for t in TARIFAS_IVA):
+        return documento, None
+    cache = ctx.setdefault("pdf_tarifas", {})
+    if documento["cufe"] not in cache:
+        cache[documento["cufe"]] = pdf_impuestos.desglose_del_pdf(
+            conn, documento["cufe"], subtotal=subtotal, iva=iva, clave=ctx.get("nit"))
+    filas, de_donde = cache[documento["cufe"]], "del PDF de la factura"
+    if not filas:
+        filas, de_donde = _deducir_tarifa(subtotal, iva), "de dividir el IVA entre el 19 %"
+    if not filas:
+        return documento, (
+            f"El IVA ({_plata(iva)}) no es el 19 % ni el 5 % del subtotal y no se pudo leer "
+            "la tarifa: puede traer varias tarifas o una parte sin IVA. Repártelo en las líneas.")
+    signo = -1 if iva < CERO else 1
+    impuestos = [{"tipo": "01", "nombre": "IVA", "base": str(b * signo), "tarifa": str(t),
+                  "valor": str(v * signo), "es_retencion": False} for t, b, v in filas]
+    tarifas = ", ".join(f"{_tarifa_txt(t)} %" for t, _b, v in filas if v)
+    return ({**documento, "impuestos": impuestos},
+            f"Las tarifas de IVA ({tarifas}) salieron {de_donde}; revísalas.")
+
+
 def _contexto(conn, periodo: str) -> dict[str, Any]:
     """Lo que no cambia de un documento a otro del mes: se lee una vez."""
     return {
@@ -365,12 +439,14 @@ def _contexto(conn, periodo: str) -> dict[str, Any]:
         "catalogo": siigo_module.catalogo(conn),
         "codigos_concepto": _codigos_concepto(conn),
         "iva": config_iva(conn),
+        "nit": (dict(conn.execute("SELECT nit FROM empresa_info").fetchone() or {}).get("nit") or ""),
     }
 
 
 def _armar(conn, ctx, documento, propuesta, *, tercero_decidido: bool | None):
     """Las líneas, los avisos y el estado de un documento con esta propuesta."""
     perfil, cuentas, catalogo = ctx["perfil"], ctx["cuentas"], ctx["catalogo"]
+    documento, aviso_tarifa = _con_tarifas(conn, ctx, documento)
     calculo = _calcular_retenciones(
         conn, perfil=perfil, documento=documento, propuesta=propuesta,
         tercero_decidido=(_ya_lo_decidio(propuesta) if tercero_decidido is None
@@ -386,6 +462,8 @@ def _armar(conn, ctx, documento, propuesta, *, tercero_decidido: bool | None):
         avisos.append(
             "Sin el XML de este documento: se propuso con el total y el IVA "
             "del reporte de la DIAN, sin el detalle por línea ni por tarifa.")
+    if aviso_tarifa:
+        avisos.append(aviso_tarifa)
     if not propuesta.seguro:
         avisos.insert(0, propuesta.por_que)
 
@@ -395,9 +473,10 @@ def _armar(conn, ctx, documento, propuesta, *, tercero_decidido: bool | None):
     # retiene no se aprueba en lote: la cartera saldría por el total.
     no_se_sabe = bool(es_venta and catalogo and propuesta.retenciones_cliente is None)
     sin_cuenta = any(not ln.cuenta_puc for ln in lineas)
+    sin_iva = any(ln.rol == ROL_NO_GRAVADO for ln in lineas)
     estado = (ESTADO_COMPLETO
               if (propuesta.seguro and not calculo.revisar and contrapartida
-                  and not no_se_sabe and not sin_cuenta)
+                  and not no_se_sabe and not sin_cuenta and not sin_iva)
               else ESTADO_REVISAR)
     return lineas, avisos, estado
 
@@ -427,9 +506,9 @@ def _lineas_de(
     codigos_concepto = codigos_concepto or {}
     naturaleza = documento.get("naturaleza") or documentos_module.NATURALEZA_COMPRA
     contexto = siigo_module.contexto_de(naturaleza, documento.get("tipo"))
-    subtotal = _pesos(_d(documento.get("subtotal")))
-    iva = _pesos(_d(documento.get("total_impuestos")))
-    total = _pesos(_d(documento.get("total")))
+    subtotal = _centavos(_d(documento.get("subtotal")))
+    iva = _centavos(_d(documento.get("total_impuestos")))
+    total = _centavos(_d(documento.get("total")))
     nombre = documento.get("tercero_nombre") or documento.get("emisor_nombre")
     iva_cfg = iva_cfg or {"por_tarifa": {}, "tarifa_de": {}}
 
@@ -443,7 +522,7 @@ def _lineas_de(
         tramos = [(t, b, v, _codigo_de_tarifa(iva_cfg, propuesta, t, unica)) for t, b, v in partes.ivas]
         iva, otros = partes.iva, partes.otros
         no_gravado = subtotal - partes.base_gravada if partes.ivas and responsable_iva else CERO
-        if no_gravado < Decimal("1"):
+        if abs(no_gravado) < Decimal("1"):
             no_gravado = CERO
     else:
         tramos = [(None, subtotal, iva, codigo_iva)] if iva != CERO else []
@@ -465,10 +544,16 @@ def _lineas_de(
     def la_parte_sin_iva(lado: str) -> list[Linea]:
         if no_gravado == CERO:
             return []
-        if not propuesta.cuenta_no_gravada:
+        # Depende de la factura (el contador, 2026-10-29): la cuenta de la vez
+        # anterior se propone, pero el asiento queda para que él la mire.
+        if propuesta.cuenta_no_gravada:
             avisos.append(
-                f"{no_gravado} pesos de este documento no llevan IVA y van a su propia "
-                "cuenta: escríbala en la línea «Parte no gravada» y se recordará.")
+                f"{_plata(no_gravado)} pesos de este documento no llevan IVA. Se propuso la cuenta "
+                "de la última vez; revísala, porque depende de la factura.")
+        else:
+            avisos.append(
+                f"{_plata(no_gravado)} pesos de este documento no llevan IVA y van a su propia "
+                "cuenta: escríbela en la línea «Parte no gravada».")
         ln = Linea(propuesta.cuenta_no_gravada, "Parte no gravada", rol=ROL_NO_GRAVADO)
         setattr(ln, lado, no_gravado)
         return [ln]
@@ -524,7 +609,7 @@ def _lineas_de(
 
         # El crédito al proveedor es el resto: así cuadra por construcción.
         base_credito = total if total > CERO else subtotal + iva + otros
-        por_pagar = _pesos(base_credito - retenido)
+        por_pagar = _centavos(base_credito - retenido)
         lineas.append(Linea(cuentas["cuenta_proveedores"] or None, "Proveedores",
                             credito=por_pagar, rol=ROL_CARTERA))
 
@@ -731,7 +816,7 @@ def _problemas(lineas: list[Linea]) -> list[str]:
     descuadre = sum((x.debito for x in lineas), CERO) - sum((x.credito for x in lineas), CERO)
     if descuadre != CERO:
         lado = "el débito" if descuadre > CERO else "el crédito"
-        problemas.append(f"El asiento no cuadra por {abs(descuadre)} pesos: sobra en {lado}.")
+        problemas.append(f"El asiento no cuadra por {_plata(abs(descuadre))} pesos: sobra en {lado}.")
     return problemas
 
 
