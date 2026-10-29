@@ -284,6 +284,23 @@ const faltanCuentas = computed(() =>
 // en lo demás, la del gasto (la primera).
 const lineaDecidida = (a: Asiento) => (a.naturaleza === 'venta' ? a.lineas[1] : a.lineas[0])
 
+// Lo que se eligió arriba del editor, leído de las líneas: un aprobado no tiene
+// editor, pero él quiere ver con qué quedó (el contador, 2026-10-29).
+function loElegido(a: Asiento) {
+  const principales = a.lineas.filter((l) => l.rol === (a.naturaleza === 'venta' ? 'ingreso' : 'gasto'))
+  const cuentas = [...new Set(principales.map((l) => l.cuenta_puc).filter(Boolean))]
+  const retenciones = a.lineas.filter((l) => l.rol === 'retencion').map((l) => l.descripcion)
+  const codigos = [...new Set(a.lineas.filter((l) => l.rol === 'iva').map((l) => l.codigo_siigo).filter(Boolean))]
+  return {
+    cuenta: cuentas.join(' · ') || lineaDecidida(a)?.cuenta_puc || '—',
+    retencion: retenciones.join(' · ') || 'Ninguna',
+    iva: codigos.map((c) => {
+      const nombre = ivas.value.find((i) => i.codigo === c)?.nombre
+      return nombre ? `${c} · ${nombre}` : c
+    }).join(', '),
+  }
+}
+
 // ── El editor de líneas (observaciones del contador, 2026-10-28) ──────────────
 // Lo que se ve en el panel abierto es un BORRADOR: él cambia cuentas, valores y
 // el tercero de cada línea, agrega o quita líneas, y lo guarda sin aprobar o lo
@@ -808,6 +825,21 @@ onMounted(cargar)
               </ul>
 
               <!-- aprobado: solo se mira -->
+              <div v-if="a.aprobado" class="mb-3 flex flex-wrap items-end gap-x-6 gap-y-2 text-xs">
+                <div class="grid gap-0.5">
+                  <span class="text-muted-foreground">{{ a.naturaleza === 'venta' ? 'Cuenta del ingreso' : 'Cuenta del gasto' }}</span>
+                  <span class="font-mono">{{ loElegido(a).cuenta }}</span>
+                </div>
+                <div v-if="a.naturaleza !== 'venta'" class="grid gap-0.5">
+                  <span class="text-muted-foreground">Retención en la fuente</span>
+                  <span>{{ loElegido(a).retencion }}</span>
+                </div>
+                <div v-if="loElegido(a).iva" class="grid gap-0.5">
+                  <span class="text-muted-foreground">IVA (código de Siigo)</span>
+                  <span>{{ loElegido(a).iva }}</span>
+                </div>
+                <span class="text-muted-foreground">Aprobado: para cambiarlo, deshaz la aprobación (↶).</span>
+              </div>
               <table v-if="a.aprobado" class="w-full text-xs">
                 <thead>
                   <tr class="text-left text-[10px] uppercase text-muted-foreground">
