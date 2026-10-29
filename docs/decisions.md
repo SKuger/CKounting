@@ -1469,6 +1469,24 @@ parte, a un tercero — eso no está en el Excel y se ajusta a mano.
   sale una sola línea de IVA, como antes, y se reparte a mano en el editor.
 - Cambiar la retención o el IVA arriba del editor rehace los impuestos y la
   cartera; el reparto que él hizo a mano se conserva.
+- **Sin XML, la tarifa se busca** (2026-10-29). Si el IVA del reporte no es
+  el 19 ni el 5 % del subtotal, se lee la tabla de impuestos del **PDF de
+  soporte** («IVA 19%: base valor»), y solo se usa si su IVA suma el del
+  reporte y sus bases no pasan del subtotal. Si no hay PDF legible, una sola
+  tarifa parcial se deduce cuando el IVA es el 19 % exacto de una parte (la
+  compra de 125.700 con IVA de 2.388,30 que él registró con base 12.570). Si
+  nada sirve, se dice y él lo reparte.
+- **El tercero que cambia es el de la línea.** Las retenciones y el IVA quedan
+  a nombre de quien facturó (respuesta del contador, 2026-10-29).
+- **La parte no gravada depende de la factura** (respuesta del contador): se
+  propone la cuenta de la última vez, pero el asiento queda por revisar.
+- **Los centavos se conservan** como los trae el documento: así registra él
+  (9 de 16 líneas de IVA de sus compras de septiembre llevan centavos).
+- **El archivo de Siigo no lleva comprobantes que no cuadran** o con una línea
+  sin cuenta: salen nombrados y no gastan consecutivo. En su primer archivo
+  real salió una compra aprobada en una versión vieja sin su línea de IVA,
+  descuadrada por 2.388 pesos. Y armar la propuesta llena el número de factura
+  de lo aprobado en versiones que no lo guardaban.
 
 **Por qué**: el contador quiere verificar antes de aprobar y repartir lo que una
 sola cuenta por regla no cubre (facturas de D1 con 19 %, 5 % y excluidos). La
