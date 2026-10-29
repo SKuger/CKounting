@@ -11,6 +11,7 @@ type Regla = {
   cuenta_puc: string; concepto_retencion_id: number | null; sin_retencion: number
   naturaleza: Naturaleza; iva_codigo: string | null; retenciones_cliente: string | null
   cuenta_no_gravada?: string | null
+  reparto?: string | null
   origen: string; veces_usada: number; archivada: number
 }
 type Concepto = { id: number; concepto: string; sobre: string }
@@ -82,7 +83,16 @@ async function cargar() {
 
 // El panel de edición guarda TEXTO; `retencion` es '' (no dicho), 'ninguna' o el id.
 const abierta = ref<number | null>(null)
-const borrador = reactive({ cuenta_puc: '', patron: '', iva_codigo: '', retencion: '', retenciones_cliente: '', cuenta_no_gravada: '' })
+const borrador = reactive({ cuenta_puc: '', patron: '', iva_codigo: '', retencion: '', retenciones_cliente: '', cuenta_no_gravada: '', quitar_reparto: false })
+
+// El reparto aprendido al aprobar (D-136): «60 % 519530 · 40 % 51350501».
+function reparto(r: Regla): string {
+  if (!r.reparto) return ''
+  try {
+    const filas = JSON.parse(r.reparto) as { cuenta: string; parte: string }[]
+    return filas.map(f => `${Math.round(Number(f.parte) * 1000) / 10} % ${f.cuenta}`).join(' · ')
+  } catch { return '' }
+}
 const guardando = ref(false)
 
 function editar(r: Regla) {
@@ -93,6 +103,7 @@ function editar(r: Regla) {
     retencion: r.sin_retencion ? 'ninguna' : (r.concepto_retencion_id ? String(r.concepto_retencion_id) : ''),
     retenciones_cliente: r.retenciones_cliente || '',
     cuenta_no_gravada: r.cuenta_no_gravada || '',
+    quitar_reparto: false,
   })
 }
 
@@ -108,6 +119,7 @@ async function guardar(r: Regla) {
         concepto_retencion_id: borrador.retencion && borrador.retencion !== 'ninguna' ? Number(borrador.retencion) : null,
         retenciones_cliente: borrador.retenciones_cliente,
         cuenta_no_gravada: borrador.cuenta_no_gravada,
+        quitar_reparto: borrador.quitar_reparto,
       },
     })
     abierta.value = null
@@ -195,7 +207,10 @@ onMounted(cargar)
               </td>
               <td class="px-2 py-1.5 text-xs text-muted-foreground">{{ ETIQUETA[r.naturaleza] }}</td>
               <td class="px-2 py-1.5 text-xs">{{ r.patron || 'siempre' }}</td>
-              <td class="px-2 py-1.5 font-mono text-xs">{{ r.cuenta_puc }}</td>
+              <td class="px-2 py-1.5 font-mono text-xs">
+                {{ r.cuenta_puc }}
+                <span v-if="reparto(r)" class="block text-[11px] text-muted-foreground" title="Así se repartió la última vez; la próxima factura se sugiere igual">repartida: {{ reparto(r) }}</span>
+              </td>
               <td class="px-2 py-1.5 font-mono text-xs">{{ r.iva_codigo || '' }}</td>
               <td class="px-2 py-1.5 text-xs" :class="retencion(r) === 'no se sabe' || retencion(r) === '—' ? 'text-status-warning' : ''">
                 {{ retencion(r) }}
@@ -243,6 +258,9 @@ onMounted(cargar)
                     <Label class="text-xs">Le retiene (códigos de Siigo)</Label>
                     <Input v-model="borrador.retenciones_cliente" class="h-8 w-40 font-mono" placeholder="05,07,11 · ninguna" />
                   </div>
+                  <label v-if="reparto(r)" class="flex h-8 items-center gap-1.5 text-xs text-muted-foreground" title="La próxima factura irá entera a la cuenta de arriba">
+                    <input v-model="borrador.quitar_reparto" type="checkbox"> Quitar el reparto ({{ reparto(r) }})
+                  </label>
                   <Button size="sm" :disabled="guardando" @click="guardar(r)">Guardar</Button>
                   <Button size="sm" variant="ghost" :disabled="guardando" @click="abierta = null">Cancelar</Button>
                 </div>
