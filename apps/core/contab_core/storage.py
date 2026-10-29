@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import log
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 # Cuánto espera una escritura a que se libere el lock antes de rendirse (ms).
 BUSY_TIMEOUT_MS = 5_000
@@ -368,8 +368,9 @@ CREATE TABLE IF NOT EXISTS regla_causacion (
   -- compra | venta | doc_soporte: la cuenta de una regla es de gasto o de ingreso
   naturaleza            TEXT NOT NULL DEFAULT 'compra',
   iva_codigo            TEXT,              -- qué IVA factura (código de Siigo), aprendido al aprobar
-  retenciones_cliente   TEXT,
-  cuenta_no_gravada     TEXT,              -- la parte del documento sin IVA, a su propia cuenta              -- en ventas: lo que me retiene, códigos de Siigo o 'ninguna' (D-131)
+  retenciones_cliente   TEXT,              -- en ventas: lo que me retiene, códigos de Siigo o 'ninguna' (D-131)
+  cuenta_no_gravada     TEXT,              -- la parte del documento sin IVA, a su propia cuenta
+  reparto               TEXT,              -- JSON [{cuenta, parte}]: el gasto o ingreso en varias cuentas (D-136)
   vigencia_desde        TEXT,
   veces_usada           INTEGER NOT NULL DEFAULT 0,
   -- 'manual'    la escribió el contador
@@ -695,6 +696,17 @@ def _m018_bandeja_editable(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE {tabla} ADD COLUMN {col} {ddl}")
 
 
+def _m019_reparto_por_tercero(conn: sqlite3.Connection) -> None:
+    """Migración 19 — la plantilla de cuentas por tercero (D-136).
+
+    Un proveedor cuya factura el contador reparte en varias cuentas guarda ese
+    reparto en su regla. La siguiente factura se propone repartida con las
+    mismas proporciones, y él aprueba los valores.
+    """
+    if "reparto" not in {r["name"] for r in conn.execute("PRAGMA table_info(regla_causacion)").fetchall()}:
+        conn.execute("ALTER TABLE regla_causacion ADD COLUMN reparto TEXT")
+
+
 def _m016_lo_que_me_retienen(conn: sqlite3.Connection) -> None:
     """Migración 16 — las retenciones que el cliente le practica a la empresa (D-131).
 
@@ -991,6 +1003,7 @@ MIGRACIONES: list[tuple[int, object]] = [
     (16, _m016_lo_que_me_retienen),
     (17, _m017_nomina),
     (18, _m018_bandeja_editable),
+    (19, _m019_reparto_por_tercero),
 ]
 
 
