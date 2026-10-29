@@ -31,9 +31,11 @@ el producto es una hoja de cálculo más bonita.
 """
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 # Cuánto «vale» cada forma de regla. La del proveedor gana a la del texto, y una
@@ -65,6 +67,9 @@ class Propuesta:
     retenciones_cliente: str | None = None
     # La cuenta de la parte del documento que no lleva IVA, cuando la hay.
     cuenta_no_gravada: str | None = None
+    # El gasto o el ingreso en varias cuentas, como lo repartió la última vez:
+    # [(cuenta, parte)], con las partes sumando 1 (D-136).
+    reparto: list[tuple[str, Decimal]] | None = None
 
     def como_dict(self) -> dict[str, Any]:
         return {
@@ -75,6 +80,7 @@ class Propuesta:
             "sin_retencion": self.sin_retencion, "iva_codigo": self.iva_codigo,
             "retenciones_cliente": self.retenciones_cliente,
             "cuenta_no_gravada": self.cuenta_no_gravada,
+            "reparto": [{"cuenta": c, "parte": str(p)} for c, p in self.reparto] if self.reparto else None,
         }
 
 
@@ -162,6 +168,7 @@ def proponer(conn, documento: dict[str, Any]) -> Propuesta:
         iva_codigo=(mejor["iva_codigo"] or None) if "iva_codigo" in mejor else None,
         retenciones_cliente=mejor.get("retenciones_cliente"),
         cuenta_no_gravada=mejor.get("cuenta_no_gravada") or None,
+        reparto=leer_reparto(mejor.get("reparto")),
         regla_id=mejor["id"], por_que=por_que, seguro=True,
     )
 
@@ -179,6 +186,7 @@ def aprender(
     iva_codigo: str | None = None,
     retenciones_cliente: str | None = None,
     cuenta_no_gravada: str | None = None,
+    reparto: list[tuple[str, Decimal]] | None = None,
 ) -> dict[str, Any]:
     """Guarda lo que el contador decidió, para no volvérselo a preguntar.
 
@@ -219,9 +227,31 @@ def aprender(
              (iva_codigo or "").strip() or None, (retenciones_cliente or "").strip() or None,
              (cuenta_no_gravada or "").strip() or None))
         rid = int(cur.lastrowid)
+    if reparto is not None:
+        # [] borra el reparto: esta vez lo llevó todo a una sola cuenta.
+        conn.execute("UPDATE regla_causacion SET reparto = ? WHERE id = ?",
+                     (escribir_reparto(reparto), rid))
     conn.commit()
     return dict(conn.execute(
         "SELECT * FROM regla_causacion WHERE id = ?", (rid,)).fetchone())
+
+
+def leer_reparto(texto: str | None) -> list[tuple[str, Decimal]] | None:
+    """El reparto guardado en la regla; None si no hay, o si es de una sola cuenta."""
+    if not texto:
+        return None
+    try:
+        filas = [(str(x["cuenta"]), Decimal(str(x["parte"]))) for x in json.loads(texto)]
+    except (ValueError, KeyError, TypeError, ArithmeticError):
+        return None
+    filas = [(c, p) for c, p in filas if c and p > 0]
+    return filas if len(filas) > 1 else None
+
+
+def escribir_reparto(reparto: list[tuple[str, Decimal]]) -> str | None:
+    if len(reparto) < 2:
+        return None
+    return json.dumps([{"cuenta": c, "parte": str(p)} for c, p in reparto])
 
 
 def marcar_usada(conn, regla_id: int) -> None:
@@ -277,6 +307,8 @@ def guardar(conn, data: dict[str, Any]) -> dict[str, Any]:
             " iva_codigo, retenciones_cliente, cuenta_no_gravada, origen)"
             " VALUES (?,?,?,?,?,?,?,?,?,?, 'manual')", valores)
         rid = int(cur.lastrowid)
+    if data.get("quitar_reparto"):
+        conn.execute("UPDATE regla_causacion SET reparto = NULL WHERE id = ?", (int(rid),))
     conn.commit()
     return dict(conn.execute(
         "SELECT * FROM regla_causacion WHERE id = ?", (int(rid),)).fetchone())
