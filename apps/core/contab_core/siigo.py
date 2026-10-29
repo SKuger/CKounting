@@ -119,6 +119,21 @@ def export_siigo(conn, periodo: str, output_dir: str | Path) -> dict[str, Any]:
 
     cfg = config(conn)
     aprobados = [a for a in asiento_module.listar(conn, periodo) if a["aprobado"]]
+    # Un comprobante que no cuadra, o con una línea sin cuenta, no sale: Siigo lo
+    # rechaza o, peor, lo carga descuadrado. Pasó con una compra aprobada en una
+    # versión vieja sin su línea de IVA. Se devuelve con nombre y no consume
+    # consecutivo.
+    no_salen = []
+    for a in aprobados:
+        diferencia = (sum((money.to_money(x["debito"] or 0) for x in a["lineas"]), money.ZERO)
+                      - sum((money.to_money(x["credito"] or 0) for x in a["lineas"]), money.ZERO))
+        sin_cuenta = any(not (x.get("cuenta_puc") or "").strip() for x in a["lineas"])
+        if diferencia != money.ZERO or sin_cuenta:
+            no_salen.append({"id": a["id"], "numero": a.get("numero"), "fecha": a.get("fecha"),
+                             "tercero_nit": a.get("tercero_nit"), "diferencia": str(diferencia),
+                             "sin_cuenta": sin_cuenta})
+    fuera = {x["id"] for x in no_salen}
+    aprobados = [a for a in aprobados if a["id"] not in fuera]
     aprobados.sort(key=lambda a: (clase_de(a), a["fecha"] or "", a["id"]))
     faltan: set[str] = set()
     codigos_concepto = {
@@ -189,15 +204,20 @@ def export_siigo(conn, periodo: str, output_dir: str | Path) -> dict[str, Any]:
                     faltan.add(f"concepto:{ln.get('concepto_id') or '?'}")
                 base = abs(money.to_money(ln.get("base") or 0))
             es_cartera = rol == "cartera"
+            # La parte sin IVA (la marca la pone el asiento): base exenta en el
+            # libro de compras y ventas, para la declaración de IVA (D-136).
+            exenta: Any = ""
+            if rol in ("gasto", "ingreso", "no_gravado") and ln.get("base") not in (None, ""):
+                exenta = abs(debito - credito)
             valores: list[Any] = [
                 int(tipo) if tipo.isdigit() else tipo, a.get("siigo_consecutivo"), fecha,
-                "COP", "", _cuenta(ln.get("cuenta_puc")), _nit(a.get("tercero_nit")),
+                "COP", "", _cuenta(ln.get("cuenta_puc")), _nit(ln.get("tercero_nit") or a.get("tercero_nit")),
                 "", "", "", "", "",
                 prefijo if es_cartera else "", (int(consecutivo_doc) if es_cartera and consecutivo_doc.isdigit() else (consecutivo_doc if es_cartera else "")),
                 1 if es_cartera else "", (fecha + timedelta(days=dias)) if (es_cartera and fecha) else "",
                 codigo_imp, "", "", numero_texto or (ln.get("descripcion") or ""), "",
                 debito, credito, numero_texto or (ln.get("descripcion") or ""),
-                base, "", "",
+                base, exenta, "",
             ]
             for c, v in enumerate(valores):
                 if isinstance(v, date):
@@ -257,6 +277,7 @@ def export_siigo(conn, periodo: str, output_dir: str | Path) -> dict[str, Any]:
         "total_debito": str(total_debito), "total_credito": str(total_credito),
         "cuadra": total_debito == total_credito,
         "faltan": sorted(faltan),
+        "no_salen": no_salen,
     }
 
 

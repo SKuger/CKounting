@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import log
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 19
 
 # Cuánto espera una escritura a que se libere el lock antes de rendirse (ms).
 BUSY_TIMEOUT_MS = 5_000
@@ -294,6 +294,9 @@ CREATE TABLE IF NOT EXISTS asiento_propuesto (
   siigo_consecutivo INTEGER,         -- el que se le dio al exportar; no cambia ni se repite
   aprobado      INTEGER NOT NULL DEFAULT 0,
   aprobado_at   TEXT,
+  -- 1 = el contador guardó las líneas a mano: armar la propuesta no las pisa
+  editado       INTEGER NOT NULL DEFAULT 0,
+  correccion    TEXT,                -- JSON: lo que eligió al guardar, para aprender al aprobar
   generado_at   TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE(periodo, cufe)
 );
@@ -311,7 +314,8 @@ CREATE TABLE IF NOT EXISTS asiento_linea (
   rol           TEXT,                -- gasto | ingreso | iva | retencion | cartera (D-128)
   base          TEXT,                -- la base de una línea de impuesto o retención
   concepto_id   INTEGER,             -- el concepto de retención, para su código de Siigo
-  codigo_siigo  TEXT                 -- el código de impuesto decidido para esta línea
+  codigo_siigo  TEXT,                -- el código de impuesto decidido para esta línea
+  tercero_nit   TEXT                 -- NULL = el del asiento; otro NIT si la línea es de otro tercero
 );
 CREATE INDEX IF NOT EXISTS ix_asiento_linea ON asiento_linea(asiento_id);
 CREATE TABLE IF NOT EXISTS siigo_config (clave TEXT PRIMARY KEY, valor TEXT);
@@ -365,6 +369,8 @@ CREATE TABLE IF NOT EXISTS regla_causacion (
   naturaleza            TEXT NOT NULL DEFAULT 'compra',
   iva_codigo            TEXT,              -- qué IVA factura (código de Siigo), aprendido al aprobar
   retenciones_cliente   TEXT,              -- en ventas: lo que me retiene, códigos de Siigo o 'ninguna' (D-131)
+  cuenta_no_gravada     TEXT,              -- la parte del documento sin IVA, a su propia cuenta
+  reparto               TEXT,              -- JSON [{cuenta, parte}]: el gasto o ingreso en varias cuentas (D-136)
   vigencia_desde        TEXT,
   veces_usada           INTEGER NOT NULL DEFAULT 0,
   -- 'manual'    la escribió el contador
@@ -670,6 +676,37 @@ def _m017_nomina(conn: sqlite3.Connection) -> None:
     return None
 
 
+def _m018_bandeja_editable(conn: sqlite3.Connection) -> None:
+    """Migración 18 — la bandeja se edita, y el IVA va por tarifa.
+
+    Lo pidió el contador el 2026-10-28: elegir el tercero de la línea de
+    proveedores o clientes, guardar sin aprobar, agregar y quitar líneas, y
+    llevar la parte no gravada de una factura a su propia cuenta. Un asiento
+    guardado a mano (`editado`) no lo pisa volver a armar la propuesta.
+    """
+    def columnas(tabla: str) -> set[str]:
+        return {r["name"] for r in conn.execute(f"PRAGMA table_info({tabla})").fetchall()}
+    for tabla, col, ddl in (
+        ("asiento_linea", "tercero_nit", "TEXT"),
+        ("asiento_propuesto", "editado", "INTEGER NOT NULL DEFAULT 0"),
+        ("asiento_propuesto", "correccion", "TEXT"),
+        ("regla_causacion", "cuenta_no_gravada", "TEXT"),
+    ):
+        if col not in columnas(tabla):
+            conn.execute(f"ALTER TABLE {tabla} ADD COLUMN {col} {ddl}")
+
+
+def _m019_reparto_por_tercero(conn: sqlite3.Connection) -> None:
+    """Migración 19 — la plantilla de cuentas por tercero (D-136).
+
+    Un proveedor cuya factura el contador reparte en varias cuentas guarda ese
+    reparto en su regla. La siguiente factura se propone repartida con las
+    mismas proporciones, y él aprueba los valores.
+    """
+    if "reparto" not in {r["name"] for r in conn.execute("PRAGMA table_info(regla_causacion)").fetchall()}:
+        conn.execute("ALTER TABLE regla_causacion ADD COLUMN reparto TEXT")
+
+
 def _m016_lo_que_me_retienen(conn: sqlite3.Connection) -> None:
     """Migración 16 — las retenciones que el cliente le practica a la empresa (D-131).
 
@@ -965,6 +1002,8 @@ MIGRACIONES: list[tuple[int, object]] = [
     (15, _m015_catalogo_de_siigo),
     (16, _m016_lo_que_me_retienen),
     (17, _m017_nomina),
+    (18, _m018_bandeja_editable),
+    (19, _m019_reparto_por_tercero),
 ]
 
 

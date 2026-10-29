@@ -11,11 +11,12 @@
 // De ahí las tres cosas que manda esta pantalla: se ve el asiento ENTERO antes
 // de aprobar, se puede corregir, y al aprobar **se aprende** — aprobar no es
 // marcar una casilla, es enseñarle a Contab lo que él acaba de decidir.
-import { ArrowLeft, RefreshCw, Check, Undo2, ChevronRight, Download, FileSpreadsheet, Settings2, UploadCloud } from 'lucide-vue-next'
+import { ArrowLeft, RefreshCw, Check, Undo2, ChevronRight, Download, FileSpreadsheet, Settings2, UploadCloud, Plus, X, Save } from 'lucide-vue-next'
 
 type Linea = {
   id: number; cuenta_puc: string | null; descripcion: string; debito: string; credito: string
-  rol: string | null; codigo_siigo: string | null
+  rol: string | null; codigo_siigo: string | null; tercero_nit?: string | null
+  base?: string | null; concepto_id?: number | null
 }
 // `naturaleza` (D-127): compra, venta o doc_soporte. Decide qué líneas lleva,
 // quién es el tercero y qué se le pregunta al contador al aprobar.
@@ -23,6 +24,7 @@ type Naturaleza = 'compra' | 'venta' | 'doc_soporte'
 type Asiento = {
   id: number; cufe: string; tercero_nit: string | null; fecha: string | null
   estado: string; avisos: string[]; aprobado: number; lineas: Linea[]; naturaleza: Naturaleza
+  editado?: number
 }
 const ETIQUETA: Record<Naturaleza, string> = { compra: 'Compra', venta: 'Venta', doc_soporte: 'Doc. soporte' }
 type Resumen = { total: number; completos: number; revisar: number; aprobados: number; porcentaje_completo: number }
@@ -118,9 +120,16 @@ async function onSiigoFolder(ruta: string) {
   siigoOpen.value = false
   siigoExportando.value = true
   try {
-    const r = await rpc<{ path: string; comprobantes: number; lineas: number; cuadra: boolean; faltan: string[] }>(
+    const r = await rpc<{ path: string; comprobantes: number; lineas: number; cuadra: boolean; faltan: string[]
+      no_salen: { numero: string | null; fecha: string | null; tercero_nit: string | null; diferencia: string; sin_cuenta: boolean }[] }>(
       'siigo_exportar', { db_path: dbPath.value, periodo: periodo.value, output_dir: ruta })
     await cargarSiigo()
+    if (r.no_salen?.length) {
+      toast.error(`${r.no_salen.length} aprobados no salieron en el archivo`,
+        'No cuadran o les falta una cuenta: '
+        + r.no_salen.map((x) => `${x.numero || x.fecha} (${x.tercero_nit})`).join(', ')
+        + '. Deshaz su aprobación con la flecha, corrígelos y vuelve a armar el archivo.')
+    }
     if (r.faltan.length) {
       toast.error(`${r.comprobantes} comprobantes, pero faltan datos`,
         'Celdas vacías en el archivo: ' + r.faltan.map(etiquetaFalta).join(', ') + '. Complétalos en «Siigo» o en Tarifas y vuelve a exportar.')
@@ -269,6 +278,151 @@ const faltanCuentas = computed(() =>
 // en lo demás, la del gasto (la primera).
 const lineaDecidida = (a: Asiento) => (a.naturaleza === 'venta' ? a.lineas[1] : a.lineas[0])
 
+// ── El editor de líneas (observaciones del contador, 2026-10-28) ──────────────
+// Lo que se ve en el panel abierto es un BORRADOR: él cambia cuentas, valores y
+// el tercero de cada línea, agrega o quita líneas, y lo guarda sin aprobar o lo
+// aprueba. Cambiar la retención o el IVA de arriba rehace las líneas de
+// impuestos y la cartera; su reparto del gasto o del ingreso se respeta.
+type Borrador = {
+  cuenta_puc: string; descripcion: string; debito: string; credito: string
+  tercero_nit: string; rol: string | null; codigo_siigo: string | null
+  base: string | null; concepto_id: number | null
+}
+const borrador = ref<Borrador[]>([])
+const previsualizando = ref(false)
+// Tocó las líneas a mano: rehacer ya no puede reemplazarlas enteras.
+const sucio = ref(false)
+const ROLES_DE_REGLA = ['iva', 'retencion', 'cartera']
+
+const aBorrador = (ls: Linea[]): Borrador[] => ls.map((l) => ({
+  cuenta_puc: l.cuenta_puc || '', descripcion: l.descripcion || '',
+  debito: Number(l.debito) ? String(l.debito) : '', credito: Number(l.credito) ? String(l.credito) : '',
+  tercero_nit: l.tercero_nit || '', rol: l.rol, codigo_siigo: l.codigo_siigo,
+  base: l.base ?? null, concepto_id: l.concepto_id ?? null,
+}))
+
+// En centavos, para que la suma no la descuadre el punto flotante.
+const centavos = (v: string) => Math.round(Number(String(v || '0').replace(/,/g, '')) * 100) || 0
+const sumaDebito = computed(() => borrador.value.reduce((t, l) => t + centavos(l.debito), 0))
+const sumaCredito = computed(() => borrador.value.reduce((t, l) => t + centavos(l.credito), 0))
+const diferencia = computed(() => sumaDebito.value - sumaCredito.value)
+const sinCuenta = computed(() => borrador.value.filter((l) => (l.debito || l.credito) && !l.cuenta_puc.trim()).length)
+const sePuedeAprobar = computed(() => diferencia.value === 0 && sinCuenta.value === 0 && borrador.value.length > 0)
+const deCentavos = (c: number) => (c / 100).toLocaleString('es-CO', { maximumFractionDigits: 2 })
+
+function agregarLinea() {
+  sucio.value = true
+  borrador.value.push({ cuenta_puc: '', descripcion: '', debito: '', credito: '', tercero_nit: '',
+    rol: null, codigo_siigo: null, base: null, concepto_id: null })
+}
+function quitarLinea(i: number) { borrador.value.splice(i, 1); sucio.value = true }
+// La diferencia a esta línea, al lado que le falte: lo normal al repartir.
+function cuadrarCon(i: number) {
+  const l = borrador.value[i]
+  if (!l) return
+  const d = diferencia.value
+  if (centavos(l.debito) || (!centavos(l.credito) && d < 0)) l.debito = String((centavos(l.debito) - d) / 100)
+  else l.credito = String((centavos(l.credito) + d) / 100)
+}
+
+function correccionParams(a: Asiento) {
+  return {
+    cuenta_puc: correccion.cuenta_puc,
+    patron: correccion.patron,
+    concepto_retencion_id: correccion.retencion && correccion.retencion !== 'ninguna' ? correccion.retencion : '',
+    sin_retencion: correccion.retencion === 'ninguna',
+    aprender_regla: correccion.aprender_regla,
+    iva_codigo: correccion.iva_codigo,
+    retenciones_cliente: a.naturaleza === 'venta' && retCliente.tocado
+      ? ([retCliente.retefuente, retCliente.reteiva, retCliente.reteica].filter(Boolean).join(',') || 'ninguna')
+      : '',
+  }
+}
+
+async function rehacerBorrador(a: Asiento) {
+  previsualizando.value = true
+  try {
+    const r = await rpc<{ lineas: Linea[] }>('asiento_previsualizar', {
+      db_path: dbPath.value, id: a.id, ...correccionParams(a), ...cuentas })
+    const nuevas = aBorrador(r.lineas)
+    if (!sucio.value) { borrador.value = nuevas; return }
+    // Lo suyo (gasto, ingreso, parte sin IVA, líneas agregadas) se queda; los
+    // impuestos y la cartera vienen recalculados, con el tercero que él puso.
+    const suyas = borrador.value.filter((l) => !ROLES_DE_REGLA.includes(l.rol || ''))
+    const principal = suyas.find((l) => l.rol === 'gasto' || l.rol === 'ingreso')
+    if (principal && correccion.cuenta_puc.trim()) principal.cuenta_puc = correccion.cuenta_puc.trim()
+    const terceroCartera = borrador.value.find((l) => l.rol === 'cartera')?.tercero_nit || ''
+    for (const l of nuevas) if (l.rol === 'cartera' && terceroCartera) l.tercero_nit = terceroCartera
+    borrador.value = [...suyas, ...nuevas.filter((l) => ROLES_DE_REGLA.includes(l.rol || ''))]
+  } catch (e) {
+    toast.error('No se pudo rehacer el asiento', humanError(e))
+  } finally {
+    previsualizando.value = false
+  }
+}
+
+async function guardarAsiento(a: Asiento) {
+  guardando.value = true
+  try {
+    const r = await rpc<Asiento>('asiento_guardar', {
+      db_path: dbPath.value, id: a.id, lineas: borrador.value, ...correccionParams(a), ...cuentas })
+    await cargar()
+    abierto.value = r.id
+    borrador.value = aBorrador(r.lineas)
+    toast.success('Guardado', r.estado === 'completo'
+      ? 'Queda listo para aprobar.' : 'Queda por decidir: ' + (r.avisos[0] || ''))
+  } catch (e) {
+    toast.error('No se pudo guardar', humanError(e))
+  } finally {
+    guardando.value = false
+  }
+}
+
+async function descartar(a: Asiento) {
+  guardando.value = true
+  try {
+    const r = await rpc<Asiento>('asiento_descartar', { db_path: dbPath.value, id: a.id })
+    await cargar()
+    const nuevo = asientos.value.find((x) => x.id === r.id)
+    if (nuevo) { abierto.value = null; abrir(nuevo) }
+  } catch (e) {
+    toast.error('No se pudo descartar', humanError(e))
+  } finally {
+    guardando.value = false
+  }
+}
+
+// Los marcados para aprobar en bloque. Solo entra lo que está listo; lo que
+// falta decidir el servidor lo salta y lo dice.
+const marcados = ref<Set<number>>(new Set())
+function marcar(id: number, si: boolean) {
+  const s = new Set(marcados.value)
+  if (si) s.add(id); else s.delete(id)
+  marcados.value = s
+}
+function marcarGrupo(filas: Asiento[], si: boolean) {
+  const s = new Set(marcados.value)
+  for (const a of filas) { if (si) s.add(a.id); else s.delete(a.id) }
+  marcados.value = s
+}
+const marcadosListos = computed(() => listos.value.filter((a) => marcados.value.has(a.id)).length)
+
+async function aprobarMarcados() {
+  guardando.value = true
+  try {
+    const r = await rpc<{ aprobados: number; omitidos: number }>('asiento_aprobar_lote', {
+      db_path: dbPath.value, periodo: periodo.value, ids: [...marcados.value] })
+    marcados.value = new Set()
+    await cargar()
+    toast.success(`${r.aprobados} aprobados`,
+      r.omitidos ? `${r.omitidos} marcados no estaban listos y siguen esperando.` : 'Todos los marcados.')
+  } catch (e) {
+    toast.error('No se pudo aprobar en bloque', humanError(e))
+  } finally {
+    guardando.value = false
+  }
+}
+
 async function cargar() {
   if (!dbPath.value || !periodo.value) return
   cargando.value = true
@@ -313,6 +467,8 @@ function abrir(a: Asiento) {
   abierto.value = a.id
   correccion.cuenta_puc = lineaDecidida(a)?.cuenta_puc || ''
   correccion.patron = ''
+  borrador.value = aBorrador(a.lineas)
+  sucio.value = !!a.editado
   correccion.retencion = ''
   correccion.aprender_regla = true
   correccion.iva_codigo = a.lineas.find((l) => l.rol === 'iva')?.codigo_siigo || ''
@@ -325,18 +481,9 @@ function abrir(a: Asiento) {
 async function aprobar(a: Asiento) {
   guardando.value = true
   try {
+    // Se aprueba lo que está en el editor, tal cual lo dejó.
     await rpc('asiento_aprobar', {
-      db_path: dbPath.value, id: a.id,
-      cuenta_puc: correccion.cuenta_puc,
-      patron: correccion.patron,
-      concepto_retencion_id: correccion.retencion && correccion.retencion !== 'ninguna' ? correccion.retencion : '',
-      sin_retencion: correccion.retencion === 'ninguna',
-      aprender_regla: correccion.aprender_regla,
-      iva_codigo: correccion.iva_codigo,
-      retenciones_cliente: a.naturaleza === 'venta' && retCliente.tocado
-        ? ([retCliente.retefuente, retCliente.reteiva, retCliente.reteica].filter(Boolean).join(',') || 'ninguna')
-        : '',
-      ...cuentas,
+      db_path: dbPath.value, id: a.id, ...correccionParams(a), ...cuentas, lineas: borrador.value,
     })
     abierto.value = null
     await cargar()
@@ -415,6 +562,10 @@ onMounted(cargar)
       </Button>
       <Button size="sm" :disabled="guardando || !listos.length" @click="aprobarTodos">
         <Check class="size-3.5" /> Aprobar los {{ listos.length }} listos
+      </Button>
+      <Button size="sm" variant="outline" :disabled="guardando || !marcados.size" @click="aprobarMarcados"
+        title="Aprueba solo los que marcó; los que falta decidir se saltan">
+        <Check class="size-3.5" /> Aprobar {{ marcados.size }} marcados
       </Button>
       <Button size="sm" variant="outline" :disabled="exportando || !aprobados.length"
         title="Los asientos aprobados a un Excel, una fila por línea, para llevarlos a Siigo"
@@ -591,13 +742,20 @@ onMounted(cargar)
         { titulo: 'Aprobados', filas: aprobados, clase: 'text-muted-foreground' },
       ]" :key="grupo.titulo">
         <div v-if="grupo.filas.length">
-          <h2 class="sticky top-0 z-10 border-b border-border bg-card px-3 py-1.5 text-xs font-semibold uppercase"
+          <h2 class="sticky top-0 z-10 flex items-center gap-2 border-b border-border bg-card px-3 py-1.5 text-xs font-semibold uppercase"
             :class="grupo.clase">
+            <input v-if="grupo.titulo !== 'Aprobados'" type="checkbox" class="size-3.5"
+              :title="`Marcar los ${grupo.filas.length}`"
+              :checked="grupo.filas.every((a) => marcados.has(a.id))"
+              @change="marcarGrupo(grupo.filas, ($event.target as HTMLInputElement).checked)">
             {{ grupo.titulo }} · {{ grupo.filas.length }}
           </h2>
           <template v-for="a in grupo.filas" :key="a.id">
             <div class="flex cursor-pointer items-center gap-2 border-b border-border/60 px-3 py-2 text-sm hover:bg-accent/40"
               @click="abrir(a)">
+              <input v-if="!a.aprobado" type="checkbox" class="size-3.5 shrink-0" title="Marcar para aprobar en bloque"
+                :checked="marcados.has(a.id)" @click.stop
+                @change="marcar(a.id, ($event.target as HTMLInputElement).checked)">
               <ChevronRight class="size-3.5 shrink-0 text-muted-foreground transition-transform"
                 :class="abierto === a.id ? 'rotate-90' : ''" />
               <span class="w-20 shrink-0 font-mono text-xs text-muted-foreground">{{ a.fecha }}</span>
@@ -606,8 +764,12 @@ onMounted(cargar)
                 class="shrink-0 rounded border border-border px-1.5 py-px text-[10px] uppercase text-muted-foreground">
                 {{ ETIQUETA[a.naturaleza] }}
               </span>
+              <span v-if="a.editado && !a.aprobado" title="Guardado a mano: armar la propuesta no lo cambia"
+                class="shrink-0 rounded border border-primary/40 px-1.5 py-px text-[10px] uppercase text-primary">
+                Guardado
+              </span>
               <span class="min-w-0 flex-1 truncate">{{ lineaDecidida(a)?.descripcion }}</span>
-              <span class="shrink-0 font-mono text-xs">{{ pesos(a.lineas[0]?.debito || '0') }}</span>
+              <span class="shrink-0 font-mono text-xs">{{ pesos(String(a.lineas.reduce((t, l) => t + Number(l.debito || 0), 0))) }}</span>
               <Button v-if="a.aprobado" variant="ghost" size="icon-sm" title="Deshacer la aprobación"
                 @click.stop="deshacer(a)"><Undo2 class="size-3.5" /></Button>
             </div>
@@ -617,71 +779,146 @@ onMounted(cargar)
                 <li v-for="(x, i) in a.avisos" :key="i" class="text-xs text-status-warning">· {{ x }}</li>
               </ul>
 
-              <table class="w-full text-xs">
+              <!-- aprobado: solo se mira -->
+              <table v-if="a.aprobado" class="w-full text-xs">
                 <thead>
                   <tr class="text-left text-[10px] uppercase text-muted-foreground">
                     <th class="py-1 font-normal">Cuenta</th>
                     <th class="py-1 font-normal">Concepto</th>
+                    <th class="py-1 font-normal">Tercero</th>
                     <th class="py-1 text-right font-normal">Débito</th>
                     <th class="py-1 text-right font-normal">Crédito</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr v-for="ln in a.lineas" :key="ln.id" class="border-t border-border/50">
-                    <td class="py-1 pr-2 font-mono" :class="ln.cuenta_puc ? '' : 'text-status-error'">
-                      {{ ln.cuenta_puc || 'falta' }}
-                    </td>
+                    <td class="py-1 pr-2 font-mono">{{ ln.cuenta_puc }}</td>
                     <td class="py-1 pr-2">{{ ln.descripcion }}</td>
+                    <td class="py-1 pr-2 font-mono" :class="ln.tercero_nit ? 'text-primary' : 'text-muted-foreground'">
+                      {{ ln.tercero_nit || a.tercero_nit }}
+                    </td>
                     <td class="py-1 text-right font-mono">{{ Number(ln.debito) ? pesos(ln.debito) : '' }}</td>
                     <td class="py-1 text-right font-mono">{{ Number(ln.credito) ? pesos(ln.credito) : '' }}</td>
                   </tr>
                 </tbody>
               </table>
 
-              <div v-if="!a.aprobado" class="mt-3 flex flex-wrap items-end gap-3">
-                <div class="grid gap-1">
-                  <Label class="text-xs">{{ a.naturaleza === 'venta' ? 'Cuenta del ingreso' : 'Cuenta del gasto' }}</Label>
-                  <Input v-model="correccion.cuenta_puc" class="h-8 w-32 font-mono"
-                    :placeholder="a.naturaleza === 'venta' ? '413505' : '519530'" />
-                </div>
-                <div v-if="a.naturaleza !== 'venta'" class="grid gap-1">
-                  <Label class="text-xs">Retención en la fuente</Label>
-                  <select v-model="correccion.retencion" class="h-8 rounded-md border border-border bg-background px-2 text-xs">
-                    <option value="">— elegir —</option>
-                    <option value="ninguna">Ninguna: a este proveedor no se le retiene</option>
-                    <option v-for="c in conceptos" :key="c.id" :value="String(c.id)">
-                      {{ c.concepto }}<template v-if="c.aplica_a && c.aplica_a !== 'ambos'"> · {{ c.aplica_a === 'declarantes' ? 'declarantes' : 'no declarantes' }}</template>
-                    </option>
-                  </select>
-                </div>
-                <template v-if="a.naturaleza === 'venta' && retencionesVenta.length">
-                  <div v-for="t in (['retefuente', 'reteiva', 'reteica'] as const)" :key="t" class="grid gap-1">
-                    <Label class="text-xs">{{ { retefuente: 'Le retiene en la fuente', reteiva: 'Le retiene IVA', reteica: 'Le retiene ICA' }[t] }}</Label>
-                    <select v-model="retCliente[t]" class="h-8 rounded-md border border-border bg-background px-2 text-xs"
-                      @change="retCliente.tocado = true">
-                      <option value="">Nada</option>
-                      <option v-for="r in retPorTipo(t)" :key="r.codigo" :value="r.codigo">{{ r.codigo }} · {{ r.nombre }}</option>
+              <template v-else>
+                <!-- lo que rehace el asiento desde las reglas -->
+                <div class="mb-3 flex flex-wrap items-end gap-3">
+                  <div class="grid gap-1">
+                    <Label class="text-xs">{{ a.naturaleza === 'venta' ? 'Cuenta del ingreso' : 'Cuenta del gasto' }}</Label>
+                    <Input v-model="correccion.cuenta_puc" class="h-8 w-32 font-mono"
+                      :placeholder="a.naturaleza === 'venta' ? '413505' : '519530'" @change="rehacerBorrador(a)" />
+                  </div>
+                  <div v-if="a.naturaleza !== 'venta'" class="grid gap-1">
+                    <Label class="text-xs">Retención en la fuente</Label>
+                    <select v-model="correccion.retencion" class="h-8 rounded-md border border-border bg-background px-2 text-xs"
+                      @change="rehacerBorrador(a)">
+                      <option value="">— elegir —</option>
+                      <option value="ninguna">Ninguna: a este proveedor no se le retiene</option>
+                      <option v-for="c in conceptos" :key="c.id" :value="String(c.id)">
+                        {{ c.concepto }}<template v-if="c.aplica_a && c.aplica_a !== 'ambos'"> · {{ c.aplica_a === 'declarantes' ? 'declarantes' : 'no declarantes' }}</template>
+                      </option>
                     </select>
                   </div>
-                </template>
-                <div v-if="ivas.length && a.lineas.some((l) => l.rol === 'iva')" class="grid gap-1">
-                  <Label class="text-xs">IVA (código de Siigo)</Label>
-                  <select v-model="correccion.iva_codigo" class="h-8 rounded-md border border-border bg-background px-2 text-xs">
-                    <option value="">— el de la tarifa —</option>
-                    <option v-for="i in ivas" :key="i.codigo" :value="i.codigo">{{ i.codigo }} · {{ i.nombre }}</option>
-                  </select>
+                  <template v-if="a.naturaleza === 'venta' && retencionesVenta.length">
+                    <div v-for="t in (['retefuente', 'reteiva', 'reteica'] as const)" :key="t" class="grid gap-1">
+                      <Label class="text-xs">{{ { retefuente: 'Le retiene en la fuente', reteiva: 'Le retiene IVA', reteica: 'Le retiene ICA' }[t] }}</Label>
+                      <select v-model="retCliente[t]" class="h-8 rounded-md border border-border bg-background px-2 text-xs"
+                        @change="retCliente.tocado = true; rehacerBorrador(a)">
+                        <option value="">Nada</option>
+                        <option v-for="r in retPorTipo(t)" :key="r.codigo" :value="r.codigo">{{ r.codigo }} · {{ r.nombre }}</option>
+                      </select>
+                    </div>
+                  </template>
+                  <div v-if="ivas.length && a.lineas.some((l) => l.rol === 'iva')" class="grid gap-1">
+                    <Label class="text-xs">IVA (código de Siigo)</Label>
+                    <select v-model="correccion.iva_codigo" class="h-8 rounded-md border border-border bg-background px-2 text-xs"
+                      @change="rehacerBorrador(a)">
+                      <option value="">— el de la tarifa —</option>
+                      <option v-for="i in ivas" :key="i.codigo" :value="i.codigo">{{ i.codigo }} · {{ i.nombre }}</option>
+                    </select>
+                  </div>
+                  <span class="pb-2 text-xs text-muted-foreground">
+                    {{ previsualizando ? 'Rehaciendo…' : (sucio ? 'Cambiar esto rehace impuestos y cartera; su reparto se queda.' : 'Cambiar esto rehace las líneas de abajo.') }}
+                  </span>
                 </div>
-                <div class="grid gap-1">
-                  <Label class="text-xs">Recordarlo cuando la factura diga…</Label>
-                  <Input v-model="correccion.patron" class="h-8 w-56" placeholder="monitoreo de alarma" />
+
+                <!-- el editor: cada línea se cambia, se agrega o se quita -->
+                <div class="overflow-x-auto">
+                  <table class="w-full min-w-[720px] text-xs">
+                    <thead>
+                      <tr class="text-left text-[10px] uppercase text-muted-foreground">
+                        <th class="py-1 font-normal">Cuenta</th>
+                        <th class="py-1 font-normal">Concepto</th>
+                        <th class="py-1 font-normal" title="Vacío = el tercero del documento">Tercero</th>
+                        <th class="py-1 text-right font-normal">Débito</th>
+                        <th class="py-1 text-right font-normal">Crédito</th>
+                        <th class="w-14" />
+                      </tr>
+                    </thead>
+                    <tbody @input="sucio = true">
+                      <tr v-for="(ln, i) in borrador" :key="i" class="border-t border-border/50">
+                        <td class="py-1 pr-1">
+                          <Input v-model="ln.cuenta_puc" class="h-7 w-28 font-mono text-xs"
+                            :class="(ln.debito || ln.credito) && !ln.cuenta_puc.trim() ? 'border-status-error' : ''"
+                            placeholder="falta" />
+                        </td>
+                        <td class="py-1 pr-1"><Input v-model="ln.descripcion" class="h-7 min-w-40 text-xs" /></td>
+                        <td class="py-1 pr-1">
+                          <Input v-model="ln.tercero_nit" class="h-7 w-28 font-mono text-xs"
+                            :class="ln.tercero_nit ? 'text-primary' : ''" :placeholder="a.tercero_nit || ''" />
+                        </td>
+                        <td class="py-1 pr-1"><Input v-model="ln.debito" class="h-7 w-32 text-right font-mono text-xs" inputmode="decimal" /></td>
+                        <td class="py-1 pr-1"><Input v-model="ln.credito" class="h-7 w-32 text-right font-mono text-xs" inputmode="decimal" /></td>
+                        <td class="py-1 text-right whitespace-nowrap">
+                          <Button v-if="diferencia" variant="ghost" size="icon-sm" title="Llevar la diferencia a esta línea"
+                            @click="cuadrarCon(i)">=</Button>
+                          <Button variant="ghost" size="icon-sm" title="Quitar la línea" @click="quitarLinea(i)"><X class="size-3.5" /></Button>
+                        </td>
+                      </tr>
+                    </tbody>
+                    <tfoot>
+                      <tr class="border-t border-border">
+                        <td colspan="3" class="py-1.5">
+                          <Button variant="ghost" size="sm" class="h-7" @click="agregarLinea"><Plus class="size-3.5" /> Agregar línea</Button>
+                        </td>
+                        <td class="py-1.5 pr-1 text-right font-mono">{{ deCentavos(sumaDebito) }}</td>
+                        <td class="py-1.5 pr-1 text-right font-mono">{{ deCentavos(sumaCredito) }}</td>
+                        <td />
+                      </tr>
+                    </tfoot>
+                  </table>
                 </div>
-                <label class="flex items-center gap-1.5 pb-1.5 text-xs text-muted-foreground">
-                  <input v-model="correccion.aprender_regla" type="checkbox"> Recordar para las próximas
-                </label>
-                <Button size="sm" :disabled="guardando" @click="aprobar(a)">
-                  <Check class="size-3.5" /> Aprobar
-                </Button>
-              </div>
+                <p class="mt-1 text-xs" :class="sePuedeAprobar ? 'text-status-success' : 'text-status-warning'">
+                  <template v-if="diferencia">No cuadra: sobran {{ deCentavos(Math.abs(diferencia)) }} pesos en el {{ diferencia > 0 ? 'débito' : 'crédito' }}.</template>
+                  <template v-if="sinCuenta">{{ diferencia ? ' ' : '' }}{{ sinCuenta }} línea{{ sinCuenta > 1 ? 's' : '' }} sin cuenta.</template>
+                  <template v-if="sePuedeAprobar">Cuadra.</template>
+                </p>
+
+                <div class="mt-3 flex flex-wrap items-end gap-3">
+                  <div class="grid gap-1">
+                    <Label class="text-xs">Recordarlo cuando la factura diga…</Label>
+                    <Input v-model="correccion.patron" class="h-8 w-56" placeholder="monitoreo de alarma" />
+                  </div>
+                  <label class="flex items-center gap-1.5 pb-1.5 text-xs text-muted-foreground">
+                    <input v-model="correccion.aprender_regla" type="checkbox"> Recordar para las próximas
+                  </label>
+                  <span class="flex-1" />
+                  <Button v-if="a.editado" size="sm" variant="ghost" :disabled="guardando"
+                    title="Olvida lo guardado y vuelve a lo que dicen las reglas" @click="descartar(a)">
+                    Descartar cambios
+                  </Button>
+                  <Button size="sm" variant="outline" :disabled="guardando" @click="guardarAsiento(a)"
+                    title="Guarda las líneas sin aprobar; armar la propuesta del mes no las cambia">
+                    <Save class="size-3.5" /> Guardar
+                  </Button>
+                  <Button size="sm" :disabled="guardando || !sePuedeAprobar" @click="aprobar(a)">
+                    <Check class="size-3.5" /> Aprobar
+                  </Button>
+                </div>
+              </template>
               <p v-if="!a.aprobado && a.naturaleza !== 'venta' && !correccion.retencion" class="mt-2 text-xs text-status-warning">
                 Elige la retención —o «ninguna»—: sin eso, las próximas facturas de este proveedor
                 volverán a pedir revisión aunque apruebes esta.

@@ -20,7 +20,7 @@ y tiene que cuadrar: en 482 líneas de un mes no hay uno descuadrado.
 | 4 | `Sigla moneda` | `COP` siempre. | Fijo |
 | 5 | `Tasa de cambio` | Vacío. | — |
 | 6 | `Código cuenta contable` | Subcuenta del PUC de la empresa, **8 dígitos** (`22050501`, `24081501`, `53052001`). Nunca 6. | Contab, de la regla / las cuentas de la empresa / las tarifas |
-| 7 | `Identificación tercero` | NIT o cédula sin DV, en **todas** las líneas del comprobante. | Contab |
+| 7 | `Identificación tercero` | NIT o cédula sin DV, en **todas** las líneas del comprobante. Por defecto el del documento; una línea puede llevar otro si el contador lo eligió en la bandeja (D-135). | Contab |
 | 8-12 | `Sucursal`, `Código producto`, `Código de bodega`, `Acción`, `Cantidad producto` | Vacíos. | — |
 | 13 | `Prefijo` | Prefijo de la factura, **solo en la línea de cartera** (2205 en compras, 1305 en ventas). | Contab, del número del documento |
 | 14 | `Consecutivo` | Número de la factura, misma línea. | Contab |
@@ -33,7 +33,7 @@ y tiene que cuadrar: en 482 líneas de un mes no hay uno descuadrado.
 | 22-23 | `Débito`, `Crédito` | Pesos, con decimales cuando los hay. | Contab |
 | 24 | `Observaciones` | Lo mismo que la descripción, o un texto corto («CUOTA PRESTAMO …»). | Contab |
 | 25 | `Base gravable libro compras/ventas` | La **base** de cada línea de impuesto o retención; `0` en las demás. | Contab |
-| 26 | `Base exenta libro compras/ventas` | Casi siempre vacío. | — |
+| 26 | `Base exenta libro compras/ventas` | El valor de la línea de gasto o ingreso **sin IVA**: todo el documento cuando no trae IVA, o la «Parte no gravada» de uno mixto (D-136). Vacío en las demás. | Contab |
 | 27 | `Mes de cierre` | Vacío. | — |
 
 ## Los tipos de comprobante que usa la empresa de referencia

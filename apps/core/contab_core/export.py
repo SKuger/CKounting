@@ -183,7 +183,7 @@ def export_asientos(conn, periodo: str, output_dir: str | Path) -> dict[str, Any
         for ln in a["lineas"]:
             debito = money.to_money(ln["debito"] or 0)
             credito = money.to_money(ln["credito"] or 0)
-            valores = [a["fecha"], a["tercero_nit"], ln["cuenta_puc"],
+            valores = [a["fecha"], ln.get("tercero_nit") or a["tercero_nit"], ln["cuenta_puc"],
                        ln["descripcion"], debito, credito, a["cufe"],
                        TIPO_ASIENTO.get(a.get("naturaleza") or "compra", a.get("naturaleza"))]
             for c, v in enumerate(valores):

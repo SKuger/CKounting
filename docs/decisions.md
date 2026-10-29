@@ -1445,3 +1445,79 @@ la causación por eso). Sobre el septiembre real de REAL, la segunda quincena
 sale **idéntica en sus 80 pares cuenta-tercero** y la primera en 79 de 83: la
 diferencia es un solo empleado cuyos otros pagos de esa quincena fueron, en
 parte, a un tercero — eso no está en el Excel y se ajusta a mano.
+
+## D-135 — La bandeja de causación se edita, y el IVA va por tarifa ✅
+
+**Decisión** (2026-10-28, por cinco observaciones del contador):
+
+- **Cada línea del asiento se edita**: cuenta, concepto, valor y **tercero**.
+  Se agregan y se quitan líneas. Una línea con otro tercero —la cartera de una
+  factura que se le debe a otro NIT— sale con ese NIT en el archivo de Siigo y
+  en el Excel de asientos; vacía es el tercero del documento.
+- **Guardar no es aprobar.** Guardado, el asiento queda `editado` y armar la
+  propuesta del mes ya no lo pisa; queda listo si cuadra y tiene todas sus
+  cuentas. «Descartar cambios» vuelve a lo que dicen las reglas.
+- **Se aprueba uno a uno o lo marcado.** El bloque salta lo que no está listo y
+  lo cuenta. Un asiento que no cuadra o con una línea sin cuenta no se aprueba.
+  Aprobar uno guardado aprende la regla igual que aprobarlo en el momento, y
+  conserva el concepto de retención que la regla ya tenía.
+- **El IVA va por tarifa cuando el XML trae el desglose**: una línea por tarifa
+  con su código y su cuenta del catálogo, y la parte sin IVA en una línea
+  propia («Parte no gravada») cuya cuenta se escribe una vez y la regla la
+  recuerda (`cuenta_no_gravada`). El impuesto al consumo es mayor valor del
+  gasto y no entra al ReteIVA. Sin XML —el reporte de la DIAN no da tarifas—
+  sale una sola línea de IVA, como antes, y se reparte a mano en el editor.
+- Cambiar la retención o el IVA arriba del editor rehace los impuestos y la
+  cartera; el reparto que él hizo a mano se conserva.
+- **Sin XML, la tarifa se busca** (2026-10-29). Si el IVA del reporte no es
+  el 19 ni el 5 % del subtotal, se lee la tabla de impuestos del **PDF de
+  soporte** («IVA 19%: base valor»), y solo se usa si su IVA suma el del
+  reporte y sus bases no pasan del subtotal. Si no hay PDF legible, una sola
+  tarifa parcial se deduce cuando el IVA es el 19 % exacto de una parte (la
+  compra de 125.700 con IVA de 2.388,30 que él registró con base 12.570). Si
+  nada sirve, se dice y él lo reparte.
+- **El tercero que cambia es el de la línea.** Las retenciones y el IVA quedan
+  a nombre de quien facturó (respuesta del contador, 2026-10-29).
+- **La parte no gravada depende de la factura** (respuesta del contador): se
+  propone la cuenta de la última vez, pero el asiento queda por revisar.
+- **Los centavos se conservan** como los trae el documento: así registra él
+  (9 de 16 líneas de IVA de sus compras de septiembre llevan centavos).
+- **El archivo de Siigo no lleva comprobantes que no cuadran** o con una línea
+  sin cuenta: salen nombrados y no gastan consecutivo. En su primer archivo
+  real salió una compra aprobada en una versión vieja sin su línea de IVA,
+  descuadrada por 2.388 pesos. Y armar la propuesta llena el número de factura
+  de lo aprobado en versiones que no lo guardaban.
+
+**Por qué**: el contador quiere verificar antes de aprobar y repartir lo que una
+sola cuenta por regla no cubre (facturas de D1 con 19 %, 5 % y excluidos). La
+cuenta de cada tarifa y de cada devolución ya estaba en el catálogo (D-129); lo
+que faltaba era que un documento pudiera tener más de una.
+
+**Pendiente**: ~~la plantilla de reparto por tercero (plan 4.13)~~ → D-136.
+
+## D-136 — La plantilla de reparto por tercero y la base exenta
+
+**Decisión** (2026-10-29, por las respuestas del contador):
+
+- **El reparto se aprende al aprobar.** Si el gasto o el ingreso de un asiento
+  queda en dos o más cuentas, la regla del tercero guarda la proporción de
+  cada una (`regla_causacion.reparto`, JSON). Aprobar uno en una sola cuenta
+  la borra, y en Reglas se puede quitar.
+- **La siguiente factura se propone repartida** con esas proporciones, al
+  centavo, y la última cuenta se lleva el redondeo. *«Me puedes sugerir los
+  valores pero yo los apruebo»*: el asiento repartido queda por revisar y no
+  entra en el lote.
+- No cuentan para el reparto el impuesto al consumo ni una línea que resta
+  (un anticipo): eso no es repartir el gasto.
+- **Sin línea de IVA en cero.** El contador ponía una con el código 02 y
+  valor 0 en las compras sin IVA; dijo que no hace falta, pero que la parte sin
+  IVA tiene que quedar abierta para la declaración. Va en la columna 26 del
+  archivo de Siigo, `Base exenta libro compras/ventas`: el gasto o ingreso de
+  un documento sin IVA, y la «Parte no gravada» de uno mixto. El documento
+  soporte no, porque viene de un no obligado.
+
+**Por qué**: la regla de una sola cuenta no cubría al proveedor que él reparte
+cada mes, y el libro de compras de Siigo es lo que lee la declaración de IVA.
+
+**Por confirmar**: que Siigo acepte la columna 26 en una línea de gasto. Se
+prueba con el primer archivo de la 0.18.0.

@@ -610,6 +610,15 @@ es volver a subir el archivo, no publicar una versión.)*
 - [x] **4.11** — ✅ 2026-10-28. **La nómina** como comprobante de Siigo, desde
       el Excel de liquidación, con la plantilla aprendida del 992 ya subido
       (D-134). Septiembre de REAL: 2Q idéntica, 1Q con un ajuste de un empleado.
+- [x] **4.12** — ✅ 2026-10-28. **La bandeja se edita** (D-135), por las
+      observaciones del contador del 28-oct: tercero por línea (la cartera de
+      otro NIT sale así en el archivo de Siigo), guardar sin aprobar, agregar y
+      quitar líneas, aprobar lo marcado, y el **IVA por tarifa** desde el XML
+      con la parte no gravada en su propia cuenta, que la regla aprende.
+- [x] **4.13** — **Plantilla de cuentas por tercero**: la regla guarda el
+      reparto completo del gasto o del ingreso, no una sola cuenta. Se sugiere
+      por proporción y él aprueba los valores (respuesta del 29-oct, D-136). La
+      parte sin IVA sale como base exenta en el archivo de Siigo.
 - [ ] ~~4.5 original~~ — The approval tray in the frontend: known documents approved in
       bulk, new ones decided one by one, and **every new decision writes or
       refines a rule**.
