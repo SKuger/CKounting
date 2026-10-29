@@ -49,6 +49,21 @@ test('la API rechaza una petición sin credencial', async () => {
   expect(res).toBe(401)
 })
 
+test('se puede abrir otra ventana, con su credencial y en la misma página', async () => {
+  // Lo pidió el contador (2026-10-29): trabajar en dos ventanas a la vez.
+  const antes = app.app.windows().length
+  const [otra] = await Promise.all([
+    app.app.waitForEvent('window'),
+    app.ventana.evaluate(() => (window as { contab?: { nuevaVentana?: () => void } }).contab?.nuevaVentana?.()),
+  ])
+  await otra.waitForLoadState('domcontentloaded')
+  expect(app.app.windows().length).toBe(antes + 1)
+  expect(otra.url()).toBe(app.ventana.url())
+  const pong = await rpc<{ pong: boolean }>(otra, 'ping')
+  expect(pong.pong).toBe(true)
+  await otra.close()
+})
+
 test('las dependencias externas están y se pueden comprobar', async () => {
   // #16: si falta Poppler hay que poder DECIRLO, no marcar el mes entero como
   // «sin soporte».

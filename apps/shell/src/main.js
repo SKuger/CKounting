@@ -80,8 +80,10 @@ function abrirFuera(urlStr) {
   shell.openExternal(urlStr)
 }
 
-async function createMainWindow() {
-  win = new BrowserWindow({
+// Cada ventana con las mismas protecciones. Varias a la vez es seguro: la empresa
+// va en la URL de cada una (`?db=`), no en un estado compartido.
+function crearVentana() {
+  const w = new BrowserWindow({
     width: 1440,
     height: 900,
     minWidth: 1024,
@@ -97,15 +99,26 @@ async function createMainWindow() {
       preload: path.join(__dirname, 'preload.js'),
     },
   })
-  Menu.setApplicationMenu(null)
-  // open external links (target=_blank) in the system browser, not a new Electron window
-  win.webContents.setWindowOpenHandler(({ url }) => { abrirFuera(url); return { action: 'deny' } })
+  const origenPropio = `http://127.0.0.1:${server.port}`
+  // Un enlace externo (target=_blank) va al navegador del sistema; uno nuestro
+  // (Ctrl+clic, o «Abrir otra ventana») abre otra ventana de Contab.
+  w.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith(origenPropio)) abrirOtraVentana(url)
+    else abrirFuera(url)
+    return { action: 'deny' }
+  })
+  w.webContents.on('before-input-event', (evento, input) => {
+    if (input.type === 'keyDown' && input.control && !input.shift && !input.alt
+        && input.key.toLowerCase() === 'n') {
+      evento.preventDefault()
+      abrirOtraVentana(w.webContents.getURL())
+    }
+  })
 
   // D-088 — La ventana solo puede navegar a NUESTRO servidor. Sin esto, un enlace
   // (o un redirect) llevaba el renderer a un sitio externo CONSERVANDO el puente
   // del preload: la página de fuera quedaba dentro de la app.
-  const origenPropio = `http://127.0.0.1:${server.port}`
-  win.webContents.on('will-navigate', (evento, url) => {
+  w.webContents.on('will-navigate', (evento, url) => {
     if (!url.startsWith(origenPropio)) {
       evento.preventDefault()
       log.warn('[seguridad] navegación fuera del origen bloqueada:', url)
@@ -114,12 +127,28 @@ async function createMainWindow() {
   })
   // Nada de permisos del navegador (cámara, micrófono, geolocalización…): esta
   // app no usa ninguno, así que la respuesta correcta siempre es no.
-  win.webContents.session.setPermissionRequestHandler((_wc, permiso, callback) => {
+  w.webContents.session.setPermissionRequestHandler((_wc, permiso, callback) => {
     log.warn('[seguridad] permiso denegado:', permiso)
     callback(false)
   })
+  return w
+}
 
-  await win.loadURL(`${origenPropio}/`)
+// Pedida por el contador (2026-10-29): trabajar dos cosas a la vez, por ejemplo
+// la causación de una empresa mientras mira otra.
+function abrirOtraVentana(url) {
+  if (!server) return
+  const origenPropio = `http://127.0.0.1:${server.port}`
+  const destino = url && url.startsWith(origenPropio) ? url : `${origenPropio}/`
+  const w = crearVentana()
+  w.once('ready-to-show', () => w.show())
+  w.loadURL(destino).catch((e) => log.error('otra ventana no cargó', e))
+}
+
+async function createMainWindow() {
+  Menu.setApplicationMenu(null)
+  win = crearVentana()
+  await win.loadURL(`http://127.0.0.1:${server.port}/`)
   win.on('closed', () => { win = null })
 
   // Auto-update only makes sense in the installed app (dev has no update feed).
@@ -145,6 +174,7 @@ ipcMain.on('splash:enter', () => {
 
 // "Salir de Contab" desde la UI (SidebarUser) → cerrar el programa. before-quit hace el treeKill.
 ipcMain.on('app:quit', () => app.quit())
+ipcMain.on('app:nueva-ventana', (evento) => abrirOtraVentana(evento.sender.getURL()))
 
 // El preload lo pide de forma síncrona al construir el puente (D-089).
 ipcMain.on('contab:token', (evento) => { evento.returnValue = TOKEN_LOCAL })
@@ -161,7 +191,10 @@ const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
 } else {
+  // Volver a abrir el ícono con Contab ya abierto da otra ventana, sin un
+  // segundo servidor. Si todavía está arrancando, se enfoca lo que haya.
   app.on('second-instance', () => {
+    if (ready) { abrirOtraVentana(); return }
     const w = win || splash
     if (w) { if (w.isMinimized && w.isMinimized()) w.restore(); w.focus() }
   })
