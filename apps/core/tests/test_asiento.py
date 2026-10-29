@@ -388,13 +388,91 @@ def test_la_regla_de_venta_no_se_confunde_con_la_de_compra_del_mismo_nit(conn):
     assert a["lineas"][1]["cuenta_puc"] is None
 
 
-def test_una_nota_credito_de_venta_sale_en_negativo(conn):
+def _columnas(a):
+    return {ln["cuenta_puc"]: (Decimal(ln["debito"]), Decimal(ln["credito"]))
+            for ln in a["lineas"]}
+
+
+def test_una_nota_credito_de_venta_va_al_lado_contrario_sin_negativos(conn):
+    """Las mismas cuentas de la venta, al revés y en positivo (el contador, 2026-10-29)."""
     _todas_las_cuentas(conn)
     _fila(conn, "n" * 96, "Nota de crédito electrónica", "Emitido",
           nit_otro="901111111", total="119000", iva="19000", idx=6)
+    causacion.guardar(conn, {"tercero_nit": "901111111", "cuenta_puc": "413505",
+                             "naturaleza": "venta"})
     asiento.generar(conn, "2026-09")
-    a = _por_cufe(conn, "n" * 96)
-    assert Decimal(a["lineas"][0]["debito"]) == Decimal("-119000")
+    cols = _columnas(_por_cufe(conn, "n" * 96))
+    assert cols["130505"] == (0, Decimal("119000")), "clientes al crédito"
+    assert cols["413505"] == (Decimal("100000"), 0), "el ingreso al débito"
+    assert cols["240805"] == (Decimal("19000"), 0), "y el IVA que reporta la DIAN"
+
+
+def test_una_nota_credito_de_compra_trae_el_iva_y_cuadra(conn):
+    _todas_las_cuentas(conn)
+    _fila(conn, "m" * 96, "Nota de crédito electrónica", "Recibido",
+          nit_otro="800100200", total="119000", iva="19000", idx=6)
+    asiento.generar(conn, "2026-09")
+    a = _por_cufe(conn, "m" * 96)
+    assert all(Decimal(ln["debito"]) >= 0 and Decimal(ln["credito"]) >= 0 for ln in a["lineas"])
+    cols = _columnas(a)
+    assert cols["240810"] == (0, Decimal("19000")), "el IVA descontable se devuelve"
+    assert cols["220505"] == (Decimal("119000"), 0), "el proveedor al débito"
+    assert sum(d for d, _c in cols.values()) == sum(c for _d, c in cols.values())
+
+
+def test_la_nota_credito_con_xml_tambien_va_al_reves(conn):
+    """El XML la trae en positivo: sin girarla se causaba como una compra más."""
+    _todas_las_cuentas(conn)
+    lectura = xml_ubl.leer(MUESTRAS / "nota-credito.xml")
+    documentos.guardar(conn, lectura.documento, MUESTRAS / "nota-credito.xml")
+    _fila(conn, lectura.documento.cufe, "Nota de crédito electrónica", "Recibido",
+          nit_otro="800100200", total="119000", iva="19000", idx=6)
+    asiento.generar(conn, "2026-09")
+    cols = _columnas(_por_cufe(conn, lectura.documento.cufe))
+    assert cols["220505"] == (Decimal("119000"), 0)
+    assert cols["240810"] == (0, Decimal("19000"))
+
+
+def test_sin_perfil_del_mes_el_iva_igual_aparece(conn):
+    """Un perfil con vigencia posterior al mes no debe hacer desaparecer el IVA."""
+    _todas_las_cuentas(conn)
+    conn.execute("UPDATE empresa_perfil_fiscal SET vigencia_desde = '2026-10-01'")
+    conn.commit()
+    _fila(conn, "v" * 96, "Factura electrónica", "Emitido",
+          nit_otro="901111111", total="119000", iva="19000", idx=5)
+    causacion.guardar(conn, {"tercero_nit": "901111111", "cuenta_puc": "413505",
+                             "naturaleza": "venta"})
+    asiento.generar(conn, "2026-09")
+    a = _por_cufe(conn, "v" * 96)
+    assert _columnas(a)["240805"] == (0, Decimal("19000"))
+    assert a["estado"] == "revisar"
+    assert any("perfil fiscal" in x for x in a["avisos"])
+
+
+def test_si_no_es_responsable_el_iva_de_la_compra_es_mayor_valor(conn):
+    _cuentas(conn)
+    _regla(conn)
+    conn.execute("UPDATE empresa_perfil_fiscal SET responsable_iva = 0")
+    conn.commit()
+    asiento.generar(conn, "2026-09")
+    a = asiento.listar(conn, "2026-09")[0]
+    gasto = [ln for ln in a["lineas"] if ln["cuenta_puc"] == "519530"]
+    assert sum(Decimal(ln["debito"]) for ln in gasto) == Decimal("1785000")
+    assert "240810" not in {ln["cuenta_puc"] for ln in a["lineas"]}
+    assert sum(Decimal(ln["debito"]) for ln in a["lineas"]) == \
+        sum(Decimal(ln["credito"]) for ln in a["lineas"])
+
+
+def test_un_negativo_escrito_a_mano_se_guarda_al_otro_lado(conn):
+    _cuentas(conn)
+    _regla(conn)
+    asiento.generar(conn, "2026-09")
+    a = asiento.listar(conn, "2026-09")[0]
+    asiento.guardar(conn, a["id"], [
+        {"cuenta_puc": "519530", "debito": "-100"},
+        {"cuenta_puc": "220505", "credito": "-100"}])
+    lineas = asiento.listar(conn, "2026-09")[0]["lineas"]
+    assert [(ln["debito"], ln["credito"]) for ln in lineas] == [("0", "100"), ("100", "0")]
 
 
 def test_el_documento_soporte_se_causa_sin_iva_y_con_el_receptor(conn):

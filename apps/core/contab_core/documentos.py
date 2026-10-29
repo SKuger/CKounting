@@ -304,6 +304,24 @@ def _desde_la_fila(fila: sqlite3.Row) -> dict[str, Any] | None:
     }
 
 
+def _en_negativo(doc: dict[str, Any]) -> dict[str, Any]:
+    """La nota crédito del XML trae los valores en positivo; la del reporte, en
+    negativo (D-045). Se causa igual venga de donde venga."""
+    def neg(v: Any) -> Any:
+        if v in (None, ""):
+            return v
+        try:
+            return str(-abs(Decimal(str(v))))
+        except Exception:
+            return v
+    return {
+        **doc,
+        **{k: neg(doc.get(k)) for k in ("subtotal", "total_impuestos", "total")},
+        "impuestos": [{**i, "base": neg(i.get("base")), "valor": neg(i.get("valor"))}
+                      for i in doc.get("impuestos") or []],
+    }
+
+
 def documentos_a_causar(conn: sqlite3.Connection, periodo: str) -> list[dict[str, Any]]:
     """Todos los documentos del mes, con XML si lo hay y con el Excel si no.
 
@@ -339,6 +357,8 @@ def documentos_a_causar(conn: sqlite3.Connection, periodo: str) -> list[dict[str
             continue
         if doc is not None:
             doc["origen"] = ORIGEN_XML
+            if doc.get("tipo") == "nota_credito":
+                doc = _en_negativo(doc)
         else:
             doc = _desde_la_fila(fila)
             if not doc:
