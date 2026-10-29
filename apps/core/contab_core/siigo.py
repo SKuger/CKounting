@@ -204,6 +204,11 @@ def export_siigo(conn, periodo: str, output_dir: str | Path) -> dict[str, Any]:
                     faltan.add(f"concepto:{ln.get('concepto_id') or '?'}")
                 base = abs(money.to_money(ln.get("base") or 0))
             es_cartera = rol == "cartera"
+            # La parte sin IVA (la marca la pone el asiento): base exenta en el
+            # libro de compras y ventas, para la declaración de IVA (D-136).
+            exenta: Any = ""
+            if rol in ("gasto", "ingreso", "no_gravado") and ln.get("base") not in (None, ""):
+                exenta = abs(debito - credito)
             valores: list[Any] = [
                 int(tipo) if tipo.isdigit() else tipo, a.get("siigo_consecutivo"), fecha,
                 "COP", "", _cuenta(ln.get("cuenta_puc")), _nit(ln.get("tercero_nit") or a.get("tercero_nit")),
@@ -212,7 +217,7 @@ def export_siigo(conn, periodo: str, output_dir: str | Path) -> dict[str, Any]:
                 1 if es_cartera else "", (fecha + timedelta(days=dias)) if (es_cartera and fecha) else "",
                 codigo_imp, "", "", numero_texto or (ln.get("descripcion") or ""), "",
                 debito, credito, numero_texto or (ln.get("descripcion") or ""),
-                base, "", "",
+                base, exenta, "",
             ]
             for c, v in enumerate(valores):
                 if isinstance(v, date):

@@ -439,3 +439,119 @@ def test_lo_aprobado_sin_numero_lo_recupera_al_volver_a_armar(conn):
     conn.commit()
     asiento.generar(conn, "2026-09")
     assert _uno(conn)["numero"]
+
+
+# ───────────────────── Plantilla por tercero (D-136) ──────────────────────────
+
+def _repartida(conn, cuenta2="51350501"):
+    """El gasto de 1.500.000 repartido a mano: 900.000 y 600.000."""
+    a = _uno(conn)
+    lineas = [dict(x) for x in a["lineas"]]
+    gasto = next(x for x in lineas if x["rol"] == "gasto")
+    gasto["debito"] = "900000"
+    lineas.append({"cuenta_puc": cuenta2, "descripcion": "Otra parte", "debito": "600000",
+                   "credito": "0", "tercero_nit": "", "rol": None, "codigo_siigo": None,
+                   "base": None, "concepto_id": None})
+    return a, lineas
+
+
+def test_el_reparto_se_aprende_y_el_mes_siguiente_se_sugiere(conn):
+    asiento.generar(conn, "2026-09")
+    a, lineas = _repartida(conn)
+    asiento.aprobar(conn, a["id"], lineas=lineas)
+    regla = causacion.proponer(conn, {"tercero_nit": "800100200", "naturaleza": "compra"})
+    assert regla.reparto == [("519530", Decimal("0.6")), ("51350501", Decimal("0.4"))]
+
+    asiento.desaprobar(conn, a["id"])
+    asiento.descartar(conn, a["id"])
+    a = _uno(conn)
+    gastos = {x["cuenta_puc"]: Decimal(x["debito"]) for x in a["lineas"] if x["rol"] == "gasto"}
+    assert gastos == {"519530": Decimal("900000"), "51350501": Decimal("600000")}
+    assert _cuadra(a["lineas"])
+    # Los valores se sugieren, pero los aprueba él: no entra en el lote.
+    assert a["estado"] == asiento.ESTADO_REVISAR
+    assert any("60 % a 519530, 40 % a 51350501" in x for x in a["avisos"])
+
+
+def test_aprobar_en_una_sola_cuenta_borra_el_reparto(conn):
+    asiento.generar(conn, "2026-09")
+    a, lineas = _repartida(conn)
+    asiento.aprobar(conn, a["id"], lineas=lineas)
+    asiento.desaprobar(conn, a["id"])
+    asiento.descartar(conn, a["id"])
+    a = _uno(conn)
+    lineas = [dict(x) for x in a["lineas"] if x["cuenta_puc"] != "51350501"]
+    next(x for x in lineas if x["rol"] == "gasto")["debito"] = "1500000"
+    asiento.aprobar(conn, a["id"], lineas=lineas)
+    regla = causacion.proponer(conn, {"tercero_nit": "800100200", "naturaleza": "compra"})
+    assert regla.reparto is None
+
+
+def test_el_reparto_redondea_al_centavo_y_suma_exacto():
+    partes = asiento._repartir(Decimal("100.01"),
+                               [("a", Decimal("0.333333")), ("b", Decimal("0.333333")),
+                                ("c", Decimal("0.333334"))])
+    assert [v for _c, v in partes] == [Decimal("33.34"), Decimal("33.34"), Decimal("33.33")]
+    assert sum(v for _c, v in partes) == Decimal("100.01")
+
+
+def test_un_anticipo_que_resta_no_es_un_reparto():
+    L = asiento.Linea
+    lineas = [L("519530", "Compra", debito=Decimal("1000"), rol="gasto"),
+              L("1330", "Anticipo", credito=Decimal("300"))]
+    assert asiento.reparto_de(lineas, "compra") == []
+
+
+# ────────────────── Base exenta para la declaración de IVA ────────────────────
+
+def _columna(r, nombre):
+    from openpyxl import load_workbook
+    ws = load_workbook(r["path"]).active
+    cab = [c.value for c in ws[1]]
+    i, cuenta = cab.index(nombre), cab.index("Código cuenta contable")
+    return {str(f[cuenta]): f[i] for f in ws.iter_rows(min_row=2, values_only=True) if f[cuenta]}
+
+
+def _exportar(conn, tmp_path, lineas=None):
+    a = _uno(conn)
+    asiento.aprobar(conn, a["id"], lineas=lineas if lineas is not None else a["lineas"])
+    siigo.guardar_config(conn, {"tipo:compra": "11", "ultimo:11": "0", "iva:19": "02",
+                                "iva:5": "03"})
+    return siigo.export_siigo(conn, "2026-09", tmp_path)
+
+
+def test_una_compra_sin_iva_sale_como_base_exenta(conn, tmp_path):
+    doc = conn.execute("SELECT id FROM documento").fetchone()["id"]
+    conn.execute("DELETE FROM documento_impuesto WHERE documento_id = ? AND es_retencion = 0", (doc,))
+    conn.execute("UPDATE documento SET total_impuestos = '0', total = '1500000' WHERE id = ?", (doc,))
+    conn.commit()
+    asiento.generar(conn, "2026-09")
+    assert not [x for x in _uno(conn)["lineas"] if x["rol"] == "iva"], "sin línea de IVA en cero"
+    exenta = _columna(_exportar(conn, tmp_path), "Base exenta libro compras/ventas")
+    assert exenta["519530"] == 1500000
+    assert exenta[next(k for k in exenta if k.startswith("2205"))] in (None, "")
+
+
+def test_con_iva_el_gasto_no_es_base_exenta(conn, tmp_path):
+    asiento.generar(conn, "2026-09")
+    exenta = _columna(_exportar(conn, tmp_path), "Base exenta libro compras/ventas")
+    assert exenta["519530"] in (None, "")
+
+
+def test_en_una_factura_mixta_solo_la_parte_sin_iva_es_exenta(conn, tmp_path):
+    _como_d1(conn)
+    asiento.generar(conn, "2026-09")
+    lineas = [dict(x) for x in _uno(conn)["lineas"]]
+    next(x for x in lineas if x["rol"] == "no_gravado")["cuenta_puc"] = "51953501"
+    exenta = _columna(_exportar(conn, tmp_path, lineas), "Base exenta libro compras/ventas")
+    assert exenta["51953501"] == 200000
+    assert exenta["519530"] in (None, "")
+
+
+def test_el_reparto_se_quita_desde_reglas(conn):
+    asiento.generar(conn, "2026-09")
+    a, lineas = _repartida(conn)
+    asiento.aprobar(conn, a["id"], lineas=lineas)
+    regla = next(r for r in causacion.listar(conn) if r["tercero_nit"] == "800100200")
+    causacion.guardar(conn, {**regla, "quitar_reparto": True})
+    assert causacion.proponer(conn, {"tercero_nit": "800100200", "naturaleza": "compra"}).reparto is None

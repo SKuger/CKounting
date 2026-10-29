@@ -474,9 +474,12 @@ def _armar(conn, ctx, documento, propuesta, *, tercero_decidido: bool | None):
     no_se_sabe = bool(es_venta and catalogo and propuesta.retenciones_cliente is None)
     sin_cuenta = any(not ln.cuenta_puc for ln in lineas)
     sin_iva = any(ln.rol == ROL_NO_GRAVADO for ln in lineas)
+    # Los valores repartidos se sugieren, pero los aprueba él (el contador,
+    # 2026-10-29): un asiento repartido no entra en el lote.
+    repartido = bool(propuesta.reparto)
     estado = (ESTADO_COMPLETO
               if (propuesta.seguro and not calculo.revisar and contrapartida
-                  and not no_se_sabe and not sin_cuenta and not sin_iva)
+                  and not no_se_sabe and not sin_cuenta and not sin_iva and not repartido)
               else ESTADO_REVISAR)
     return lineas, avisos, estado
 
@@ -484,6 +487,48 @@ def _armar(conn, ctx, documento, propuesta, *, tercero_decidido: bool | None):
 def _codigos_concepto(conn) -> dict[int, str]:
     return {r["id"]: (r["codigo_siigo"] or "").strip()
             for r in conn.execute("SELECT id, codigo_siigo FROM retencion_concepto")}
+
+
+def _repartir(monto: Decimal, reparto) -> list[tuple[str, Decimal]]:
+    """El monto por las partes del reparto, al centavo; la última se lleva el
+    redondeo para que la suma dé exacta."""
+    salida, puesto = [], CERO
+    for i, (cuenta, parte) in enumerate(reparto):
+        valor = monto - puesto if i == len(reparto) - 1 else _centavos(monto * parte)
+        salida.append((cuenta, valor))
+        puesto += valor
+    return salida
+
+
+def _es_principal(ln: Linea) -> bool:
+    """¿Es una línea del gasto o del ingreso, de las que se reparten?
+
+    Las que él agrega a mano no tienen rol; el impuesto al consumo va a la
+    cuenta del gasto pero no es parte del reparto."""
+    if ln.rol not in (ROL_GASTO, ROL_INGRESO, None):
+        return False
+    return not (ln.descripcion or "").startswith("Impuesto al consumo")
+
+
+def reparto_de(lineas: list[Linea], naturaleza: str | None) -> list[tuple[str, Decimal]]:
+    """Cómo quedó repartido el gasto o el ingreso en este asiento, por cuenta.
+
+    Una sola cuenta da []: no hay plantilla que guardar, y la que hubiera se borra."""
+    es_venta = naturaleza == documentos_module.NATURALEZA_VENTA
+    por_cuenta: dict[str, Decimal] = {}
+    for ln in lineas:
+        if not _es_principal(ln) or not ln.cuenta_puc:
+            continue
+        valor = (ln.credito - ln.debito) if es_venta else (ln.debito - ln.credito)
+        if valor != CERO:
+            por_cuenta[ln.cuenta_puc] = por_cuenta.get(ln.cuenta_puc, CERO) + valor
+    total = sum(por_cuenta.values(), CERO)
+    # Signos mezclados (un anticipo que resta, por ejemplo) no son un reparto.
+    if len(por_cuenta) < 2 or total == CERO or any(v * total < 0 for v in por_cuenta.values()):
+        return []
+    filas = list(por_cuenta.items())
+    partes = [(c, (v / total).quantize(Decimal("0.000001"))) for c, v in filas[:-1]]
+    return [*partes, (filas[-1][0], Decimal(1) - sum((p for _c, p in partes), CERO))]
 
 
 def _lineas_de(
@@ -541,6 +586,30 @@ def _lineas_de(
             salida.append(ln)
         return salida
 
+    # Sin IVA en todo el documento, el gasto o el ingreso es base exenta en el
+    # libro de compras y ventas de Siigo: es lo que lleva la declaración de IVA
+    # (el contador, 2026-10-29). La línea lleva la marca y el exportador escribe
+    # su valor. El documento soporte no: viene de un no obligado.
+    todo_sin_iva = (responsable_iva and not tramos and iva == CERO
+                    and naturaleza != documentos_module.NATURALEZA_DOC_SOPORTE)
+
+    def principales(cuenta: str | None, etiqueta: str, lado: str, monto: Decimal,
+                    rol: str) -> list[Linea]:
+        """El gasto o el ingreso: en una línea, o repartido como la última vez."""
+        partes = _repartir(monto, propuesta.reparto) if propuesta.reparto and monto != CERO \
+            else [(cuenta, monto)]
+        if len(partes) > 1:
+            avisos.append(
+                "Se repartió como la última vez: "
+                + ", ".join(f"{_tarifa_txt((p * 100).quantize(Decimal('0.1')))} % a {c}" for c, p in propuesta.reparto)
+                + ". Revisa los valores antes de aprobar.")
+        salida = []
+        for c, valor in partes:
+            ln = Linea(c, etiqueta, rol=rol, base=valor if todo_sin_iva else None)
+            setattr(ln, lado, valor)
+            salida.append(ln)
+        return salida
+
     def la_parte_sin_iva(lado: str) -> list[Linea]:
         if no_gravado == CERO:
             return []
@@ -554,7 +623,8 @@ def _lineas_de(
             avisos.append(
                 f"{_plata(no_gravado)} pesos de este documento no llevan IVA y van a su propia "
                 "cuenta: escríbela en la línea «Parte no gravada».")
-        ln = Linea(propuesta.cuenta_no_gravada, "Parte no gravada", rol=ROL_NO_GRAVADO)
+        ln = Linea(propuesta.cuenta_no_gravada, "Parte no gravada", rol=ROL_NO_GRAVADO,
+                   base=no_gravado)
         setattr(ln, lado, no_gravado)
         return [ln]
 
@@ -563,8 +633,8 @@ def _lineas_de(
         # generado son el haber.
         cartera = Linea(cuentas["cuenta_clientes"] or None, "Clientes", debito=total, rol=ROL_CARTERA)
         lineas = [cartera]
-        lineas.append(Linea(propuesta.cuenta_puc, nombre or "Venta",
-                            credito=subtotal - no_gravado, rol=ROL_INGRESO))
+        lineas.extend(principales(propuesta.cuenta_puc, nombre or "Venta", "credito",
+                                  subtotal - no_gravado, ROL_INGRESO))
         lineas.extend(la_parte_sin_iva("credito"))
         if iva != CERO and responsable_iva:
             lineas.extend(lineas_de_iva("credito", "IVA generado", cuentas["cuenta_iva_generado"]))
@@ -587,8 +657,8 @@ def _lineas_de(
                     "no lo cobra. Se causó el total como gasto.")
             subtotal, iva = (total if total != CERO else subtotal), CERO
             tramos = []
-        lineas = [Linea(propuesta.cuenta_puc, nombre or "Compra",
-                        debito=subtotal - no_gravado, rol=ROL_GASTO)]
+        lineas = principales(propuesta.cuenta_puc, nombre or "Compra", "debito",
+                             subtotal - no_gravado, ROL_GASTO)
         lineas.extend(la_parte_sin_iva("debito"))
         if otros != CERO:
             # El impuesto al consumo no se descuenta: es mayor valor del gasto.
@@ -929,9 +999,11 @@ def aprobar(
         principal = next((x for x in propias if x.rol in (ROL_GASTO, ROL_INGRESO)), None)
         sin_iva = next((x for x in propias if x.rol == ROL_NO_GRAVADO and x.cuenta_puc), None)
         _aprender(conn, a, cuenta_puc=c.get("cuenta_puc") or (principal.cuenta_puc if principal else None),
-                  correccion=c, cuenta_no_gravada=sin_iva.cuenta_puc if sin_iva else None)
+                  correccion=c, cuenta_no_gravada=sin_iva.cuenta_puc if sin_iva else None,
+                  reparto=reparto_de(propias, a.get("naturaleza")))
     else:
-        _aprender(conn, a, cuenta_puc=cuenta_puc, correccion=dados, cuenta_no_gravada=None)
+        _aprender(conn, a, cuenta_puc=cuenta_puc, correccion=dados, cuenta_no_gravada=None,
+                  reparto=None)
         # Se rehace el asiento con lo corregido.
         documento = _documento_de(conn, a)
         if documento is not None:
@@ -952,7 +1024,7 @@ def aprobar(
     return listar_uno(conn, a["id"])
 
 
-def _aprender(conn, a, *, cuenta_puc, correccion, cuenta_no_gravada) -> None:
+def _aprender(conn, a, *, cuenta_puc, correccion, cuenta_no_gravada, reparto) -> None:
     """La regla, para que la próxima factura de este tercero salga sola."""
     if not (correccion.get("aprender_regla", True) and cuenta_puc and a.get("tercero_nit")):
         return
@@ -984,7 +1056,7 @@ def _aprender(conn, a, *, cuenta_puc, correccion, cuenta_no_gravada) -> None:
         iva_codigo=correccion.get("iva_codigo"),
         retenciones_cliente=((correccion.get("retenciones_cliente") or "").strip() or None)
         if es_venta else None,
-        cuenta_no_gravada=cuenta_no_gravada)
+        cuenta_no_gravada=cuenta_no_gravada, reparto=reparto)
 
 
 def aprobar_lote(conn, periodo: str, ids: list[int] | None = None) -> dict[str, Any]:
