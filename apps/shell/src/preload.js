@@ -13,4 +13,5 @@ contextBridge.exposeInMainWorld('contab', {
   // de process.env porque un preload con sandbox no tiene entorno.
   token: ipcRenderer.sendSync('contab:token'),
   quit: () => ipcRenderer.send('app:quit'),
+  nuevaVentana: () => ipcRenderer.send('app:nueva-ventana'),
 })

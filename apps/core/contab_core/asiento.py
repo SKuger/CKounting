@@ -26,10 +26,13 @@ cuadra por construcción y no por una suma que pueda salir mal.
     Crédito  retenciones                                  lo retenido
     Crédito  proveedores                                  el resto
 
-    Factura de venta (y su nota crédito, en negativo) — el receptor es el cliente:
+    Factura de venta — el receptor es el cliente:
     Débito   clientes                                     total
     Crédito  cuenta del ingreso (la que dice la regla)    subtotal
     Crédito  IVA generado                                 IVA        (si aplica)
+
+La nota crédito llega en negativo, pero se asienta en las mismas cuentas y al
+lado contrario, con valores positivos (el contador, 2026-10-29).
 
 La nómina no se causa: el reporte no trae lo que hace falta para hacerlo bien.
 
@@ -71,6 +74,11 @@ ROL_GASTO, ROL_INGRESO, ROL_IVA, ROL_RETENCION, ROL_CARTERA = (
 # cuenta (lo pidió el contador el 2026-10-28, con las facturas de D1).
 ROL_NO_GRAVADO = "no_gravado"
 ROLES = (ROL_GASTO, ROL_INGRESO, ROL_IVA, ROL_RETENCION, ROL_CARTERA, ROL_NO_GRAVADO)
+
+# Lo más común es una vigencia que empieza después del mes que se causa.
+_SIN_PERFIL = ("No hay perfil fiscal vigente para este mes: se puso el IVA que reporta la "
+               "DIAN. Revisa el perfil de la empresa; si su vigencia empieza después de este "
+               "mes, adelántala.")
 
 
 @dataclass
@@ -453,7 +461,7 @@ def _armar(conn, ctx, documento, propuesta, *, tercero_decidido: bool | None):
                           else tercero_decidido))
     lineas, avisos = _lineas_de(
         documento, propuesta, calculo, cuentas=cuentas,
-        responsable_iva=bool(perfil and perfil.get("responsable_iva")),
+        responsable_iva=bool(perfil.get("responsable_iva")) if perfil else None,
         catalogo=catalogo, codigo_iva=_codigo_iva(
             conn, propuesta, _d(documento.get("total_impuestos")), _d(documento.get("subtotal"))),
         codigos_concepto=ctx["codigos_concepto"], iva_cfg=ctx["iva"])
@@ -477,9 +485,11 @@ def _armar(conn, ctx, documento, propuesta, *, tercero_decidido: bool | None):
     # Los valores repartidos se sugieren, pero los aprueba él (el contador,
     # 2026-10-29): un asiento repartido no entra en el lote.
     repartido = bool(propuesta.reparto)
+    iva_sin_perfil = perfil is None and any(ln.rol == ROL_IVA for ln in lineas)
     estado = (ESTADO_COMPLETO
               if (propuesta.seguro and not calculo.revisar and contrapartida
-                  and not no_se_sabe and not sin_cuenta and not sin_iva and not repartido)
+                  and not no_se_sabe and not sin_cuenta and not sin_iva and not repartido
+                  and not iva_sin_perfil)
               else ESTADO_REVISAR)
     return lineas, avisos, estado
 
@@ -507,7 +517,8 @@ def _es_principal(ln: Linea) -> bool:
     cuenta del gasto pero no es parte del reparto."""
     if ln.rol not in (ROL_GASTO, ROL_INGRESO, None):
         return False
-    return not (ln.descripcion or "").startswith("Impuesto al consumo")
+    descripcion = ln.descripcion or ""
+    return not (descripcion.startswith("Impuesto al consumo") or "mayor valor" in descripcion)
 
 
 def reparto_de(lineas: list[Linea], naturaleza: str | None) -> list[tuple[str, Decimal]]:
@@ -537,7 +548,7 @@ def _lineas_de(
     calculo: retenciones_module.Calculo,
     *,
     cuentas: dict[str, str],
-    responsable_iva: bool,
+    responsable_iva: bool | None,
     catalogo: dict | None = None,
     codigo_iva: str | None = None,
     codigos_concepto: dict[int, str] | None = None,
@@ -636,8 +647,16 @@ def _lineas_de(
         lineas.extend(principales(propuesta.cuenta_puc, nombre or "Venta", "credito",
                                   subtotal - no_gravado, ROL_INGRESO))
         lineas.extend(la_parte_sin_iva("credito"))
-        if iva != CERO and responsable_iva:
+        # El IVA que reporta la DIAN va siempre (el contador, 2026-10-29): sin
+        # él la venta no cuadra. Si el perfil no lo espera, se dice.
+        if iva != CERO:
             lineas.extend(lineas_de_iva("credito", "IVA generado", cuentas["cuenta_iva_generado"]))
+            if responsable_iva is None:
+                avisos.append(_SIN_PERFIL)
+            elif not responsable_iva:
+                avisos.append(
+                    "El perfil fiscal dice que la empresa no es responsable de IVA, pero esta "
+                    "venta trae IVA: revisa el perfil o la factura.")
         if otros != CERO:
             avisos.append(f"Esta venta trae {otros} pesos de impuesto al consumo: elija su cuenta.")
             lineas.append(Linea(None, "Impuesto al consumo", credito=otros))
@@ -665,8 +684,14 @@ def _lineas_de(
             lineas.append(Linea(propuesta.cuenta_puc, "Impuesto al consumo (mayor valor del gasto)",
                                 debito=otros, rol=ROL_GASTO))
 
-        if iva > CERO and responsable_iva:
+        if iva != CERO and responsable_iva is False:
+            # Quien no es responsable no descuenta el IVA: es mayor valor del gasto.
+            lineas.append(Linea(propuesta.cuenta_puc, "IVA (mayor valor del gasto)",
+                                debito=iva, rol=ROL_GASTO))
+        elif iva != CERO:
             lineas.extend(lineas_de_iva("debito", "IVA descontable", cuentas["cuenta_iva_descontable"]))
+            if responsable_iva is None:
+                avisos.append(_SIN_PERFIL)
 
         retenido = CERO
         for r in calculo.retenciones:
@@ -683,12 +708,25 @@ def _lineas_de(
         lineas.append(Linea(cuentas["cuenta_proveedores"] or None, "Proveedores",
                             credito=por_pagar, rol=ROL_CARTERA))
 
+    _sin_negativos(lineas)
     descuadre = sum(x.debito for x in lineas) - sum(x.credito for x in lineas)
     if descuadre != CERO:
         # Puede pasar si el XML no trae total, o si falta la cuenta del IVA.
         avisos.append(
             f"El asiento no cuadra por {descuadre} pesos; revísalo antes de aprobar.")
     return lineas, avisos
+
+
+def _sin_negativos(lineas: list[Linea]) -> None:
+    """Un valor negativo pasa a la columna contraria, en positivo.
+
+    La nota crédito llega en negativo (D-045), pero en el asiento va en la misma
+    cuenta y al otro lado (el contador, 2026-10-29)."""
+    for ln in lineas:
+        if ln.debito < CERO or ln.credito < CERO:
+            ln.debito, ln.credito = -ln.credito, -ln.debito
+            if ln.base is not None:
+                ln.base = abs(ln.base)
 
 
 def _escribir(conn, periodo, documento, estado, avisos, regla_id, lineas,
@@ -857,7 +895,6 @@ def _leer_lineas(lineas: list[dict[str, Any]]) -> list[Linea]:
             credito = _d(str(x.get("credito") or "0").replace(",", ""))
         except Exception as exc:
             raise ValueError(f"Línea {n}: el valor no es un número.") from exc
-        # Negativo sí puede ser: una nota crédito del reporte va en negativo (D-045).
         if debito and credito:
             raise ValueError(f"Línea {n}: una línea va al débito o al crédito, no a los dos.")
         if not debito and not credito and not cuenta:
@@ -875,6 +912,7 @@ def _leer_lineas(lineas: list[dict[str, Any]]) -> list[Linea]:
             tercero_nit=tercero))
     if not salida:
         raise ValueError("Un asiento sin líneas no se puede guardar.")
+    _sin_negativos(salida)
     return salida
 
 

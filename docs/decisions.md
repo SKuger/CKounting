@@ -1521,3 +1521,30 @@ cada mes, y el libro de compras de Siigo es lo que lee la declaración de IVA.
 
 **Por confirmar**: que Siigo acepte la columna 26 en una línea de gasto. Se
 prueba con el primer archivo de la 0.18.0.
+
+## D-137 — La nota crédito va al lado contrario, y el IVA de la DIAN va siempre
+
+**Decisión** (2026-10-29, observaciones del contador sobre la 0.18.1):
+
+- **Nada en negativo en el asiento.** La nota crédito sigue llegando en
+  negativo (D-045), pero cada línea pasa a la columna contraria y en positivo:
+  las mismas cuentas de la factura, al revés. Vale también para lo que él
+  escribe a mano en el editor. El archivo de Siigo ya lo hacía.
+- **La nota crédito con XML también se gira.** El XML la trae en positivo y
+  solo el camino del reporte la ponía en negativo: con XML se causaba como una
+  compra o venta más.
+- **El IVA que reporta la DIAN va siempre en la propuesta.** Faltaba en dos
+  casos: la nota crédito de compra (la condición era `IVA > 0`) y cualquier
+  documento de un mes sin perfil fiscal vigente (una vigencia que empieza
+  después del mes que se causa). Sin perfil, va como descontable o generado,
+  con un aviso, y el asiento queda por revisar. Si el perfil dice que la
+  empresa **no** es responsable, el IVA de la compra es mayor valor del gasto.
+- **Varias ventanas.** Ctrl+N, el botón de la barra superior o volver a abrir
+  el ícono abren otra ventana con el mismo servidor. Es seguro porque la
+  empresa va en la URL de cada ventana, no en un estado compartido.
+
+**Por qué**: así lo registra el contador en Siigo, y un asiento sin el IVA no
+cuadra.
+
+**Sin cambiar**: la retención en una nota crédito. Con valores negativos queda
+bajo la base mínima y no se calcula, como hasta ahora.

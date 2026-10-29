@@ -4,7 +4,7 @@
 // notificaciones mock y el beacon de estado ficticio se retiraron (0.1.4 #7) hasta que exista
 // una fuente real. Playground-only pieces (Control de marca panel, resizable grid, resolution
 // letterbox, Helm/Timón spines) are intentionally absent.
-import { Sun, Moon, Home, Building2, FileSearch, LifeBuoy, HelpCircle, Bell, ChevronDown, ChevronRight } from 'lucide-vue-next'
+import { AppWindow, Sun, Moon, Home, Building2, FileSearch, LifeBuoy, HelpCircle, Bell, ChevronDown, ChevronRight } from 'lucide-vue-next'
 import { CollapsibleRoot, CollapsibleTrigger, CollapsibleContent } from 'reka-ui'
 import { Popover, PopoverContent, PopoverTrigger } from '~/components/ui/popover'
 import { Button } from '~/components/ui/button'
@@ -21,6 +21,12 @@ const isDark = computed(() =>
   || (prefs.prefs.theme === 'system' && import.meta.client && window.matchMedia('(prefers-color-scheme: dark)').matches),
 )
 function toggleTheme() { prefs.setPref('theme', isDark.value ? 'light' : 'dark') }
+
+// Otra ventana de Contab en la misma pantalla (Ctrl+N hace lo mismo). Solo en el
+// programa instalado: en el navegador de desarrollo no hay puente.
+type Puente = { nuevaVentana?: () => void }
+const puente = ref<Puente | null>(null)
+onMounted(() => { puente.value = (window as unknown as { contab?: Puente }).contab ?? null })
 
 type NavLeaf = { label: string; to: string; icon?: unknown; match?: (p: string) => boolean }
 type NavGroup = { label: string; icon: unknown; children: NavLeaf[] }
@@ -190,6 +196,11 @@ watch(() => route.query.tour, (v) => {
             </PopoverContent>
           </Popover>
 
+          <Button v-if="puente?.nuevaVentana" variant="outline" size="icon" aria-label="Abrir otra ventana"
+            title="Abrir otra ventana (Ctrl+N)" class="rounded-full bg-muted text-foreground"
+            @click="puente.nuevaVentana()">
+            <AppWindow class="size-[18px]" />
+          </Button>
           <!-- tutorial de la vista actual -->
           <Button v-if="currentTour" variant="outline" size="icon" aria-label="Ver tutorial de esta pantalla"
             title="Ver tutorial de esta pantalla" class="rounded-full bg-muted text-foreground" @click="startTour">
