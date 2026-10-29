@@ -11,7 +11,7 @@
 // De ahí las tres cosas que manda esta pantalla: se ve el asiento ENTERO antes
 // de aprobar, se puede corregir, y al aprobar **se aprende** — aprobar no es
 // marcar una casilla, es enseñarle a Contab lo que él acaba de decidir.
-import { ArrowLeft, RefreshCw, Check, Undo2, ChevronRight, Download, FileSpreadsheet, Settings2, UploadCloud, Plus, X, Save } from 'lucide-vue-next'
+import { ArrowLeft, RefreshCw, Check, Undo2, ChevronRight, Download, FileSpreadsheet, Settings2, UploadCloud, Plus, X, Save, TriangleAlert } from 'lucide-vue-next'
 
 type Linea = {
   id: number; cuenta_puc: string | null; descripcion: string; debito: string; credito: string
@@ -25,6 +25,12 @@ type Asiento = {
   id: number; cufe: string; tercero_nit: string | null; fecha: string | null
   estado: string; avisos: string[]; aprobado: number; lineas: Linea[]; naturaleza: Naturaleza
   editado?: number
+  // Lo que eligió arriba del editor al guardar (JSON): retención, texto, IVA…
+  correccion?: string | null
+}
+type Guardada = {
+  cuenta_puc?: string; patron?: string; concepto_retencion_id?: number | string | null
+  sin_retencion?: boolean; aprender_regla?: boolean; iva_codigo?: string; retenciones_cliente?: string
 }
 const ETIQUETA: Record<Naturaleza, string> = { compra: 'Compra', venta: 'Venta', doc_soporte: 'Doc. soporte' }
 type Resumen = { total: number; completos: number; revisar: number; aprobados: number; porcentaje_completo: number }
@@ -462,20 +468,37 @@ async function generar() {
   }
 }
 
+function guardadaDe(a: Asiento): Guardada {
+  try { return a.correccion ? JSON.parse(a.correccion) as Guardada : {} } catch { return {} }
+}
+
 function abrir(a: Asiento) {
   if (abierto.value === a.id) { abierto.value = null; return }
   abierto.value = a.id
-  correccion.cuenta_puc = lineaDecidida(a)?.cuenta_puc || ''
-  correccion.patron = ''
+  // Lo que guardó vuelve como lo dejó (Carlos, 0.18.0: se perdían la retención
+  // y el «recordarlo cuando diga»). Sin nada guardado, lo que dicen las líneas.
+  const g = guardadaDe(a)
+  const conceptoDeLinea = a.lineas.find((l) => l.rol === 'retencion' && l.concepto_id)?.concepto_id
+  correccion.cuenta_puc = g.cuenta_puc || lineaDecidida(a)?.cuenta_puc || ''
+  correccion.patron = g.patron || ''
   borrador.value = aBorrador(a.lineas)
   sucio.value = !!a.editado
-  correccion.retencion = ''
-  correccion.aprender_regla = true
-  correccion.iva_codigo = a.lineas.find((l) => l.rol === 'iva')?.codigo_siigo || ''
-  const codigos = a.lineas.filter((l) => l.rol === 'retencion').map((l) => l.codigo_siigo || '')
+  correccion.retencion = g.sin_retencion ? 'ninguna'
+    : g.concepto_retencion_id ? String(g.concepto_retencion_id)
+      : conceptoDeLinea ? String(conceptoDeLinea) : ''
+  correccion.aprender_regla = g.aprender_regla ?? true
+  correccion.iva_codigo = g.iva_codigo || a.lineas.find((l) => l.rol === 'iva')?.codigo_siigo || ''
+  const codigos = g.retenciones_cliente
+    ? g.retenciones_cliente.split(',').map((c) => c.trim())
+    : a.lineas.filter((l) => l.rol === 'retencion').map((l) => l.codigo_siigo || '')
   for (const t of ['retefuente', 'reteiva', 'reteica'] as const)
     retCliente[t] = retPorTipo(t).find((r) => codigos.includes(r.codigo))?.codigo || ''
-  retCliente.tocado = false
+  retCliente.tocado = !!g.retenciones_cliente
+}
+
+// Cuánto no cuadra lo guardado, para señalarlo en la lista sin abrir la fila.
+function descuadreDe(a: Asiento): number {
+  return a.lineas.reduce((t, l) => t + centavos(l.debito) - centavos(l.credito), 0)
 }
 
 async function aprobar(a: Asiento) {
@@ -768,6 +791,10 @@ onMounted(cargar)
                 class="shrink-0 rounded border border-primary/40 px-1.5 py-px text-[10px] uppercase text-primary">
                 Guardado
               </span>
+              <span v-if="!a.aprobado && descuadreDe(a)" title="El débito y el crédito no son iguales: no se puede aprobar"
+                class="shrink-0 rounded border border-status-error bg-status-error-bg px-1.5 py-px text-[10px] font-semibold uppercase text-status-error">
+                No cuadra
+              </span>
               <span class="min-w-0 flex-1 truncate">{{ lineaDecidida(a)?.descripcion }}</span>
               <span class="shrink-0 font-mono text-xs">{{ pesos(String(a.lineas.reduce((t, l) => t + Number(l.debito || 0), 0))) }}</span>
               <Button v-if="a.aprobado" variant="ghost" size="icon-sm" title="Deshacer la aprobación"
@@ -776,7 +803,8 @@ onMounted(cargar)
 
             <div v-if="abierto === a.id" class="border-b border-border bg-muted/30 px-3 py-3">
               <ul v-if="a.avisos.length" class="mb-3 space-y-1">
-                <li v-for="(x, i) in a.avisos" :key="i" class="text-xs text-status-warning">· {{ x }}</li>
+                <li v-for="(x, i) in a.avisos" :key="i" class="text-xs"
+                  :class="/no cuadra/i.test(x) ? 'font-semibold text-status-error' : 'text-status-warning'">· {{ x }}</li>
               </ul>
 
               <!-- aprobado: solo se mira -->
@@ -884,16 +912,22 @@ onMounted(cargar)
                         <td colspan="3" class="py-1.5">
                           <Button variant="ghost" size="sm" class="h-7" @click="agregarLinea"><Plus class="size-3.5" /> Agregar línea</Button>
                         </td>
-                        <td class="py-1.5 pr-1 text-right font-mono">{{ deCentavos(sumaDebito) }}</td>
-                        <td class="py-1.5 pr-1 text-right font-mono">{{ deCentavos(sumaCredito) }}</td>
+                        <td class="py-1.5 pr-1 text-right font-mono" :class="diferencia ? 'font-semibold text-status-error' : ''">{{ deCentavos(sumaDebito) }}</td>
+                        <td class="py-1.5 pr-1 text-right font-mono" :class="diferencia ? 'font-semibold text-status-error' : ''">{{ deCentavos(sumaCredito) }}</td>
                         <td />
                       </tr>
                     </tfoot>
                   </table>
                 </div>
-                <p class="mt-1 text-xs" :class="sePuedeAprobar ? 'text-status-success' : 'text-status-warning'">
-                  <template v-if="diferencia">No cuadra: sobran {{ deCentavos(Math.abs(diferencia)) }} pesos en el {{ diferencia > 0 ? 'débito' : 'crédito' }}.</template>
-                  <template v-if="sinCuenta">{{ diferencia ? ' ' : '' }}{{ sinCuenta }} línea{{ sinCuenta > 1 ? 's' : '' }} sin cuenta.</template>
+                <!-- Un descuadre no puede pasar desapercibido (Carlos, 0.18.0). -->
+                <div v-if="diferencia" role="alert"
+                  class="mt-2 flex items-center gap-2 rounded-md border border-status-error bg-status-error-bg px-3 py-2 text-sm font-semibold text-status-error">
+                  <TriangleAlert class="size-4 shrink-0" />
+                  No cuadra: sobran {{ deCentavos(Math.abs(diferencia)) }} pesos en el {{ diferencia > 0 ? 'débito' : 'crédito' }}.
+                  <span class="font-normal">Usa «=» en la línea que deba llevar la diferencia.</span>
+                </div>
+                <p v-if="sinCuenta || sePuedeAprobar" class="mt-1 text-xs" :class="sePuedeAprobar ? 'text-status-success' : 'text-status-warning'">
+                  <template v-if="sinCuenta">{{ sinCuenta }} línea{{ sinCuenta > 1 ? 's' : '' }} sin cuenta.</template>
                   <template v-if="sePuedeAprobar">Cuadra.</template>
                 </p>
 
