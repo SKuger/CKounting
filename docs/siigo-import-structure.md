@@ -33,7 +33,7 @@ y tiene que cuadrar: en 482 líneas de un mes no hay uno descuadrado.
 | 22-23 | `Débito`, `Crédito` | Pesos, con decimales cuando los hay. | Contab |
 | 24 | `Observaciones` | Lo mismo que la descripción, o un texto corto («CUOTA PRESTAMO …»). | Contab |
 | 25 | `Base gravable libro compras/ventas` | La **base** de cada línea de impuesto o retención; `0` en las demás. | Contab |
-| 26 | `Base exenta libro compras/ventas` | Casi siempre vacío. | — |
+| 26 | `Base exenta libro compras/ventas` | El valor de la línea de gasto o ingreso **sin IVA**: todo el documento cuando no trae IVA, o la «Parte no gravada» de uno mixto (D-136). Vacío en las demás. | Contab |
 | 27 | `Mes de cierre` | Vacío. | — |
 
 ## Los tipos de comprobante que usa la empresa de referencia

@@ -1493,6 +1493,31 @@ sola cuenta por regla no cubre (facturas de D1 con 19 %, 5 % y excluidos). La
 cuenta de cada tarifa y de cada devolución ya estaba en el catálogo (D-129); lo
 que faltaba era que un documento pudiera tener más de una.
 
-**Pendiente**: la plantilla de reparto por tercero (plan 4.13) espera su
-respuesta sobre cómo repartir el valor.
+**Pendiente**: ~~la plantilla de reparto por tercero (plan 4.13)~~ → D-136.
 
+## D-136 — La plantilla de reparto por tercero y la base exenta
+
+**Decisión** (2026-10-29, por las respuestas del contador):
+
+- **El reparto se aprende al aprobar.** Si el gasto o el ingreso de un asiento
+  queda en dos o más cuentas, la regla del tercero guarda la proporción de
+  cada una (`regla_causacion.reparto`, JSON). Aprobar uno en una sola cuenta
+  la borra, y en Reglas se puede quitar.
+- **La siguiente factura se propone repartida** con esas proporciones, al
+  centavo, y la última cuenta se lleva el redondeo. *«Me puedes sugerir los
+  valores pero yo los apruebo»*: el asiento repartido queda por revisar y no
+  entra en el lote.
+- No cuentan para el reparto el impuesto al consumo ni una línea que resta
+  (un anticipo): eso no es repartir el gasto.
+- **Sin línea de IVA en cero.** El contador ponía una con el código 02 y
+  valor 0 en las compras sin IVA; dijo que no hace falta, pero que la parte sin
+  IVA tiene que quedar abierta para la declaración. Va en la columna 26 del
+  archivo de Siigo, `Base exenta libro compras/ventas`: el gasto o ingreso de
+  un documento sin IVA, y la «Parte no gravada» de uno mixto. El documento
+  soporte no, porque viene de un no obligado.
+
+**Por qué**: la regla de una sola cuenta no cubría al proveedor que él reparte
+cada mes, y el libro de compras de Siigo es lo que lee la declaración de IVA.
+
+**Por confirmar**: que Siigo acepte la columna 26 en una línea de gasto. Se
+prueba con el primer archivo de la 0.18.0.
