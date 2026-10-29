@@ -120,9 +120,16 @@ async function onSiigoFolder(ruta: string) {
   siigoOpen.value = false
   siigoExportando.value = true
   try {
-    const r = await rpc<{ path: string; comprobantes: number; lineas: number; cuadra: boolean; faltan: string[] }>(
+    const r = await rpc<{ path: string; comprobantes: number; lineas: number; cuadra: boolean; faltan: string[]
+      no_salen: { numero: string | null; fecha: string | null; tercero_nit: string | null; diferencia: string; sin_cuenta: boolean }[] }>(
       'siigo_exportar', { db_path: dbPath.value, periodo: periodo.value, output_dir: ruta })
     await cargarSiigo()
+    if (r.no_salen?.length) {
+      toast.error(`${r.no_salen.length} aprobados no salieron en el archivo`,
+        'No cuadran o les falta una cuenta: '
+        + r.no_salen.map((x) => `${x.numero || x.fecha} (${x.tercero_nit})`).join(', ')
+        + '. Deshaz su aprobación con la flecha, corrígelos y vuelve a armar el archivo.')
+    }
     if (r.faltan.length) {
       toast.error(`${r.comprobantes} comprobantes, pero faltan datos`,
         'Celdas vacías en el archivo: ' + r.faltan.map(etiquetaFalta).join(', ') + '. Complétalos en «Siigo» o en Tarifas y vuelve a exportar.')
