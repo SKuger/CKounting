@@ -1052,6 +1052,7 @@ def _h_carpeta_empresa(params: dict) -> dict:
     carpeta = params.get("carpeta")
     if not isinstance(carpeta, str) or not carpeta.strip():
         raise ValueError("carpeta requerida")
+    carpetas_module.validar_raiz(carpeta)
     storage_module.set_default_folder(db_path, carpeta.strip())
     for periodo in storage_module.periodo_folders(db_path):
         rutas = carpetas_module.preparar_mes(carpeta.strip(), periodo)
@@ -1066,6 +1067,7 @@ def _h_plan_mudanza(params: dict) -> dict:
     raiz = (params.get("carpeta") or info.get("default_folder") or "").strip()
     if not raiz:
         raise ValueError("Esta empresa todavía no tiene carpeta.")
+    carpetas_module.validar_raiz(raiz)
     return carpetas_module.mudar(db_path, raiz, dry_run=True)
 
 
@@ -1083,6 +1085,7 @@ def _h_mudar_carpetas(params: dict, progress=None) -> dict:
     raiz = (params.get("carpeta") or info.get("default_folder") or "").strip()
     if not raiz:
         raise ValueError("Esta empresa todavía no tiene carpeta.")
+    carpetas_module.validar_raiz(raiz)
     storage_module.set_default_folder(db_path, raiz)
     res = carpetas_module.mudar(db_path, raiz, dry_run=False)
 

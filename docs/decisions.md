@@ -1548,3 +1548,17 @@ cuadra.
 
 **Sin cambiar**: la retención en una nota crédito. Con valores negativos queda
 bajo la base mínima y no se calcula, como hasta ahora.
+
+## D-138 — La carpeta de la empresa no puede ser la de un mes
+
+**Decisión** (2026-11-03, por un bloqueo del contador con una empresa):
+
+- La empresa tenía como carpeta `…\ALAGUNA\2026-10`, la de un mes. La carga de
+  septiembre proponía exportar a octubre y, al borrar esa carpeta para empezar
+  de nuevo, el selector se quedaba en un 404 sin salida.
+- **El selector abre la carpeta más cercana que exista** y dice cuál faltaba, en
+  vez de un error.
+- **La salida de una carga va al mes de la carga**: `<empresa>/<AAAA-MM>/exports`.
+- **No se guarda como carpeta de empresa una que se llame `AAAA-MM`**: el
+  mensaje dice cuál es la carpeta madre. La empresa que ya quedó así muestra un
+  aviso con un botón que la corrige.

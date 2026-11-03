@@ -24,6 +24,7 @@ repartida en tres sitios que solo la base de datos sabía unir.
 from __future__ import annotations
 
 import csv
+import re
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -35,6 +36,22 @@ from .log import warn
 
 NOMBRE_SOPORTES = "soportes"
 MANIFIESTO = "_contab_movimientos.csv"
+
+
+def validar_raiz(raiz: str) -> str:
+    """La carpeta de la empresa no puede ser la de un mes: los meses van adentro.
+
+    Pasó con una empresa apuntando a `…/2026-10`: septiembre se exportaba a
+    octubre y, al borrar esa carpeta, el selector quedaba sin salida.
+    """
+    limpia = raiz.strip().rstrip("/\\")
+    nombre = re.split(r"[/\\]", limpia)[-1]
+    if re.fullmatch(r"\d{4}-\d{2}", nombre):
+        madre = limpia[: -len(nombre)].rstrip("/\\") or limpia
+        raise ValueError(
+            f"«{nombre}» es la carpeta de un mes. Elige la de la empresa, la que guarda "
+            f"los meses adentro: {madre}")
+    return raiz.strip()
 
 
 def carpeta_mes(raiz: str | Path, periodo: str) -> Path:
