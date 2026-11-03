@@ -127,7 +127,6 @@ async function refresh() {
   loading.value = true
   try {
     empresaInfo.value = await rpc<EmpresaInfo>('open_empresa', { db_path: dbPath.value })
-    proponerCarpeta(empresaInfo.value?.default_folder)
     data.value = await rpc<LoadRows>('get_load_rows', {
       db_path: dbPath.value,
       load_id: loadId.value,
@@ -295,6 +294,8 @@ const {
 // nota. El Excel de la DIAN no trae nada de eso, y sin ello causar es adivinar
 // desde el total.
 const periodoDelMes = computed(() => soportes.value?.periodo ?? null)
+// La salida se propone cuando ya se sabe de qué mes es la carga.
+watch(soportes, (s) => { if (s) proponerCarpeta(empresaInfo.value?.default_folder, s.periodo) })
 const {
   resumen: xmlResumen, abierto: xmlAbierto, leyendo: xmlLeyendo,
   documento: xmlDocumento, cufeAbierto: xmlCufeAbierto,

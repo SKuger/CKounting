@@ -117,6 +117,10 @@ function alternarPanel(cual: 'dian' | 'terceros' | 'mes') {
 // cualquier sitio y los Excel caían aparte: la contabilidad de un cliente quedaba
 // repartida en tres lugares que solo la base de datos sabía unir.
 const carpetaEmpresaOpen = ref(false)
+// La carpeta de la empresa guarda los meses adentro. Si quedó apuntando a un mes
+// (…\2026-10), los meses nuevos caen dentro de ese mes y la salida se va a él.
+const carpetaEsDeMes = computed(() => MES_AL_FINAL.test((info.value?.default_folder || '').replace(/[/\\]+$/, '')))
+const carpetaCorrecta = computed(() => carpetaDeEmpresa(info.value?.default_folder || ''))
 const mudanzaPlan = ref<{ total: number; movimientos: { periodo: string; origen: string; destino: string; motivo: string }[] } | null>(null)
 const mudando = ref(false)
 const carpetaElegida = ref('')
@@ -130,14 +134,18 @@ async function onCarpetaEmpresaPicked(ruta: string) {
   carpetaEmpresaOpen.value = false
   // Antes de mover un solo documento se enseña qué se va a mover: son papeles de
   // un cliente, no archivos de trabajo.
-  const plan = await rpc<{ total: number; movimientos: any[] }>('plan_mudanza', { db_path: dbPath.value, carpeta: ruta })
-  if (!plan.total) {
-    await rpc('carpeta_empresa', { db_path: dbPath.value, carpeta: ruta })
-    toast.success('Carpeta guardada', 'Los meses nuevos se crearán dentro de ella.')
-    await refresh()
-    return
+  try {
+    const plan = await rpc<{ total: number; movimientos: any[] }>('plan_mudanza', { db_path: dbPath.value, carpeta: ruta })
+    if (!plan.total) {
+      await rpc('carpeta_empresa', { db_path: dbPath.value, carpeta: ruta })
+      toast.success('Carpeta guardada', 'Los meses nuevos se crearán dentro de ella.')
+      await refresh()
+      return
+    }
+    mudanzaPlan.value = plan as any
+  } catch (exc) {
+    toast.error('No se guardó la carpeta', String(exc).replace(/^Error:\s*/, ''))
   }
-  mudanzaPlan.value = plan as any
 }
 
 async function confirmarMudanza() {
@@ -882,13 +890,24 @@ watch(dbPath, refresh)
     <Card v-else-if="loading" class="shrink-0"><CardContent class="py-10 text-center text-muted-foreground">Cargando empresa…</CardContent></Card>
     <Card v-else class="shrink-0"><CardContent class="py-6"><div class="rounded-md border border-status-error/30 bg-status-error-bg px-3 py-2 text-sm text-status-error">Empresa no encontrada. <NuxtLink to="/" class="underline">Volver</NuxtLink></div></CardContent></Card>
 
+    <div v-if="info && carpetaEsDeMes" role="alert"
+      class="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-status-warning/40 bg-status-warning-bg px-4 py-3 text-sm text-status-warning">
+      <span class="min-w-[16rem] flex-1">
+        La carpeta de esta empresa es la de un mes (<span class="break-all font-mono">{{ info.default_folder }}</span>).
+        Debe ser la de la empresa, la que guarda los meses adentro: <span class="break-all font-mono">{{ carpetaCorrecta }}</span>.
+      </span>
+      <Button size="sm" variant="outline" class="shrink-0" @click="onCarpetaEmpresaPicked(carpetaCorrecta)">
+        <FolderTree class="size-3.5" /> Usar la carpeta de la empresa
+      </Button>
+    </div>
+
     <!-- ══════════ el panel expansible: nunca un modal ══════════ -->
     <!-- el selector de carpetas trae su propio marco -->
     <DirectoryPicker
       v-if="panelActivo === 'carpeta'"
       class="shrink-0"
       :open="periodoPickerOpen || backupPickerOpen || carpetaEmpresaOpen"
-      :initial-path="''"
+      :initial-path="carpetaEmpresaOpen ? carpetaCorrecta : ''"
       :title="carpetaEmpresaOpen
         ? 'Carpeta de esta empresa — dentro se creará una por mes'
         : periodoPickerOpen

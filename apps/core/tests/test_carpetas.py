@@ -29,6 +29,16 @@ def test_el_mes_nace_con_su_carpeta(empresa: Path, tmp_path: Path):
     assert storage.periodo_folders(empresa)["2026-09"] == str(raiz / "2026-09" / "soportes")
 
 
+def test_la_carpeta_de_un_mes_no_sirve_de_carpeta_de_empresa(empresa: Path, tmp_path: Path):
+    """Con la empresa en `…/2026-10`, septiembre se exportaba a octubre."""
+    mes = tmp_path / "ALAGUNA" / "2026-10"
+    with pytest.raises(ValueError, match=r"carpeta de un mes.*ALAGUNA"):
+        HANDLERS["carpeta_empresa"]({"db_path": str(empresa), "carpeta": str(mes)})
+    with pytest.raises(ValueError, match="carpeta de un mes"):
+        HANDLERS["plan_mudanza"]({"db_path": str(empresa), "carpeta": str(mes)})
+    assert not (storage.read_empresa_info(empresa) or {}).get("default_folder")
+
+
 def test_sin_carpeta_de_empresa_lo_dice_en_vez_de_inventarse_una(empresa: Path):
     res = HANDLERS["create_periodo"]({"db_path": str(empresa), "periodo": "2026-09"})
     assert res["falta_carpeta_empresa"] is True
