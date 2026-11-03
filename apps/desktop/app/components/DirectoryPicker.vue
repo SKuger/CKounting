@@ -10,6 +10,7 @@ type DirResponse = {
   home: string
   entries: DirEntry[]
   error?: string
+  aviso?: string
 }
 
 const props = withDefaults(defineProps<{
@@ -32,11 +33,13 @@ const home = ref('')
 const entries = ref<DirEntry[]>([])
 const loading = ref(false)
 const errorMsg = ref('')
+const aviso = ref('')
 const showHidden = ref(false)
 
 async function loadPath(target: string) {
   loading.value = true
   errorMsg.value = ''
+  aviso.value = ''
   try {
     const params = new URLSearchParams()
     if (target) params.set('path', target)
@@ -51,6 +54,7 @@ async function loadPath(target: string) {
     separator.value = res.separator
     home.value = res.home
     entries.value = res.entries
+    aviso.value = res.aviso || ''
   } catch (exc) {
     errorMsg.value = String(exc)
   } finally {
@@ -140,7 +144,8 @@ function pick() {
 
     <div class="min-h-0 flex-1 overflow-auto px-3 py-2">
       <p v-if="loading" class="px-1 py-2 text-sm text-muted-foreground">Cargando…</p>
-      <div v-else-if="errorMsg" class="rounded-md border border-status-error/30 bg-status-error-bg px-3 py-2 text-sm text-status-error">{{ errorMsg }}</div>
+      <div v-else-if="aviso" class="mb-2 rounded-md border border-status-warning/40 bg-status-warning-bg px-3 py-2 text-sm text-status-warning">{{ aviso }}</div>
+      <div v-if="!loading && errorMsg" class="rounded-md border border-status-error/30 bg-status-error-bg px-3 py-2 text-sm text-status-error">{{ errorMsg }}</div>
       <p v-else-if="!entries.length" class="px-1 py-2 text-sm text-muted-foreground">Sin subcarpetas.</p>
       <ul v-else class="grid gap-0.5 sm:grid-cols-2 lg:grid-cols-3">
         <li

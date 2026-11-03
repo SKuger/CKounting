@@ -8,6 +8,14 @@ export type ExportResult = {
   rows_written: number
 }
 
+export const MES_AL_FINAL = /[/\\]\d{4}-\d{2}$/
+
+/** La carpeta de la empresa: si la guardada es la de un mes (`…/AAAA-MM`), su madre. */
+export function carpetaDeEmpresa(ruta: string): string {
+  const limpia = ruta.replace(/[/\\]+$/, '')
+  return MES_AL_FINAL.test(limpia) ? limpia.replace(MES_AL_FINAL, '') : limpia
+}
+
 export function useExportarFaltantes(dbPath: Ref<string>, loadId: Ref<number>) {
   const toast = useToast()
 
@@ -37,10 +45,15 @@ export function useExportarFaltantes(dbPath: Ref<string>, loadId: Ref<number>) {
     toast.info('Carpeta de salida elegida', path)
   }
 
-  /** Propone `<default_folder>/exports` si el usuario aún no eligió carpeta. */
-  function proponerCarpeta(defaultFolder: string | null | undefined) {
+  /** Propone `<empresa>/<mes de la carga>/exports` si el usuario aún no eligió carpeta. */
+  function proponerCarpeta(defaultFolder: string | null | undefined, periodo: string | null) {
     if (exportFolder.value || !defaultFolder) return
-    exportFolder.value = `${defaultFolder.replace(/[/\\]+$/, '')}/exports`
+    const raiz = defaultFolder.replace(/[/\\]+$/, '')
+    const sep = raiz.includes('\\') ? '\\' : '/'
+    // Una carpeta de empresa que es la de un mes (…\2026-10) dejaba la carga de
+    // septiembre exportando a octubre (el contador, 2026-11-03).
+    const empresa = carpetaDeEmpresa(raiz)
+    exportFolder.value = periodo ? [empresa, periodo, 'exports'].join(sep) : `${raiz}${sep}exports`
   }
 
   async function exportar() {

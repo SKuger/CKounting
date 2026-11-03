@@ -12,16 +12,23 @@ export default defineEventHandler(async (event) => {
   if (!target) target = homedir()
   target = resolve(target)
 
-  try {
-    const st = await stat(target)
-    if (!st.isDirectory()) {
-      setResponseStatus(event, 400)
-      return { ok: false, error: `No es un directorio: ${target}` }
+  // Una carpeta que se borró no deja el selector sin salida (el contador,
+  // 2026-11-03): se abre la más cercana que sí existe y se dice cuál faltaba.
+  const pedido = target
+  for (;;) {
+    try {
+      if ((await stat(target)).isDirectory()) break
+    } catch { /* no existe: se sube */ }
+    const arriba = dirname(target)
+    if (arriba === target) {
+      target = homedir()
+      break
     }
-  } catch (err) {
-    setResponseStatus(event, 404)
-    return { ok: false, error: `No se puede acceder a ${target}: ${String(err)}` }
+    target = arriba
   }
+  const aviso = target !== pedido
+    ? `La carpeta ${pedido} ya no existe. Se muestra la más cercana; elige aquí dónde guardar.`
+    : undefined
 
   let names: string[]
   try {
@@ -54,5 +61,6 @@ export default defineEventHandler(async (event) => {
     separator: sep,
     home: homedir(),
     entries,
+    aviso,
   }
 })
