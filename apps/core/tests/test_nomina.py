@@ -174,7 +174,7 @@ def test_la_nomina_aprobada_sale_en_el_archivo_de_siigo(conn, archivos, tmp_path
     assert r["cuadra"] and r["comprobantes"] == 1
     filas = [[cell.value for cell in row] for row in load_workbook(r["path"]).active.iter_rows()][1:]
     assert {f[0] for f in filas} == {992} and {f[1] for f in filas} == {67}, "sigue al 66"
-    assert {f[6] for f in filas} >= {98562771, int(EPS), int(FONDO)}, "cada línea con su tercero"
+    assert {f[6] for f in filas} >= {"98562771", EPS, FONDO}, "cada línea con su tercero"
     # exportar otra vez no cambia el consecutivo ni rehace lo aprobado
     nomina.generar(conn, "2026-09", archivos[0])
     siigo.export_siigo(conn, "2026-09", tmp_path / "out")

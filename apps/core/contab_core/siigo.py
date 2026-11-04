@@ -52,6 +52,8 @@ ETIQUETAS = {
 VENCIMIENTO_DIAS = 30
 
 _NUMERO_RE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9]*?)?[\s\-_]*(\d+)\s*$")
+# Con separador, el prefijo es lo de antes aunque empiece por número: «94DD 49995».
+_CON_SEPARADOR_RE = re.compile(r"^\s*(\S+?)[\s\-_]+(\d+)\s*$")
 
 
 def clase_de(asiento: dict[str, Any]) -> str:
@@ -66,6 +68,9 @@ def clase_de(asiento: dict[str, Any]) -> str:
 
 def partir_numero(numero: str | None) -> tuple[str, str]:
     """'FE1-123456' → ('FE1', '123456'); 'DSE 242' → ('DSE', '242'); '845' → ('', '845')."""
+    m = _CON_SEPARADOR_RE.match(numero or "")
+    if m:
+        return m.group(1).upper(), m.group(2)
     m = _NUMERO_RE.match(numero or "")
     if not m:
         return "", (numero or "").strip()
@@ -73,6 +78,32 @@ def partir_numero(numero: str | None) -> tuple[str, str]:
 
 
 # ─────────────────────────────── configuración ────────────────────────────────
+
+def prefijo_y_folio(conn, cufe: str | None, numero: str | None) -> tuple[str, str]:
+    """El prefijo y el consecutivo de la factura, para la línea de cartera.
+
+    El reporte de la DIAN los trae en columnas aparte; adivinarlos partiendo el
+    número fallaba con un prefijo que empieza por número (el contador,
+    2026-11-04: la 22050501 salía sin prefijo). Sin fila del reporte, se parte.
+    """
+    import json
+
+    fila = conn.execute(
+        "SELECT data_json FROM excel_row WHERE cufe_cude = ? ORDER BY id DESC LIMIT 1",
+        (cufe or "",)).fetchone() if cufe else None
+    if fila:
+        try:
+            datos = json.loads(fila[0] or "{}")
+        except ValueError:
+            datos = {}
+        prefijo = str(datos.get("Prefijo") or "").strip().upper()
+        folio = str(datos.get("Folio") or "").strip()
+        if prefijo and folio.upper().startswith(prefijo):
+            folio = folio[len(prefijo):].lstrip(" -_")
+        if folio:
+            return prefijo, folio
+    return partir_numero(numero)
+
 
 def config(conn) -> dict[str, str]:
     return {r["clave"]: r["valor"] for r in conn.execute("SELECT clave, valor FROM siigo_config")}
@@ -177,7 +208,7 @@ def export_siigo(conn, periodo: str, output_dir: str | Path) -> dict[str, Any]:
     for a in aprobados:
         clase = clase_de(a)
         tipo = (cfg.get(f"tipo:{clase}") or "").strip()
-        prefijo, consecutivo_doc = partir_numero(a.get("numero"))
+        prefijo, consecutivo_doc = prefijo_y_folio(conn, a.get("cufe"), a.get("numero"))
         numero_texto = f"{prefijo}-{consecutivo_doc}" if prefijo else consecutivo_doc
         fecha = _fecha(a.get("fecha"))
         comprobantes += 1
@@ -195,8 +226,9 @@ def export_siigo(conn, periodo: str, output_dir: str | Path) -> dict[str, Any]:
                 tarifa = _tarifa_iva(ln)
                 if not codigo_imp and tarifa:
                     codigo_imp = (cfg.get(f"iva:{tarifa}") or "").strip()
-                if tarifa and not codigo_imp:
-                    faltan.add(f"iva:{tarifa}")
+                if not codigo_imp:
+                    # Sin código, Siigo no lleva el IVA al libro de compras.
+                    faltan.add(f"iva:{tarifa}" if tarifa else "iva:sin-tarifa")
                 base = abs(money.to_money(ln.get("base") or 0))
             elif rol == "retencion":
                 codigo_imp = codigo_imp or codigos_concepto.get(ln.get("concepto_id") or 0, "")
@@ -310,9 +342,10 @@ def _cuenta(valor: str | None) -> Any:
     return int(v) if v.isdigit() else v
 
 
-def _nit(valor: str | None) -> Any:
-    v = (valor or "").strip().split("-")[0]
-    return int(v) if v.isdigit() else v
+def _nit(valor: str | None) -> str:
+    """Como texto: una cédula con cero adelante lo perdía como número (el
+    contador, 2026-11-04)."""
+    return (valor or "").strip().split("-")[0]
 
 
 # ─────────────────────────── el catálogo, desde su Excel ──────────────────────

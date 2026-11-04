@@ -1593,3 +1593,22 @@ arreglo ya publicado parecía no estar.
   origen `aprendida`, repartos y terceros por cuenta). Las reglas escritas a mano
   se quedan.
 - **«Borrar mes»** ahora borra también lo suyo; antes solo el Excel y la carpeta.
+
+## D-141 — El archivo de Siigo: tercero como texto y prefijo desde el reporte
+
+**Decisión** (2026-11-04, observaciones del contador sobre el archivo):
+
+- **`Identificación tercero` va como texto.** Como número, una cédula con cero
+  adelante lo perdía.
+- **El prefijo y el consecutivo de la cartera salen de las columnas `Prefijo` y
+  `Folio` del reporte de la DIAN**, no de partir el número. Partirlo fallaba con
+  un prefijo que empieza por número (`94DD 49995`): la 22050501 salía sin
+  prefijo. Sin fila del reporte se sigue partiendo, ahora respetando el
+  separador.
+- **Una línea de IVA sin código de Siigo se avisa al exportar**, también si no
+  se puede deducir la tarifa. Sin código, Siigo no lleva el IVA al libro de
+  compras.
+
+**Por confirmar**: el contador sospecha que el IVA de las compras no entra
+porque faltaba el prefijo; y mencionó una distribución del manual de Siigo
+que no llegó.
