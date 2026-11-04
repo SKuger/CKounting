@@ -5,7 +5,7 @@
 //
 // No hay tarifas de ICA: ninguna de las empresas del contador es agente de
 // ReteICA, y lo confirmó por escrito. Cuando alguna lo sea, se añade.
-import { ArrowLeft, UploadCloud, Plus, Pencil, Archive, ArchiveRestore, Search } from 'lucide-vue-next'
+import { ArrowLeft, UploadCloud, Plus, Pencil, Archive, ArchiveRestore, Search, Trash2, X } from 'lucide-vue-next'
 
 type Concepto = {
   id: number; concepto: string; aplica_a: string; sobre: string
@@ -33,7 +33,9 @@ const ultima = ref<Lista['ultima_importacion']>(null)
 const conteo = ref<{ total: number; archivados: number }>({ total: 0, archivados: 0 })
 const razonSocial = ref('')
 const busca = ref('')
-const verArchivados = ref(false)
+// Activos o archivados: dos vistas, nunca mezclados (2026-11-04: el contador
+// quiere ver solo los archivados y decidir ahí si los saca o los borra).
+const soloArchivados = ref(false)
 const anio = ref(new Date().getFullYear())
 
 const subiendo = ref(false)
@@ -52,10 +54,10 @@ const filtrados = computed(() => {
   return conceptos.value.filter((c) =>
     `${c.concepto} ${c.cuenta_puc ?? ''} ${c.observaciones ?? ''}`.toLowerCase().includes(q))
 })
-// Guardados en la base que la lista no está enseñando. Si son archivados, se
-// ofrece verlos; si no lo son, la lista y la base no cuadran y hay que decirlo
-// en vez de «todavía no hay tarifas».
-const ocultos = computed(() => Math.max(0, conteo.value.total - conceptos.value.length))
+const activos = computed(() => conteo.value.total - conteo.value.archivados)
+// La lista de activos no cuadra con lo que dice la base: no debería pasar
+// nunca, y si pasa hay que decirlo en vez de «todavía no hay tarifas».
+const descuadre = computed(() => !soloArchivados.value && conceptos.value.length !== activos.value)
 const sinTarifa = computed(() => conceptos.value.filter((c) => !c.tarifa).length)
 
 function humanError(e: unknown): string {
@@ -70,12 +72,14 @@ async function cargar() {
   cargando.value = true
   try {
     const r = await rpc<Lista>('tarifas_list', {
-      db_path: dbPath.value, anio: anio.value, incluir_archivados: verArchivados.value,
+      db_path: dbPath.value, anio: anio.value, solo_archivados: soloArchivados.value,
     })
     conceptos.value = r.conceptos
     uvt.value = r.uvt
     ultima.value = r.ultima_importacion
     conteo.value = r.conteo ?? { total: r.conceptos.length, archivados: 0 }
+    // Se sacó o se borró el último archivado: no hay nada que ver aquí.
+    if (soloArchivados.value && !conteo.value.archivados) soloArchivados.value = false
     const info = await rpc<{ razon_social: string }>('open_empresa', { db_path: dbPath.value })
     razonSocial.value = info.razon_social
   } catch (e) {
@@ -194,7 +198,7 @@ async function desarchivarTodos() {
   try {
     const r = await rpc<{ desarchivados: number }>('tarifas_desarchivar_todos', { db_path: dbPath.value })
     toast.success('Conceptos fuera del archivo', `${r.desarchivados} vuelven a la lista`)
-    verArchivados.value = false
+    soloArchivados.value = false
     await cargar()
   } catch (e) {
     toast.error('No se pudieron sacar del archivo', humanError(e))
@@ -203,7 +207,34 @@ async function desarchivarTodos() {
   }
 }
 
-watch([anio, verArchivados], cargar)
+// Borrar es para siempre: pide una segunda confirmación en la misma fila o en
+// la misma barra, nunca en un modal.
+const confirmarFila = ref<number | null>(null)
+const confirmarTodos = ref(false)
+const borrando = ref(false)
+async function borrar(ids?: number[]) {
+  borrando.value = true
+  try {
+    const r = await rpc<{ borrados: number; en_uso: string[] }>('tarifas_borrar_archivados', {
+      db_path: dbPath.value, ...(ids ? { ids } : {}) })
+    toast.success(r.borrados === 1 ? 'Concepto borrado' : `${r.borrados} conceptos borrados`)
+    if (r.en_uso.length) {
+      toast.warn(
+        r.en_uso.length === 1 ? 'Uno no se borró' : `${r.en_uso.length} no se borraron`,
+        `Los usa una regla de causación: ${r.en_uso.join(', ')}. Cambie la regla y vuelva a intentarlo.`)
+    }
+  } catch (e) {
+    toast.error('No se pudo borrar', humanError(e))
+  } finally {
+    borrando.value = false
+    confirmarFila.value = null
+    confirmarTodos.value = false
+    await cargar()
+  }
+}
+
+watch(soloArchivados, () => { confirmarFila.value = null; confirmarTodos.value = false })
+watch([anio, soloArchivados], cargar)
 onMounted(cargar)
 </script>
 
@@ -217,7 +248,12 @@ onMounted(cargar)
       <span class="text-border">/</span>
       <h1 class="font-heading text-xl font-medium tracking-tight">Tarifas y UVT</h1>
       <p class="text-sm text-muted-foreground">
-        <strong class="text-foreground">{{ conceptos.length }}</strong> conceptos
+        <template v-if="soloArchivados">
+          <strong class="text-foreground">{{ conteo.archivados }}</strong> archivados
+        </template>
+        <template v-else>
+          <strong class="text-foreground">{{ conceptos.length }}</strong> conceptos
+        </template>
         · {{ uvt.length }} años de UVT
         <template v-if="sinTarifa"> · <span class="text-status-warning">{{ sinTarifa }} sin tarifa numérica</span></template>
         <template v-if="ultima"> · último archivo: {{ ultima.source_name }}</template>
@@ -233,13 +269,18 @@ onMounted(cargar)
         Año
         <Input v-model.number="anio" type="number" class="w-24" />
       </label>
-      <label class="flex items-center gap-1.5 text-sm text-muted-foreground">
-        <input v-model="verArchivados" type="checkbox"> Ver archivados
-      </label>
-      <Button v-if="verArchivados && conteo.archivados" variant="outline" size="sm" :disabled="desarchivando"
-        @click="desarchivarTodos">
-        <ArchiveRestore class="size-3.5" /> Sacar los {{ conteo.archivados }} del archivo
-      </Button>
+      <div v-if="conteo.archivados || soloArchivados" class="inline-flex rounded-md border border-border p-0.5 text-sm">
+        <button type="button" class="rounded px-2.5 py-1 transition-colors"
+          :class="!soloArchivados ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground'"
+          @click="soloArchivados = false">
+          Activos <span class="font-mono text-xs">{{ activos }}</span>
+        </button>
+        <button type="button" class="rounded px-2.5 py-1 transition-colors"
+          :class="soloArchivados ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground'"
+          @click="soloArchivados = true">
+          Archivados <span class="font-mono text-xs">{{ conteo.archivados }}</span>
+        </button>
+      </div>
       <Button variant="outline" size="sm" @click="abrirConcepto()"><Plus class="size-3.5" /> Concepto</Button>
       <Button variant="outline" size="sm" @click="panel = 'uvt'">UVT</Button>
       <Button as="label" size="sm" :disabled="subiendo">
@@ -321,22 +362,38 @@ onMounted(cargar)
       </div>
     </section>
 
-    <section v-if="!cargando && ocultos && !verArchivados"
-      class="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-status-warning/40 bg-status-warning-bg px-3 py-2 text-sm text-status-warning">
-      <template v-if="conteo.archivados">
-        <span>
-          Hay <strong>{{ conteo.archivados }}</strong> {{ conteo.archivados === 1 ? 'concepto archivado' : 'conceptos archivados' }}
-          que no se están mostrando.
+    <!-- vista de archivados: aquí, y solo aquí, se decide qué hacer con ellos -->
+    <section v-if="soloArchivados && conteo.archivados"
+      class="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-border bg-card px-3 py-2 text-sm">
+      <template v-if="!confirmarTodos">
+        <span class="text-muted-foreground">
+          Los archivados no se usan para causar. Puede sacarlos del archivo o borrarlos.
         </span>
-        <Button size="sm" :disabled="desarchivando" @click="desarchivarTodos">
+        <span class="flex-1" />
+        <Button size="sm" variant="outline" :disabled="desarchivando || borrando" @click="desarchivarTodos">
           <ArchiveRestore class="size-3.5" /> {{ desarchivando ? 'Sacando…' : 'Sacarlos todos del archivo' }}
         </Button>
-        <Button size="sm" variant="outline" @click="verArchivados = true">Ver archivados</Button>
+        <Button size="sm" variant="outline" class="text-destructive" :disabled="desarchivando || borrando"
+          @click="confirmarTodos = true">
+          <Trash2 class="size-3.5" /> Borrarlos todos
+        </Button>
       </template>
-      <span v-else>
-        Hay <strong>{{ conteo.total }}</strong> conceptos guardados en esta empresa, pero la lista no los está mostrando.
-        Cierre esta pantalla y vuelva a entrar; si sigue igual, avísele a quien le da soporte.
-      </span>
+      <template v-else>
+        <span>
+          ¿Borrar los <strong>{{ conteo.archivados }}</strong> archivados para siempre? Esto no se puede deshacer.
+        </span>
+        <span class="flex-1" />
+        <Button size="sm" variant="destructive" :disabled="borrando" @click="borrar()">
+          {{ borrando ? 'Borrando…' : `Sí, borrar los ${conteo.archivados}` }}
+        </Button>
+        <Button size="sm" variant="ghost" :disabled="borrando" @click="confirmarTodos = false">Cancelar</Button>
+      </template>
+    </section>
+
+    <section v-if="!cargando && descuadre"
+      class="shrink-0 rounded-lg border border-status-warning/40 bg-status-warning-bg px-3 py-2 text-sm text-status-warning">
+      Hay <strong>{{ activos }}</strong> conceptos guardados en esta empresa, pero la lista no los está mostrando.
+      Cierre esta pantalla y vuelva a entrar; si sigue igual, avísele a quien le da soporte.
     </section>
 
     <section class="min-h-0 flex-1 overflow-auto rounded-lg border border-border bg-card">
@@ -358,7 +415,7 @@ onMounted(cargar)
         <tbody>
           <tr v-for="c in filtrados" :key="c.id"
             class="cursor-pointer border-b border-border/60 align-top hover:bg-muted/40"
-            :class="[c.archivado ? 'opacity-50' : '', borrador.id === c.id && panel === 'concepto' ? 'bg-primary/5' : '']"
+            :class="borrador.id === c.id && panel === 'concepto' ? 'bg-primary/5' : ''"
             title="Clic para editar"
             @click="abrirConcepto(c)">
             <td class="px-3 py-1.5">
@@ -388,10 +445,22 @@ onMounted(cargar)
             <td class="min-w-48 max-w-80 px-2 py-1.5 text-xs text-muted-foreground">{{ c.observaciones }}</td>
             <td class="whitespace-nowrap px-2 py-1.5 text-right">
               <Button variant="ghost" size="icon-sm" title="Editar" @click.stop="abrirConcepto(c)"><Pencil class="size-3.5" /></Button>
-              <Button variant="ghost" size="icon-sm" :title="c.archivado ? 'Sacar del archivo' : 'Archivar'" @click.stop="archivar(c)">
-                <ArchiveRestore v-if="c.archivado" class="size-3.5" />
-                <Archive v-else class="size-3.5" />
-              </Button>
+              <template v-if="confirmarFila === c.id">
+                <Button variant="destructive" size="sm" class="h-7" :disabled="borrando" @click.stop="borrar([c.id])">
+                  ¿Borrar?
+                </Button>
+                <Button variant="ghost" size="icon-sm" title="No borrar" @click.stop="confirmarFila = null"><X class="size-3.5" /></Button>
+              </template>
+              <template v-else>
+                <Button variant="ghost" size="icon-sm" :title="c.archivado ? 'Sacar del archivo' : 'Archivar'" @click.stop="archivar(c)">
+                  <ArchiveRestore v-if="c.archivado" class="size-3.5" />
+                  <Archive v-else class="size-3.5" />
+                </Button>
+                <Button v-if="c.archivado" variant="ghost" size="icon-sm" title="Borrar para siempre"
+                  class="text-destructive" @click.stop="confirmarFila = c.id">
+                  <Trash2 class="size-3.5" />
+                </Button>
+              </template>
             </td>
           </tr>
         </tbody>
@@ -400,6 +469,11 @@ onMounted(cargar)
         class="px-3 py-8 text-center text-sm text-muted-foreground">
         Ningún concepto coincide con «{{ busca.trim() }}».
       </p>
+      <div v-else-if="!cargando && !filtrados.length && !soloArchivados && conteo.archivados && !activos"
+        class="flex flex-col items-center gap-2 px-3 py-8 text-center text-sm text-muted-foreground">
+        Todos los conceptos de esta empresa están archivados.
+        <Button size="sm" variant="outline" @click="soloArchivados = true">Ver los {{ conteo.archivados }} archivados</Button>
+      </div>
       <p v-else-if="!cargando && !filtrados.length && !conteo.total"
         class="px-3 py-8 text-center text-sm text-muted-foreground">
         Todavía no hay tarifas. Suba el Excel del contador con el botón de arriba.
