@@ -18,6 +18,7 @@ type Uvt = { anio: number; valor: string; norma: string | null; fuente: string }
 type Lista = {
   conceptos: Concepto[]; uvt: Uvt[]
   ultima_importacion: { source_name: string; imported_at: string; conceptos: number } | null
+  conteo?: { total: number; archivados: number }
 }
 type Vista = { total_uvt: number; total_conceptos: number; avisos: string[]; source_name: string }
 
@@ -29,6 +30,7 @@ const cargando = ref(false)
 const conceptos = ref<Concepto[]>([])
 const uvt = ref<Uvt[]>([])
 const ultima = ref<Lista['ultima_importacion']>(null)
+const conteo = ref<{ total: number; archivados: number }>({ total: 0, archivados: 0 })
 const razonSocial = ref('')
 const busca = ref('')
 const verArchivados = ref(false)
@@ -50,6 +52,10 @@ const filtrados = computed(() => {
   return conceptos.value.filter((c) =>
     `${c.concepto} ${c.cuenta_puc ?? ''} ${c.observaciones ?? ''}`.toLowerCase().includes(q))
 })
+// Guardados en la base que la lista no está enseñando. Si son archivados, se
+// ofrece verlos; si no lo son, la lista y la base no cuadran y hay que decirlo
+// en vez de «todavía no hay tarifas».
+const ocultos = computed(() => Math.max(0, conteo.value.total - conceptos.value.length))
 const sinTarifa = computed(() => conceptos.value.filter((c) => !c.tarifa).length)
 
 function humanError(e: unknown): string {
@@ -69,6 +75,7 @@ async function cargar() {
     conceptos.value = r.conceptos
     uvt.value = r.uvt
     ultima.value = r.ultima_importacion
+    conteo.value = r.conteo ?? { total: r.conceptos.length, archivados: 0 }
     const info = await rpc<{ razon_social: string }>('open_empresa', { db_path: dbPath.value })
     razonSocial.value = info.razon_social
   } catch (e) {
@@ -138,7 +145,10 @@ function abrirConcepto(c?: Concepto) {
   if (c) {
     Object.assign(borrador, {
       id: c.id, concepto: c.concepto, aplica_a: c.aplica_a, sobre: c.sobre,
-      tarifa: c.tarifa ?? '', base_minima_uvt: c.base_minima_uvt ?? '',
+      // Number(): una tarifa guardada como «1.100» antes de normalizarla se
+      // leería «mil cien» en el campo.
+      tarifa: c.tarifa ? String(Number(c.tarifa)) : '',
+      base_minima_uvt: c.base_minima_uvt ? String(Number(c.base_minima_uvt)) : '',
       cuenta_puc: c.cuenta_puc ?? '', codigo_siigo: c.codigo_siigo ?? '', vigencia_desde: c.vigencia_desde ?? '',
       observaciones: c.observaciones ?? '',
     })
@@ -292,6 +302,21 @@ onMounted(cargar)
       </div>
     </section>
 
+    <section v-if="!cargando && ocultos && !verArchivados"
+      class="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-status-warning/40 bg-status-warning-bg px-3 py-2 text-sm text-status-warning">
+      <template v-if="conteo.archivados">
+        <span>
+          Hay <strong>{{ conteo.archivados }}</strong> {{ conteo.archivados === 1 ? 'concepto archivado' : 'conceptos archivados' }}
+          que no se están mostrando.
+        </span>
+        <Button size="sm" variant="outline" @click="verArchivados = true">Ver archivados</Button>
+      </template>
+      <span v-else>
+        Hay <strong>{{ conteo.total }}</strong> conceptos guardados en esta empresa, pero la lista no los está mostrando.
+        Cierre esta pantalla y vuelva a entrar; si sigue igual, avísele a quien le da soporte.
+      </span>
+    </section>
+
     <section class="min-h-0 flex-1 overflow-auto rounded-lg border border-border bg-card">
       <table class="w-full text-sm">
         <thead class="sticky top-0 bg-card">
@@ -304,12 +329,16 @@ onMounted(cargar)
             <th class="px-2 py-2 font-normal">Cuenta</th>
             <th class="px-2 py-2 font-normal" title="Código del impuesto en el catálogo de Siigo">Siigo</th>
             <th class="px-2 py-2 font-normal">Desde</th>
+            <th class="px-2 py-2 font-normal">Observaciones</th>
             <th class="px-2 py-2" />
           </tr>
         </thead>
         <tbody>
-          <tr v-for="c in filtrados" :key="c.id" class="border-b border-border/60"
-            :class="c.archivado ? 'opacity-50' : ''">
+          <tr v-for="c in filtrados" :key="c.id"
+            class="cursor-pointer border-b border-border/60 align-top hover:bg-muted/40"
+            :class="[c.archivado ? 'opacity-50' : '', borrador.id === c.id && panel === 'concepto' ? 'bg-primary/5' : '']"
+            title="Clic para editar"
+            @click="abrirConcepto(c)">
             <td class="px-3 py-1.5">
               {{ c.concepto }}
               <span v-if="c.fuente === 'manual'" class="ml-1 rounded bg-muted px-1 text-[10px] uppercase">manual</span>
@@ -319,10 +348,10 @@ onMounted(cargar)
               <span v-if="c.tarifa">{{ Number(c.tarifa) }}%</span>
               <span v-else class="text-status-warning" :title="c.tarifa_texto || ''">{{ c.tarifa_texto || '—' }}</span>
             </td>
-            <td class="px-2 py-1.5 text-xs text-muted-foreground">
+            <td class="whitespace-nowrap px-2 py-1.5 text-xs text-muted-foreground">
               {{ c.sobre === 'iva' ? 'el IVA' : 'la base' }}
             </td>
-            <td class="px-2 py-1.5 text-right font-mono text-xs">
+            <td class="whitespace-nowrap px-2 py-1.5 text-right font-mono text-xs">
               <template v-if="c.base_minima_uvt">
                 {{ Number(c.base_minima_uvt) }} UVT
                 <span v-if="c.base_minima_pesos" class="text-muted-foreground">
@@ -333,10 +362,11 @@ onMounted(cargar)
             </td>
             <td class="px-2 py-1.5 font-mono text-xs">{{ c.cuenta_puc }}</td>
             <td class="px-2 py-1.5 font-mono text-xs" :class="c.codigo_siigo ? '' : 'text-status-warning'">{{ c.codigo_siigo || 'falta' }}</td>
-            <td class="px-2 py-1.5 font-mono text-xs text-muted-foreground">{{ c.vigencia_desde }}</td>
+            <td class="whitespace-nowrap px-2 py-1.5 font-mono text-xs text-muted-foreground">{{ c.vigencia_desde }}</td>
+            <td class="min-w-48 max-w-80 px-2 py-1.5 text-xs text-muted-foreground">{{ c.observaciones }}</td>
             <td class="whitespace-nowrap px-2 py-1.5 text-right">
-              <Button variant="ghost" size="icon-sm" @click="abrirConcepto(c)"><Pencil class="size-3.5" /></Button>
-              <Button variant="ghost" size="icon-sm" @click="archivar(c)">
+              <Button variant="ghost" size="icon-sm" title="Editar" @click.stop="abrirConcepto(c)"><Pencil class="size-3.5" /></Button>
+              <Button variant="ghost" size="icon-sm" :title="c.archivado ? 'Sacar del archivo' : 'Archivar'" @click.stop="archivar(c)">
                 <ArchiveRestore v-if="c.archivado" class="size-3.5" />
                 <Archive v-else class="size-3.5" />
               </Button>
@@ -344,7 +374,12 @@ onMounted(cargar)
           </tr>
         </tbody>
       </table>
-      <p v-if="!cargando && !filtrados.length" class="px-3 py-8 text-center text-sm text-muted-foreground">
+      <p v-if="!cargando && !filtrados.length && busca.trim() && conceptos.length"
+        class="px-3 py-8 text-center text-sm text-muted-foreground">
+        Ningún concepto coincide con «{{ busca.trim() }}».
+      </p>
+      <p v-else-if="!cargando && !filtrados.length && !conteo.total"
+        class="px-3 py-8 text-center text-sm text-muted-foreground">
         Todavía no hay tarifas. Suba el Excel del contador con el botón de arriba.
       </p>
     </section>
