@@ -53,6 +53,12 @@ _ALIAS = {
     "aplica": ("aplica a", "aplica", "dirigido a"),
     "desde": ("rige desde", "vigencia desde", "desde", "vigencia"),
     "obs": ("observaciones", "notas", "observacion"),
+    # Opcionales: la pantalla los muestra y el contador quiso poder llenarlos
+    # desde el archivo (2026-11-04). Sin ellos, «sobre» se deduce del texto de
+    # la tarifa y el código de Siigo lo pone el catálogo de impuestos.
+    "sobre": ("sobre", "se calcula sobre", "calcula sobre"),
+    "siigo": ("código siigo", "codigo siigo", "código de impuesto siigo",
+              "codigo de impuesto siigo", "siigo"),
 }
 
 _APLICA = {
@@ -195,7 +201,7 @@ def cargar(source_path: str | Path) -> Cargado:
         return res
 
     fila, mapa = _cabeceras(
-        ws, ("concepto", "tarifa", "base_uvt", "cuenta", "aplica", "desde", "obs"))
+        ws, ("concepto", "tarifa", "base_uvt", "cuenta", "aplica", "desde", "obs", "sobre", "siigo"))
     if "concepto" not in mapa or "tarifa" not in mapa:
         res.avisos.append("La hoja de retenciones no tiene columnas de concepto y tarifa.")
         return res
@@ -207,10 +213,23 @@ def cargar(source_path: str | Path) -> Cargado:
         tarifa, tarifa_texto = tarifa_de_celda(ws.cell(r, mapa["tarifa"]))
         base = base_minima_de(ws.cell(r, mapa["base_uvt"]).value) if "base_uvt" in mapa else None
         aplica_txt = _txt(ws.cell(r, mapa["aplica"]).value) if "aplica" in mapa else ""
+        sobre_txt = _clave(ws.cell(r, mapa["sobre"]).value) if "sobre" in mapa else ""
+        if sobre_txt:
+            sobre = SOBRE_IVA if "iva" in sobre_txt else SOBRE_BASE
+        else:
+            sobre = _familia(tarifa_texto, concepto)
+        siigo = ws.cell(r, mapa["siigo"]).value if "siigo" in mapa else None
+        if isinstance(siigo, float) and siigo.is_integer():
+            siigo = int(siigo)
+        # «02» escrito como número llega 2: el catálogo de Siigo usa dos dígitos.
+        siigo_txt = _txt(siigo)
+        if siigo_txt.isdigit() and len(siigo_txt) == 1:
+            siigo_txt = siigo_txt.zfill(2)
         res.conceptos.append({
             "concepto": concepto,
             "aplica_a": _APLICA.get(_clave(aplica_txt), _clave(aplica_txt)),
-            "sobre": _familia(tarifa_texto, concepto),
+            "sobre": sobre,
+            "codigo_siigo": siigo_txt or None,
             "tarifa": str(tarifa) if tarifa is not None else None,
             "tarifa_texto": tarifa_texto,
             "base_minima_uvt": str(base) if base is not None else None,
@@ -255,18 +274,19 @@ def guardar(conn, cargado: Cargado, *, dry_run: bool = False) -> dict[str, Any]:
             conn.execute(
                 "UPDATE retencion_concepto SET sobre = ?, tarifa = ?, tarifa_texto = ?,"
                 " base_minima_uvt = ?, cuenta_puc = ?, observaciones = ?, fuente = 'excel',"
+                " codigo_siigo = COALESCE(?, codigo_siigo),"
                 " updated_at = datetime('now') WHERE id = ?",
                 (c["sobre"], c["tarifa"], c["tarifa_texto"], c["base_minima_uvt"],
-                 c["cuenta_puc"], c["observaciones"], ya[0]))
+                 c["cuenta_puc"], c["observaciones"], c.get("codigo_siigo"), ya[0]))
             actualizados += 1
         else:
             conn.execute(
                 "INSERT INTO retencion_concepto(concepto, aplica_a, sobre, tarifa,"
                 " tarifa_texto, base_minima_uvt, cuenta_puc, vigencia_desde, observaciones,"
-                " fuente) VALUES (?,?,?,?,?,?,?,?,?, 'excel')",
+                " codigo_siigo, fuente) VALUES (?,?,?,?,?,?,?,?,?,?, 'excel')",
                 (c["concepto"], c["aplica_a"], c["sobre"], c["tarifa"], c["tarifa_texto"],
                  c["base_minima_uvt"], c["cuenta_puc"], c["vigencia_desde"],
-                 c["observaciones"]))
+                 c["observaciones"], c.get("codigo_siigo")))
             nuevos += 1
 
     conn.execute(

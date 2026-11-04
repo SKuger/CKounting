@@ -189,3 +189,32 @@ def test_un_archivo_sin_las_hojas_lo_dice_en_vez_de_quedarse_callado(tmp_path: P
     assert c.conceptos == [] and c.uvt == []
     assert any("UVT" in a for a in c.avisos)
     assert any("retenciones" in a for a in c.avisos)
+
+
+def test_sobre_y_codigo_siigo_se_pueden_llenar_desde_el_archivo(tmp_path: Path):
+    """La pantalla los muestra; el contador quiso llenarlos en el Excel (2026-11-04)."""
+    wb = Workbook()
+    wb.active.title = "UVT"
+    ws = wb.create_sheet("Retenciones")
+    ws.append(["Concepto", "Tarifa (%)", "Sobre", "Código Siigo", "Cuenta PUC"])
+    ws.append(["Compras", 2.5, "Base", 17, "23654001"])
+    ws.append(["ReteIVA régimen simple", 15, "IVA", "09", "23670001"])
+    ws.append(["Honorarios", 11, None, None, "23651503"])
+    destino = tmp_path / "completo.xlsx"
+    wb.save(destino)
+    c = tarifas.cargar(destino)
+    por = {x["concepto"]: x for x in c.conceptos}
+    assert (por["Compras"]["sobre"], por["Compras"]["codigo_siigo"]) == ("base", "17")
+    assert (por["ReteIVA régimen simple"]["sobre"], por["ReteIVA régimen simple"]["codigo_siigo"]) == ("iva", "09")
+    assert por["Honorarios"]["codigo_siigo"] is None, "sin columna llena, lo pone el catálogo"
+
+    db = tmp_path / "e.db"
+    storage.init_empresa_db(db, nit="900181831", dv="4", razon_social="X")
+    conn = storage.connect(db)
+    storage.ensure_schema(conn)
+    tarifas.guardar(conn, c)
+    conn.execute("UPDATE retencion_concepto SET codigo_siigo = '13' WHERE concepto = 'Honorarios'")
+    tarifas.guardar(conn, tarifas.cargar(destino))
+    codigos = dict(conn.execute("SELECT concepto, codigo_siigo FROM retencion_concepto").fetchall())
+    assert codigos["Compras"] == "17"
+    assert codigos["Honorarios"] == "13", "volver a subir sin el código no borra el del catálogo"
