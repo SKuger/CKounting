@@ -1631,7 +1631,8 @@ def _h_tarifas_list(params: dict) -> dict:
     try:
         storage_module.ensure_schema(conn)
         conceptos = tarifas_module.listar_conceptos(
-            conn, incluir_archivados=bool(params.get("incluir_archivados")))
+            conn, incluir_archivados=bool(params.get("incluir_archivados")),
+            solo_archivados=bool(params.get("solo_archivados")))
         if anio:
             # La base en pesos depende del año; se calcula al listar y no se
             # guarda, porque cambia sola cuando cambia la UVT.
@@ -1688,6 +1689,18 @@ def _h_tarifas_desarchivar_todos(params: dict) -> dict:
     try:
         storage_module.ensure_schema(conn)
         return {"desarchivados": tarifas_module.desarchivar_todos(conn)}
+    finally:
+        conn.close()
+
+
+def _h_tarifas_borrar_archivados(params: dict) -> dict:
+    """Sin `ids` borra todos los archivados; con `ids`, solo esos."""
+    db_path = Path(params["db_path"])
+    ids = params.get("ids")
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return tarifas_module.borrar_archivados(conn, ids if isinstance(ids, list) else None)
     finally:
         conn.close()
 
@@ -2156,6 +2169,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "tarifas_guardar_uvt": _h_tarifas_guardar_uvt,
     "tarifas_archivar_concepto": _h_tarifas_archivar_concepto,
     "tarifas_desarchivar_todos": _h_tarifas_desarchivar_todos,
+    "tarifas_borrar_archivados": _h_tarifas_borrar_archivados,
     "puc_list": _h_puc_list,
     "puc_save_account": _h_puc_save_account,
     "puc_archive_account": _h_puc_archive_account,

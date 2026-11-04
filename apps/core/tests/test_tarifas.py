@@ -283,3 +283,37 @@ def test_desarchivar_todos_de_una_vez(excel: Path, tmp_path: Path):
     assert tarifas.desarchivar_todos(conn) == total
     assert len(tarifas.listar_conceptos(conn)) == total
     assert tarifas.desarchivar_todos(conn) == 0
+
+
+def test_ver_solo_los_archivados(excel: Path, tmp_path: Path):
+    conn = storage.connect(tmp_path / "e.db")
+    storage.ensure_schema(conn)
+    tarifas.guardar(conn, tarifas.cargar(excel))
+    uno = tarifas.listar_conceptos(conn)[0]
+    tarifas.archivar_concepto(conn, uno["id"])
+    assert [c["id"] for c in tarifas.listar_conceptos(conn, solo_archivados=True)] == [uno["id"]]
+    assert uno["id"] not in [c["id"] for c in tarifas.listar_conceptos(conn)]
+
+
+def test_borrar_solo_toca_archivados_y_respeta_las_reglas(excel: Path, tmp_path: Path):
+    """Borrar exige archivar primero, y el que usa una regla no se va."""
+    conn = storage.connect(tmp_path / "e.db")
+    storage.ensure_schema(conn)
+    tarifas.guardar(conn, tarifas.cargar(excel))
+    todos = tarifas.listar_conceptos(conn)
+    activo, suelto, usado, otro = todos[0], todos[1], todos[2], todos[3]
+    for c in (suelto, usado, otro):
+        tarifas.archivar_concepto(conn, c["id"])
+    conn.execute("INSERT INTO regla_causacion(cuenta_puc, concepto_retencion_id) VALUES ('51101001', ?)",
+                 (usado["id"],))
+
+    # Uno solo, y un activo pedido por id no se borra.
+    r = tarifas.borrar_archivados(conn, [suelto["id"], activo["id"]])
+    assert r == {"borrados": 1, "en_uso": []}
+    assert activo["id"] in [c["id"] for c in tarifas.listar_conceptos(conn)]
+
+    # Todos: el que usa la regla se queda y se dice cuál es.
+    r = tarifas.borrar_archivados(conn)
+    assert r == {"borrados": 1, "en_uso": [usado["concepto"]]}
+    assert [c["id"] for c in tarifas.listar_conceptos(conn, solo_archivados=True)] == [usado["id"]]
+    assert tarifas.borrar_archivados(conn, []) == {"borrados": 0, "en_uso": []}

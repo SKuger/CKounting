@@ -333,9 +333,12 @@ def base_minima_pesos(conn, concepto: dict[str, Any], anio: int) -> Decimal | No
         return None
 
 
-def listar_conceptos(conn, *, incluir_archivados: bool = False) -> list[dict[str, Any]]:
+def listar_conceptos(conn, *, incluir_archivados: bool = False,
+                     solo_archivados: bool = False) -> list[dict[str, Any]]:
     sql = "SELECT * FROM retencion_concepto"
-    if not incluir_archivados:
+    if solo_archivados:
+        sql += " WHERE archivado <> 0"
+    elif not incluir_archivados:
         sql += " WHERE archivado = 0"
     sql += " ORDER BY concepto, aplica_a"
     return [dict(r) for r in conn.execute(sql)]
@@ -410,6 +413,34 @@ def desarchivar_todos(conn) -> int:
         " WHERE archivado <> 0").rowcount
     conn.commit()
     return int(n)
+
+
+def borrar_archivados(conn, ids: list[int] | None = None) -> dict[str, Any]:
+    """Borra para siempre conceptos ARCHIVADOS (todos, o los de `ids`).
+
+    Solo archivados: borrar exige archivar primero, así un clic suelto en la
+    lista de activos no se lleva nada. Y no se borra el que usa una regla de
+    causación —la regla quedaría apuntando a la nada—: se devuelve en `en_uso`
+    para que la pantalla diga cuáles quedaron. Los asientos ya hechos no lo
+    necesitan: cada línea guarda su propio código de Siigo.
+    """
+    sql = ("SELECT id, concepto FROM retencion_concepto WHERE archivado <> 0"
+           " AND id IN (SELECT concepto_retencion_id FROM regla_causacion"
+           "            WHERE concepto_retencion_id IS NOT NULL)")
+    filtro, args = "", []
+    if ids is not None:
+        ids = [int(i) for i in ids]
+        if not ids:
+            return {"borrados": 0, "en_uso": []}
+        filtro = f" AND id IN ({','.join('?' * len(ids))})"
+        args = ids
+    en_uso = [dict(r) for r in conn.execute(sql + filtro, args)]
+    n = conn.execute(
+        "DELETE FROM retencion_concepto WHERE archivado <> 0"
+        " AND id NOT IN (SELECT concepto_retencion_id FROM regla_causacion"
+        "                WHERE concepto_retencion_id IS NOT NULL)" + filtro, args).rowcount
+    conn.commit()
+    return {"borrados": int(n), "en_uso": [r["concepto"] for r in en_uso]}
 
 
 def ultima_importacion(conn) -> dict[str, Any] | None:
