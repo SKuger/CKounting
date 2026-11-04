@@ -141,8 +141,16 @@ def test_la_plantilla_se_aprende_del_992_que_ya_esta_en_siigo(conn, archivos):
     assert f"23700501|{EPS}" in r["entidades"] and f"23704505|{FONDO}" in r["entidades"]
 
 
+def _empleados_completos(conn, archivos):
+    """Clase de riesgo para todos y un salario mínimo de prueba: sin avisos de faltantes."""
+    from contab_core import siigo
+    ids = {e.id for q in nomina.leer_nomina(archivos[0]).values() for e in q.empleados}
+    siigo.guardar_config(conn, {"nom:smmlv:2026": "1000000", **{f"nom:riesgo:{i}": "I" for i in ids}})
+
+
 def test_el_992_generado_es_igual_al_suyo_por_cuenta_y_tercero(conn, archivos):
     nomina.aprender(conn, *archivos)
+    _empleados_completos(conn, archivos)
     g = nomina.generar(conn, "2026-09", archivos[0])
     [q] = g["quincenas"]
     assert q["cuadra"] and q["avisos"] == []
@@ -174,7 +182,7 @@ def test_la_nomina_aprobada_sale_en_el_archivo_de_siigo(conn, archivos, tmp_path
     assert r["cuadra"] and r["comprobantes"] == 1
     filas = [[cell.value for cell in row] for row in load_workbook(r["path"]).active.iter_rows()][1:]
     assert {f[0] for f in filas} == {992} and {f[1] for f in filas} == {67}, "sigue al 66"
-    assert {f[6] for f in filas} >= {98562771, int(EPS), int(FONDO)}, "cada línea con su tercero"
+    assert {f[6] for f in filas} >= {"98562771", EPS, FONDO}, "cada línea con su tercero"
     # exportar otra vez no cambia el consecutivo ni rehace lo aprobado
     nomina.generar(conn, "2026-09", archivos[0])
     siigo.export_siigo(conn, "2026-09", tmp_path / "out")

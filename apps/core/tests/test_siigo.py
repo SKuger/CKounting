@@ -94,7 +94,7 @@ def test_el_comprobante_sale_como_lo_espera_siigo(conn, tmp_path):
     assert len(cuerpo) == r["lineas"] == 4
     assert {f[0] for f in cuerpo} == {11}, "tipo de comprobante"
     assert {f[1] for f in cuerpo} == {850}, "sigue al último consecutivo"
-    assert {f[6] for f in cuerpo} == {800100200}, "el tercero en todas las líneas"
+    assert {f[6] for f in cuerpo} == {"800100200"}, "el tercero en todas las líneas, como texto"
     por_cuenta = {f[5]: f for f in cuerpo}
     iva = por_cuenta[24081501]
     assert iva[16] == "02" and iva[24] == 1500000, "código de impuesto y base en la línea de IVA"
@@ -516,3 +516,19 @@ def test_la_tarifa_propia_del_cliente_se_escribe_legible(conn, tmp_path, ica, ba
     wb.save(ruta)
     siigo.sembrar_reglas(conn, ruta)
     assert causacion.listar(conn)[0]["retenciones_cliente"] == esperado
+
+
+def test_el_prefijo_sale_del_reporte_aunque_empiece_por_numero(conn):
+    """«94DD 49995» salía sin prefijo en la 22050501 (el contador, 2026-11-04)."""
+    assert siigo.partir_numero("94DD 49995") == ("94DD", "49995")
+    assert siigo.partir_numero("FE1-123456") == ("FE1", "123456")
+    assert siigo.partir_numero("FELE827") == ("FELE", "827")
+    conn.execute("INSERT INTO excel_load(id, source_path, source_name, total_rows, periodo)"
+                 " VALUES (9,'z.xlsx','z.xlsx',1,'2026-09')")
+    conn.execute("INSERT INTO excel_row(load_id,row_index,cufe_cude,data_json,periodo)"
+                 " VALUES (9,0,'cufe-x',?,'2026-09')", ('{"Prefijo":"94DD","Folio":"94DD49995"}',))
+    assert siigo.prefijo_y_folio(conn, "cufe-x", "94DD49995") == ("94DD", "49995")
+
+
+def test_una_cedula_con_cero_adelante_lo_conserva():
+    assert siigo._nit("0123456-7") == "0123456"
