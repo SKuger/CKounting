@@ -141,8 +141,16 @@ def test_la_plantilla_se_aprende_del_992_que_ya_esta_en_siigo(conn, archivos):
     assert f"23700501|{EPS}" in r["entidades"] and f"23704505|{FONDO}" in r["entidades"]
 
 
+def _empleados_completos(conn, archivos):
+    """Clase de riesgo para todos y un salario mínimo de prueba: sin avisos de faltantes."""
+    from contab_core import siigo
+    ids = {e.id for q in nomina.leer_nomina(archivos[0]).values() for e in q.empleados}
+    siigo.guardar_config(conn, {"nom:smmlv:2026": "1000000", **{f"nom:riesgo:{i}": "I" for i in ids}})
+
+
 def test_el_992_generado_es_igual_al_suyo_por_cuenta_y_tercero(conn, archivos):
     nomina.aprender(conn, *archivos)
+    _empleados_completos(conn, archivos)
     g = nomina.generar(conn, "2026-09", archivos[0])
     [q] = g["quincenas"]
     assert q["cuadra"] and q["avisos"] == []

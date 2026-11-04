@@ -1612,3 +1612,33 @@ arreglo ya publicado parecía no estar.
 **Por confirmar**: el contador sospecha que el IVA de las compras no entra
 porque faltaba el prefijo; y mencionó una distribución del manual de Siigo
 que no llegó.
+
+## D-142 — La nómina por empleado: entidades, clase de riesgo y revisión de la ley
+
+**Decisión** (2026-11-04, con las respuestas del contador):
+
+- **Pantalla «Empleados» en Nómina.** Por empleado: EPS, fondo de pensiones,
+  fondo de cesantías y caja —los elige el empleado—, cada uno con NIT y cuenta,
+  y la clase de riesgo de la ARL. Por empresa: **una sola ARL** (la designa el
+  empleador; reemplaza las que se aprendieron por empleado) y el salario mínimo
+  de cada año. Se guarda en las claves `nom:` de siempre, sin migración; los
+  empleados del Excel entran solos con su nombre al subir la nómina.
+- **La ARL sale de la clase de riesgo de cada empleado**, con una tabla fija
+  para todas las empresas: I 0,522 % · II 1,044 % · III 2,436 % · IV 4,35 % ·
+  V 6,96 %. La del contador viene redondeada (0,52 %…); el 992 real confirma el
+  0,522 % de la clase I. Sin clase, la tarifa general de antes, con aviso.
+- **Lo que descontó el Excel no se recalcula**: es lo que se pagó y de ello
+  sale el neto. Se **revisa** contra la ley y se avisa: salud y pensión del
+  empleado contra el 4 % de la base; sin fondo de solidaridad desde 4 salarios
+  mínimos; y desde 10, que el empleador ya no está exonerado de salud, SENA e
+  ICBF (Contab todavía no los causa). Los umbrales son mensuales y la hoja es
+  quincenal: se compara contra la mitad.
+- El fondo de cesantías se guarda pero el 992 no lo usa todavía: la provisión
+  va contra el empleado.
+
+**Por qué**: los empleados no están todos en la misma EPS, fondo o caja, y la
+ARL cambia con la actividad de cada uno. La reforma en el Congreso puede volver
+variables los porcentajes; por ahora son los de la norma.
+
+**Pendiente**: una empresa sin un 992 en Siigo todavía no puede escribir a mano
+las cuentas de la plantilla (devengos, provisiones, neto); solo aprenderlas.

@@ -1511,6 +1511,27 @@ def _h_siigo_sembrar(params: dict) -> dict:
         conn.close()
 
 
+def _con_empresa(params: dict, fn):
+    conn = storage_module.connect(Path(params["db_path"]))
+    try:
+        storage_module.ensure_schema(conn)
+        return fn(conn)
+    finally:
+        conn.close()
+
+
+def _h_nomina_empleados(params: dict) -> dict:
+    return _con_empresa(params, nomina_module.empleados)
+
+
+def _h_nomina_empleado_guardar(params: dict) -> dict:
+    return _con_empresa(params, lambda c: nomina_module.guardar_empleado(c, params.get("empleado") or {}))
+
+
+def _h_nomina_empresa_guardar(params: dict) -> dict:
+    return _con_empresa(params, lambda c: nomina_module.guardar_empresa(c, params.get("empresa") or {}))
+
+
 def _h_nomina_aprender(params: dict) -> dict:
     """La plantilla de nómina, deducida del 992 que ya está en Siigo (D-134)."""
     conn = _con(params["db_path"])
@@ -2115,6 +2136,9 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "nomina_generar": _h_nomina_generar,
     "nomina_list": _h_nomina_list,
     "nomina_aprobar": _h_nomina_aprobar,
+    "nomina_empleados": _h_nomina_empleados,
+    "nomina_empleado_guardar": _h_nomina_empleado_guardar,
+    "nomina_empresa_guardar": _h_nomina_empresa_guardar,
     "cuentas_empresa": _h_cuentas_empresa,
     "tarifas_list": _h_tarifas_list,
     "tarifas_guardar_concepto": _h_tarifas_guardar_concepto,

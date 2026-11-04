@@ -70,6 +70,19 @@ TARIFAS_INICIALES = {
     "pension_empleador": "12", "caja": "4", "arl": "0.522",
 }
 ENTIDADES = ("salud", "pension", "caja", "arl")
+# Las que elige cada empleado; la ARL la designa el empleador (el contador,
+# 2026-11-04). El fondo de cesantías se guarda pero el 992 no lo usa: la
+# provisión va contra el empleado hasta que se consigna.
+ENTIDADES_DEL_EMPLEADO = ("salud", "pension", "cesantias", "caja")
+
+# La ARL por clase de riesgo (D-142). Fija para todas las empresas, como pidió
+# el contador; su tabla trae los valores redondeados (0,52 %…) y el 992 real de
+# REAL confirma el 0,522 % de la clase I.
+RIESGOS_ARL = {"I": Decimal("0.522"), "II": Decimal("1.044"), "III": Decimal("2.436"),
+               "IV": Decimal("4.350"), "V": Decimal("6.960")}
+# Lo que la ley descuenta al empleado, para revisar el Excel (no para calcular:
+# el neto que se pagó sale de lo que el Excel descontó).
+DESCUENTO_EMPLEADO = {"salud": Decimal("4"), "pension": Decimal("4")}
 
 ETIQUETA = {
     "salario": "Salario", "vacaciones_disfrutadas": "Vacaciones disfrutadas",
@@ -250,6 +263,9 @@ def armar(quincena: Quincena, p: dict[str, str]) -> tuple[list[LineaNomina], lis
             linea(_cuenta_empleado(p, "credito", k, e), e.id, k, credito=v, falta_clave=f"nom:credito:{k}")
 
         aporte = {k: _peso(base * tarifa[k]) for k in APORTES}
+        riesgo = (p.get(f"nom:riesgo:{e.id}") or "").strip().upper()
+        if riesgo in RIESGOS_ARL:
+            aporte["arl"] = _peso(base * RIESGOS_ARL[riesgo] / 100)
         for k, v in aporte.items():
             linea(_cuenta_empleado(p, "debito", k, e), e.id, k, debito=v, falta_clave=f"nom:debito:{k}")
 
@@ -273,6 +289,113 @@ def armar(quincena: Quincena, p: dict[str, str]) -> tuple[list[LineaNomina], lis
               falta_clave="nom:credito:neto")
 
     return lineas, sorted(faltan)
+
+
+def revisar(quincena: Quincena, p: dict[str, str], smmlv: Decimal | None) -> list[str]:
+    """Lo que el Excel trae distinto de la ley, para que él lo mire (D-142).
+
+    No cambia ningún valor: el comprobante lleva lo que se liquidó y se pagó.
+    Los umbrales son mensuales y la hoja es de una quincena: se comparan contra
+    la mitad.
+    """
+    avisos: list[str] = []
+    for e in quincena.empleados:
+        base = sum((e.v(k) for k in SALARIALES), CERO)
+        if not base:
+            continue
+        quien = e.nombre or e.id
+        for k, pct in DESCUENTO_EMPLEADO.items():
+            esperado = _peso(base * pct / 100)
+            if abs(e.v(k) - esperado) > 1:
+                avisos.append(f"{quien}: la {ETIQUETA.get(k, k).lower()} del Excel es {e.v(k)}, "
+                              f"y el {pct} % de la base es {esperado}.")
+        if smmlv:
+            if base >= smmlv * 2 and not e.v("fsp"):
+                avisos.append(f"{quien} gana 4 o más salarios mínimos y no tiene fondo de solidaridad pensional.")
+            if base >= smmlv * 5:
+                avisos.append(f"{quien} gana 10 o más salarios mínimos: el empleador no está exonerado "
+                              "de salud, SENA e ICBF. Contab todavía no los causa.")
+        if not (p.get(f"nom:riesgo:{e.id}") or "").strip():
+            avisos.append(f"{quien}: falta la clase de riesgo de la ARL; se usó la tarifa general.")
+    return avisos
+
+
+# ─────────────────────── los empleados y sus entidades (D-142) ─────────────────
+
+def _entidad_dict(crudo: str | None) -> dict[str, str]:
+    cuenta, _, nit = (crudo or "").partition("|")
+    return {"cuenta": cuenta.strip(), "nit": nit.strip()}
+
+
+def empleados(conn) -> dict[str, Any]:
+    """Cada empleado con su EPS, fondos y caja, la ARL de la empresa y el salario mínimo."""
+    from . import siigo as siigo_module
+
+    p = plantilla(siigo_module.config(conn))
+    ids = set()
+    for k in p:
+        partes = k.split(":")
+        if (partes[1] in ("nombre", "riesgo") and len(partes) == 3) or (
+                partes[1] == "entidad" and partes[2] != "*"):
+            ids.add(partes[2])
+    lista = []
+    for i in sorted(ids, key=lambda x: (p.get(f"nom:nombre:{x}") or x).lower()):
+        lista.append({
+            "id": i, "nombre": p.get(f"nom:nombre:{i}") or "",
+            "riesgo": (p.get(f"nom:riesgo:{i}") or "").strip().upper(),
+            **{ent: _entidad_dict(p.get(f"nom:entidad:{i}:{ent}")) for ent in ENTIDADES_DEL_EMPLEADO},
+        })
+    return {
+        "empleados": lista,
+        "arl": _entidad_dict(p.get("nom:entidad:*:arl")),
+        "por_defecto": {ent: _entidad_dict(p.get(f"nom:entidad:*:{ent}")) for ent in ENTIDADES_DEL_EMPLEADO},
+        "smmlv": {k.split(":")[2]: v for k, v in p.items() if k.startswith("nom:smmlv:")},
+        "riesgos": {k: str(v) for k, v in RIESGOS_ARL.items()},
+    }
+
+
+def _texto_entidad(v: dict[str, Any] | None) -> str:
+    v = v or {}
+    cuenta, nit = str(v.get("cuenta") or "").strip(), str(v.get("nit") or "").strip().split("-")[0]
+    return f"{cuenta}|{nit}" if cuenta or nit else ""
+
+
+def guardar_empleado(conn, data: dict[str, Any]) -> dict[str, Any]:
+    from . import siigo as siigo_module
+
+    i = _nit(data.get("id") or "").split("-")[0].replace(".", "")
+    if not i.isdigit():
+        raise ValueError("La cédula del empleado tiene que ser un número.")
+    riesgo = str(data.get("riesgo") or "").strip().upper()
+    if riesgo and riesgo not in RIESGOS_ARL:
+        raise ValueError(f"La clase de riesgo es I, II, III, IV o V; llegó «{riesgo}».")
+    valores = {f"nom:nombre:{i}": str(data.get("nombre") or "").strip(), f"nom:riesgo:{i}": riesgo}
+    for ent in ENTIDADES_DEL_EMPLEADO:
+        valores[f"nom:entidad:{i}:{ent}"] = _texto_entidad(data.get(ent))
+    siigo_module.guardar_config(conn, valores)
+    return next(e for e in empleados(conn)["empleados"] if e["id"] == i)
+
+
+def guardar_empresa(conn, data: dict[str, Any]) -> dict[str, Any]:
+    """La ARL de la empresa (una sola: la designa el empleador) y el salario mínimo."""
+    from . import siigo as siigo_module
+
+    valores: dict[str, Any] = {}
+    if "arl" in data:
+        valores["nom:entidad:*:arl"] = _texto_entidad(data["arl"])
+        # Una ARL por empleado venía de aprenderla del 992; ahora manda la de la empresa.
+        for k in [k for k in siigo_module.config(conn) if k.startswith("nom:entidad:") and k.endswith(":arl")
+                  and not k.startswith("nom:entidad:*:")]:
+            valores[k] = ""
+    for anio, v in (data.get("smmlv") or {}).items():
+        if not str(anio).isdigit() or len(str(anio)) != 4:
+            raise ValueError(f"«{anio}» no es un año.")
+        texto = str(v or "").replace(".", "").replace(",", "").strip()
+        if texto and not texto.isdigit():
+            raise ValueError("El salario mínimo va en pesos, sin decimales.")
+        valores[f"nom:smmlv:{anio}"] = texto
+    siigo_module.guardar_config(conn, valores)
+    return empleados(conn)
 
 
 # ───────────────────── aprender la plantilla del 992 que ya existe ─────────────
@@ -447,9 +570,17 @@ def generar(conn, periodo: str, ruta_nomina: str | Path) -> dict[str, Any]:
             resumen.append({"quincena": q.nombre, "aprobado": True})
             continue
         lineas, faltan = armar(q, p)
+        # El nombre de cada empleado, para reconocerlo en la pantalla de empleados.
+        siigo_module.guardar_config(conn, {f"nom:nombre:{e.id}": e.nombre for e in q.empleados
+                                           if e.nombre and not p.get(f"nom:nombre:{e.id}")})
         debito = sum((x.debito for x in lineas), CERO)
         credito = sum((x.credito for x in lineas), CERO)
         avisos = [f"Falta {f}" for f in faltan]
+        smmlv = _d(p.get(f"nom:smmlv:{periodo[:4]}")) or None
+        if smmlv is None:
+            avisos.append(f"Falta el salario mínimo de {periodo[:4]} (en Empleados): sin él no se "
+                          "revisan el fondo de solidaridad ni la exoneración.")
+        avisos.extend(revisar(q, p, smmlv))
         if debito != credito:
             avisos.append(f"La quincena no cuadra por {debito - credito} pesos: revise el neto del Excel.")
         if q.columnas_sin_leer:
