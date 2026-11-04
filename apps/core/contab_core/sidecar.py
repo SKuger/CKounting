@@ -1682,6 +1682,16 @@ def _h_tarifas_archivar_concepto(params: dict) -> dict:
         conn.close()
 
 
+def _h_tarifas_desarchivar_todos(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    conn = storage_module.connect(db_path)
+    try:
+        storage_module.ensure_schema(conn)
+        return {"desarchivados": tarifas_module.desarchivar_todos(conn)}
+    finally:
+        conn.close()
+
+
 def _h_puc_import(params: dict) -> dict:
     """Sube un dump de PUC (upsert por código = fusionar). Valida que el NIT del
     encabezado del Excel coincida con la empresa: si no, BLOQUEA (D-070).
@@ -2145,6 +2155,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "tarifas_guardar_concepto": _h_tarifas_guardar_concepto,
     "tarifas_guardar_uvt": _h_tarifas_guardar_uvt,
     "tarifas_archivar_concepto": _h_tarifas_archivar_concepto,
+    "tarifas_desarchivar_todos": _h_tarifas_desarchivar_todos,
     "puc_list": _h_puc_list,
     "puc_save_account": _h_puc_save_account,
     "puc_archive_account": _h_puc_archive_account,

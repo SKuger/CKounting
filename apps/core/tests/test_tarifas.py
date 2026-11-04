@@ -271,3 +271,15 @@ def test_la_tarifa_se_guarda_sin_ceros_de_sobra(tmp_path: Path):
     c = tarifas.cargar(ruta).conceptos
     assert [x["tarifa"] for x in c] == ["1.1", "11"]
     assert c[0]["base_minima_uvt"] == "27"
+
+
+def test_desarchivar_todos_de_una_vez(excel: Path, tmp_path: Path):
+    conn = storage.connect(tmp_path / "e.db")
+    storage.ensure_schema(conn)
+    tarifas.guardar(conn, tarifas.cargar(excel))
+    total = len(tarifas.listar_conceptos(conn))
+    for c in tarifas.listar_conceptos(conn):
+        tarifas.archivar_concepto(conn, c["id"])
+    assert tarifas.desarchivar_todos(conn) == total
+    assert len(tarifas.listar_conceptos(conn)) == total
+    assert tarifas.desarchivar_todos(conn) == 0

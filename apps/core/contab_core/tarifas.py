@@ -403,6 +403,15 @@ def archivar_concepto(conn, concepto_id: int, archivado: bool = True) -> None:
     conn.commit()
 
 
+def desarchivar_todos(conn) -> int:
+    """Saca del archivo todos los conceptos de una vez. Devuelve cuántos."""
+    n = conn.execute(
+        "UPDATE retencion_concepto SET archivado = 0, updated_at = datetime('now')"
+        " WHERE archivado <> 0").rowcount
+    conn.commit()
+    return int(n)
+
+
 def ultima_importacion(conn) -> dict[str, Any] | None:
     r = conn.execute(
         "SELECT * FROM tarifas_import ORDER BY id DESC LIMIT 1").fetchone()
