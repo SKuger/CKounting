@@ -1153,6 +1153,19 @@ def _h_delete_periodo(params: dict) -> dict:
     return storage_module.delete_periodo(db_path, periodo)
 
 
+def _h_reiniciar_mes(params: dict) -> dict:
+    db_path = Path(params["db_path"])
+    periodo = params.get("periodo")
+    if not isinstance(periodo, str):
+        raise ValueError("periodo requerido (string 'AAAA-MM')")
+    # Borrar de verdad exige escribir el mes: es irreversible y se hace a propósito.
+    hacerlo = bool(params.get("hacerlo"))
+    if hacerlo and str(params.get("confirmacion") or "").strip() != storage_module._norm_periodo(periodo):
+        raise ValueError(f"Para empezar de cero escribe el mes tal cual: {storage_module._norm_periodo(periodo)}")
+    return storage_module.reiniciar_mes(
+        db_path, periodo, olvidar_reglas=bool(params.get("olvidar_reglas")), hacerlo=hacerlo)
+
+
 def _h_set_load_periodo(params: dict) -> dict:
     db_path = Path(params["db_path"])
     load_id = int(params["load_id"])
@@ -2035,6 +2048,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "list_periodos": _h_list_periodos,
     "set_periodo_pdfs_folder": _h_set_periodo_pdfs_folder,
     "delete_periodo": _h_delete_periodo,
+    "reiniciar_mes": _h_reiniciar_mes,
     "set_load_periodo": _h_set_load_periodo,
     "soft_delete_load": _h_soft_delete_load,
     "restore_load": _h_restore_load,

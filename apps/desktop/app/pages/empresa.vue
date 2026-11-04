@@ -60,6 +60,14 @@ const MESES = [
 const ANIOS = Array.from({ length: 6 }, (_, i) => String(now.getFullYear() + 1 - i))
 const creatingMonth = ref(false)
 const deleteMonthTarget = ref<string | null>(null)
+// Empezar un mes de cero (D-140): el contador borraba las carpetas para volver a
+// probar, y en la base quedaban los asientos aprobados y los XML de la vez anterior.
+type ConteoReinicio = { asientos: number; aprobados: number; cargas: number; documentos: number
+  soportes: number; nomina: number; reglas: number }
+const reinicioTarget = ref<string | null>(null)
+const reinicioConteo = ref<ConteoReinicio | null>(null)
+const reinicioOlvidar = ref(false)
+const reinicioTexto = ref('')
 const periodoPickerOpen = ref(false)
 const periodoPickerTarget = ref<string | null>(null)
 const moveTarget = ref<Carga | null>(null)
@@ -83,6 +91,7 @@ const panelActivo = computed(() => {
   if (newMonthOpen.value) return 'mes'
   if (moveTarget.value) return 'mover'
   if (deleteMonthTarget.value) return 'borrarMes'
+  if (reinicioTarget.value) return 'reiniciar'
   if (archiveModalOpen.value) return 'archivar'
   if (deleteModalOpen.value) return 'borrarEmpresa'
   if (periodoPickerOpen.value || backupPickerOpen.value || carpetaEmpresaOpen.value) return 'carpeta'
@@ -91,13 +100,14 @@ const panelActivo = computed(() => {
 })
 const TITULOS_PANEL: Record<string, string> = {
   tercero: 'Tercero', terceros: 'Terceros', dian: 'Traer de la DIAN',
-  mes: 'Crear mes', mover: 'Mover el Excel de mes', borrarMes: 'Borrar mes',
+  mes: 'Crear mes', mover: 'Mover el Excel de mes', borrarMes: 'Borrar mes', reiniciar: 'Empezar el mes de cero',
   archivar: 'Archivar empresa', borrarEmpresa: 'Enviar la empresa a la papelera',
   carpeta: 'Elegir carpeta', mudanza: 'Ordenar las carpetas',
 }
 function cerrarPaneles() {
   dianOpen.value = false; tercerosVerOpen.value = false; terceroOpen.value = false
   newMonthOpen.value = false; moveTarget.value = null; deleteMonthTarget.value = null
+  reinicioTarget.value = null; reinicioConteo.value = null; reinicioOlvidar.value = false; reinicioTexto.value = ''
   archiveModalOpen.value = false; deleteModalOpen.value = false
   periodoPickerOpen.value = false; backupPickerOpen.value = false
   carpetaEmpresaOpen.value = false; mudanzaPlan.value = null
@@ -683,6 +693,37 @@ async function confirmDeleteMonth() {
   }
 }
 
+async function contarReinicio() {
+  if (!reinicioTarget.value) return
+  try {
+    reinicioConteo.value = await rpc<ConteoReinicio>('reiniciar_mes', {
+      db_path: dbPath.value, periodo: reinicioTarget.value, olvidar_reglas: reinicioOlvidar.value })
+  } catch (exc) {
+    toast.error('No se pudo revisar el mes', humanError(exc))
+  }
+}
+async function pedirReinicio(periodo: string) {
+  cerrarPaneles()
+  reinicioTarget.value = periodo
+  await contarReinicio()
+}
+async function confirmarReinicio() {
+  const periodo = reinicioTarget.value
+  if (!periodo) return
+  busy.value = true
+  try {
+    await rpc('reiniciar_mes', { db_path: dbPath.value, periodo, olvidar_reglas: reinicioOlvidar.value,
+      hacerlo: true, confirmacion: reinicioTexto.value })
+    toast.success(`${periodo} quedó como nuevo`, 'Carga el Excel de nuevo para empezar el flujo.')
+    cerrarPaneles()
+    await Promise.all([reloadPeriodos(), reloadLoads()])
+  } catch (exc) {
+    toast.error('No se pudo empezar de cero', humanError(exc))
+  } finally {
+    busy.value = false
+  }
+}
+
 // ── carpeta de soportes DEL MES ──
 function _openPeriodoPickerOriginal(periodo: string) { periodoPickerTarget.value = periodo; periodoPickerOpen.value = true }
 async function setPeriodoFolder(periodo: string, folder: string | null) {
@@ -1174,12 +1215,46 @@ watch(dbPath, refresh)
         <!-- ───────── borrar mes ───────── -->
         <template v-else-if="panelActivo === 'borrarMes'">
           <p class="mb-3 max-w-prose text-sm text-muted-foreground">
-            Se elimina el mes <strong class="text-foreground">{{ deleteMonthTarget }}</strong> y el Excel que tenga cargado.
-            Los soportes en disco no se tocan. Esta acción no se puede deshacer.
+            Se elimina el mes <strong class="text-foreground">{{ deleteMonthTarget }}</strong> con todo lo que tiene en
+            Contab: el Excel, los XML leídos y los registros de causación, también los aprobados.
+            Los archivos en disco no se tocan. Esta acción no se puede deshacer.
           </p>
           <div class="flex gap-2">
             <Button variant="destructive" :disabled="busy" @click="confirmDeleteMonth">Borrar mes</Button>
             <Button variant="ghost" @click="deleteMonthTarget = null">Cancelar</Button>
+          </div>
+        </template>
+
+        <!-- ───────── empezar el mes de cero ───────── -->
+        <template v-else-if="panelActivo === 'reiniciar'">
+          <div class="max-w-prose space-y-3 text-sm">
+            <p class="text-muted-foreground">
+              <strong class="text-foreground">{{ reinicioTarget }}</strong> queda como recién creado, para volver a
+              probar el flujo completo. El mes y su carpeta se quedan; los archivos en disco no se tocan.
+            </p>
+            <ul v-if="reinicioConteo" class="list-disc space-y-0.5 pl-5 text-muted-foreground">
+              <li>{{ reinicioConteo.asientos }} registros de causación<template v-if="reinicioConteo.aprobados">, {{ reinicioConteo.aprobados }} de ellos aprobados</template></li>
+              <li>{{ reinicioConteo.cargas }} Excel cargados y {{ reinicioConteo.documentos }} XML leídos</li>
+              <li>{{ reinicioConteo.soportes }} soportes en el índice</li>
+              <li v-if="reinicioConteo.nomina">{{ reinicioConteo.nomina }} comprobantes de nómina</li>
+            </ul>
+            <label class="flex items-start gap-2">
+              <input v-model="reinicioOlvidar" type="checkbox" class="mt-1" @change="contarReinicio">
+              <span>
+                Olvidar también lo aprendido al aprobar<template v-if="reinicioOlvidar && reinicioConteo"> ({{ reinicioConteo.reglas }} reglas)</template>.
+                <span class="block text-xs text-muted-foreground">Es de toda la empresa, no solo de este mes: repartos, terceros por cuenta y las reglas que nacieron al aprobar. Las que escribiste en Reglas se quedan.</span>
+              </span>
+            </label>
+            <label class="grid gap-1">
+              <span class="text-xs text-muted-foreground">Para confirmar, escribe el mes: <span class="font-mono text-foreground">{{ reinicioTarget }}</span></span>
+              <Input v-model="reinicioTexto" class="h-8 w-40 font-mono" :placeholder="reinicioTarget || ''" />
+            </label>
+            <div class="flex gap-2">
+              <Button variant="destructive" :disabled="busy || reinicioTexto.trim() !== reinicioTarget" @click="confirmarReinicio">
+                <RotateCcw class="size-3.5" /> Empezar de cero
+              </Button>
+              <Button variant="ghost" @click="cerrarPaneles">Cancelar</Button>
+            </div>
           </div>
         </template>
 
@@ -1270,6 +1345,9 @@ watch(dbPath, refresh)
               <Button variant="ghost" size="sm" :disabled="busy" @click="abrirPickerMes(mesVigente.periodo)">
                 <FolderOpen class="size-3.5" /> {{ mesVigente.pdfs_folder ? 'Cambiar carpeta' : 'Elegir carpeta' }}
               </Button>
+              <Button variant="ghost" size="sm" title="Borra en Contab todo lo del mes para volver a probar" :disabled="busy" @click="pedirReinicio(mesVigente.periodo)">
+                <RotateCcw class="size-3.5" /> Empezar de cero
+              </Button>
               <Button variant="ghost" size="icon-sm" title="Borrar mes" :disabled="busy" @click="cerrarPaneles(); deleteMonthTarget = mesVigente.periodo"><Trash2 class="size-3.5" /></Button>
             </div>
           </div>
@@ -1312,6 +1390,7 @@ watch(dbPath, refresh)
                   @click="navigateTo({ path: '/load', query: { db: dbPath, id: c.id } })"
                 >Abrir <ChevronRight class="size-3.5" /></Button>
                 <Button variant="ghost" size="sm" :disabled="busy" @click="abrirPickerMes(p.periodo)"><FolderOpen class="size-3.5" /></Button>
+                <Button variant="ghost" size="icon-sm" title="Empezar de cero: borra en Contab todo lo del mes" :disabled="busy" @click="pedirReinicio(p.periodo)"><RotateCcw class="size-3.5" /></Button>
                 <Button variant="ghost" size="icon-sm" title="Borrar mes" :disabled="busy" @click="cerrarPaneles(); deleteMonthTarget = p.periodo"><Trash2 class="size-3.5" /></Button>
               </div>
             </div>

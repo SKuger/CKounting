@@ -1576,3 +1576,20 @@ bajo la base mínima y no se calcula, como hasta ahora.
   olvida, y en Reglas se puede quitar.
 - Una cuenta que en el mismo asiento llevó dos terceros distintos no se
   recuerda: no hay cuál proponer.
+
+## D-140 — Empezar un mes de cero, y borrar un mes borra lo suyo
+
+**Decisión** (2026-11-03): el contador borra cada tanto las carpetas para
+volver a probar el flujo entero. En la base quedaban los asientos aprobados y
+guardados (que volver a armar no toca, a propósito), los XML leídos y el índice
+de CUFE: la «prueba de cero» mostraba registros de una versión anterior, y un
+arreglo ya publicado parecía no estar.
+
+- **«Empezar de cero»** en cada mes: borra en la base todo lo del mes —Excel,
+  registros (también los aprobados), XML leídos que no sean de otro mes, índice
+  de soportes, nómina— y deja el mes y su carpeta. Primero dice cuánto va a
+  borrar, y pide escribir el mes para confirmar. No toca el disco.
+- Opcional: **olvidar lo aprendido** al aprobar, en toda la empresa (reglas de
+  origen `aprendida`, repartos y terceros por cuenta). Las reglas escritas a mano
+  se quedan.
+- **«Borrar mes»** ahora borra también lo suyo; antes solo el Excel y la carpeta.
