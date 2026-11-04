@@ -188,6 +188,21 @@ async function archivar(c: Concepto) {
   await cargar()
 }
 
+const desarchivando = ref(false)
+async function desarchivarTodos() {
+  desarchivando.value = true
+  try {
+    const r = await rpc<{ desarchivados: number }>('tarifas_desarchivar_todos', { db_path: dbPath.value })
+    toast.success('Conceptos fuera del archivo', `${r.desarchivados} vuelven a la lista`)
+    verArchivados.value = false
+    await cargar()
+  } catch (e) {
+    toast.error('No se pudieron sacar del archivo', humanError(e))
+  } finally {
+    desarchivando.value = false
+  }
+}
+
 watch([anio, verArchivados], cargar)
 onMounted(cargar)
 </script>
@@ -221,6 +236,10 @@ onMounted(cargar)
       <label class="flex items-center gap-1.5 text-sm text-muted-foreground">
         <input v-model="verArchivados" type="checkbox"> Ver archivados
       </label>
+      <Button v-if="verArchivados && conteo.archivados" variant="outline" size="sm" :disabled="desarchivando"
+        @click="desarchivarTodos">
+        <ArchiveRestore class="size-3.5" /> Sacar los {{ conteo.archivados }} del archivo
+      </Button>
       <Button variant="outline" size="sm" @click="abrirConcepto()"><Plus class="size-3.5" /> Concepto</Button>
       <Button variant="outline" size="sm" @click="panel = 'uvt'">UVT</Button>
       <Button as="label" size="sm" :disabled="subiendo">
@@ -309,6 +328,9 @@ onMounted(cargar)
           Hay <strong>{{ conteo.archivados }}</strong> {{ conteo.archivados === 1 ? 'concepto archivado' : 'conceptos archivados' }}
           que no se están mostrando.
         </span>
+        <Button size="sm" :disabled="desarchivando" @click="desarchivarTodos">
+          <ArchiveRestore class="size-3.5" /> {{ desarchivando ? 'Sacando…' : 'Sacarlos todos del archivo' }}
+        </Button>
         <Button size="sm" variant="outline" @click="verArchivados = true">Ver archivados</Button>
       </template>
       <span v-else>
