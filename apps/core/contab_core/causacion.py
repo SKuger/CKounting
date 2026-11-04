@@ -70,6 +70,8 @@ class Propuesta:
     # El gasto o el ingreso en varias cuentas, como lo repartió la última vez:
     # [(cuenta, parte)], con las partes sumando 1 (D-136).
     reparto: list[tuple[str, Decimal]] | None = None
+    # La cuenta que va con otro tercero que el del documento: {cuenta: nit} (D-139).
+    terceros: dict[str, str] | None = None
 
     def como_dict(self) -> dict[str, Any]:
         return {
@@ -81,6 +83,7 @@ class Propuesta:
             "retenciones_cliente": self.retenciones_cliente,
             "cuenta_no_gravada": self.cuenta_no_gravada,
             "reparto": [{"cuenta": c, "parte": str(p)} for c, p in self.reparto] if self.reparto else None,
+            "terceros": self.terceros or None,
         }
 
 
@@ -169,6 +172,7 @@ def proponer(conn, documento: dict[str, Any]) -> Propuesta:
         retenciones_cliente=mejor.get("retenciones_cliente"),
         cuenta_no_gravada=mejor.get("cuenta_no_gravada") or None,
         reparto=leer_reparto(mejor.get("reparto")),
+        terceros=leer_terceros(mejor.get("terceros")),
         regla_id=mejor["id"], por_que=por_que, seguro=True,
     )
 
@@ -187,6 +191,7 @@ def aprender(
     retenciones_cliente: str | None = None,
     cuenta_no_gravada: str | None = None,
     reparto: list[tuple[str, Decimal]] | None = None,
+    terceros: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Guarda lo que el contador decidió, para no volvérselo a preguntar.
 
@@ -231,6 +236,10 @@ def aprender(
         # [] borra el reparto: esta vez lo llevó todo a una sola cuenta.
         conn.execute("UPDATE regla_causacion SET reparto = ? WHERE id = ?",
                      (escribir_reparto(reparto), rid))
+    if terceros is not None:
+        # {} lo borra: esta vez todas las cuentas fueron con el tercero del documento.
+        conn.execute("UPDATE regla_causacion SET terceros = ? WHERE id = ?",
+                     (json.dumps(terceros, sort_keys=True) if terceros else None, rid))
     conn.commit()
     return dict(conn.execute(
         "SELECT * FROM regla_causacion WHERE id = ?", (rid,)).fetchone())
@@ -246,6 +255,17 @@ def leer_reparto(texto: str | None) -> list[tuple[str, Decimal]] | None:
         return None
     filas = [(c, p) for c, p in filas if c and p > 0]
     return filas if len(filas) > 1 else None
+
+
+def leer_terceros(texto: str | None) -> dict[str, str] | None:
+    """El tercero por cuenta guardado en la regla; None si no hay."""
+    if not texto:
+        return None
+    try:
+        filas = {str(c): str(n) for c, n in json.loads(texto).items() if c and n}
+    except (ValueError, AttributeError, TypeError):
+        return None
+    return filas or None
 
 
 def escribir_reparto(reparto: list[tuple[str, Decimal]]) -> str | None:
@@ -309,6 +329,8 @@ def guardar(conn, data: dict[str, Any]) -> dict[str, Any]:
         rid = int(cur.lastrowid)
     if data.get("quitar_reparto"):
         conn.execute("UPDATE regla_causacion SET reparto = NULL WHERE id = ?", (int(rid),))
+    if data.get("quitar_terceros"):
+        conn.execute("UPDATE regla_causacion SET terceros = NULL WHERE id = ?", (int(rid),))
     conn.commit()
     return dict(conn.execute(
         "SELECT * FROM regla_causacion WHERE id = ?", (int(rid),)).fetchone())

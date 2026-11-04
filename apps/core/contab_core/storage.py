@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import log
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 # Cuánto espera una escritura a que se libere el lock antes de rendirse (ms).
 BUSY_TIMEOUT_MS = 5_000
@@ -371,6 +371,7 @@ CREATE TABLE IF NOT EXISTS regla_causacion (
   retenciones_cliente   TEXT,              -- en ventas: lo que me retiene, códigos de Siigo o 'ninguna' (D-131)
   cuenta_no_gravada     TEXT,              -- la parte del documento sin IVA, a su propia cuenta
   reparto               TEXT,              -- JSON [{cuenta, parte}]: el gasto o ingreso en varias cuentas (D-136)
+  terceros              TEXT,              -- JSON {cuenta: nit}: la cuenta que va con otro tercero (D-139)
   vigencia_desde        TEXT,
   veces_usada           INTEGER NOT NULL DEFAULT 0,
   -- 'manual'    la escribió el contador
@@ -696,6 +697,16 @@ def _m018_bandeja_editable(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE {tabla} ADD COLUMN {col} {ddl}")
 
 
+def _m020_tercero_por_cuenta(conn: sqlite3.Connection) -> None:
+    """Migración 20 — el tercero de cada cuenta en la regla (D-139).
+
+    Una cuenta del asiento puede ir con otro tercero que el del documento. Si el
+    contador lo cambia y aprueba, la regla lo recuerda: `{cuenta: nit}` en JSON.
+    """
+    if "terceros" not in {r["name"] for r in conn.execute("PRAGMA table_info(regla_causacion)").fetchall()}:
+        conn.execute("ALTER TABLE regla_causacion ADD COLUMN terceros TEXT")
+
+
 def _m019_reparto_por_tercero(conn: sqlite3.Connection) -> None:
     """Migración 19 — la plantilla de cuentas por tercero (D-136).
 
@@ -1004,6 +1015,7 @@ MIGRACIONES: list[tuple[int, object]] = [
     (17, _m017_nomina),
     (18, _m018_bandeja_editable),
     (19, _m019_reparto_por_tercero),
+    (20, _m020_tercero_por_cuenta),
 ]
 
 

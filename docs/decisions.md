@@ -1562,3 +1562,17 @@ bajo la base mínima y no se calcula, como hasta ahora.
 - **No se guarda como carpeta de empresa una que se llame `AAAA-MM`**: el
   mensaje dice cuál es la carpeta madre. La empresa que ya quedó así muestra un
   aviso con un botón que la corrige.
+
+## D-139 — El tercero va escrito en cada cuenta, y el que se cambia se recuerda
+
+**Decisión** (2026-11-03, sugerencia del contador):
+
+- En el editor de la bandeja, cada línea trae el NIT del tercero **escrito**, con
+  su nombre debajo; antes la casilla vacía mostraba el del documento en gris.
+- Se cambia en la cuenta que haga falta. Si al aprobar una cuenta va con otro
+  tercero que el del documento, la regla del proveedor lo guarda
+  (`regla_causacion.terceros`, JSON `{cuenta: nit}`) y la próxima factura lo
+  propone en esa cuenta, con un aviso. Aprobar todo con el del documento lo
+  olvida, y en Reglas se puede quitar.
+- Una cuenta que en el mismo asiento llevó dos terceros distintos no se
+  recuerda: no hay cuál proponer.

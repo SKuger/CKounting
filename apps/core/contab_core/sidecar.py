@@ -1741,6 +1741,16 @@ def _h_delete_municipio_ica(params: dict) -> dict:
         conn.close()
 
 
+def _h_terceros_nombres(params: dict) -> dict:
+    """El nombre de los NIT que el contador escribe en las líneas (D-139)."""
+    conn = storage_module.connect(Path(params["db_path"]))
+    try:
+        storage_module.ensure_schema(conn)
+        return {"nombres": asiento_module.nombres_de(conn, params.get("nits") or [])}
+    finally:
+        conn.close()
+
+
 def _h_terceros_list(params: dict) -> dict:
     db_path = Path(params["db_path"])
     conn = storage_module.connect(db_path)
@@ -2060,6 +2070,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "listar_ingestas": _h_listar_ingestas,
     # Catálogo de terceros por empresa (Fase 1.3, D-100)
     "terceros_list": _h_terceros_list,
+    "terceros_nombres": _h_terceros_nombres,
     "terceros_sembrar": _h_terceros_sembrar,
     "tercero_save": _h_tercero_save,
     "catalogo_tercero": _h_catalogo_tercero,

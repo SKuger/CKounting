@@ -16,13 +16,13 @@ import { ArrowLeft, RefreshCw, Check, Undo2, ChevronRight, Download, FileSpreads
 type Linea = {
   id: number; cuenta_puc: string | null; descripcion: string; debito: string; credito: string
   rol: string | null; codigo_siigo: string | null; tercero_nit?: string | null
-  base?: string | null; concepto_id?: number | null
+  base?: string | null; concepto_id?: number | null; tercero_nombre?: string | null
 }
 // `naturaleza` (D-127): compra, venta o doc_soporte. Decide qué líneas lleva,
 // quién es el tercero y qué se le pregunta al contador al aprobar.
 type Naturaleza = 'compra' | 'venta' | 'doc_soporte'
 type Asiento = {
-  id: number; cufe: string; tercero_nit: string | null; fecha: string | null
+  id: number; cufe: string; tercero_nit: string | null; tercero_nombre?: string | null; fecha: string | null
   estado: string; avisos: string[]; aprobado: number; lineas: Linea[]; naturaleza: Naturaleza
   editado?: number
   // Lo que eligió arriba del editor al guardar (JSON): retención, texto, IVA…
@@ -317,12 +317,36 @@ const previsualizando = ref(false)
 const sucio = ref(false)
 const ROLES_DE_REGLA = ['iva', 'retencion', 'cartera']
 
+// El tercero va escrito en cada cuenta, no como un gris de relleno, y se cambia
+// en la que haga falta (el contador, 2026-11-03). Lo que cambie se recuerda al
+// aprobar (D-139).
+const terceroDoc = ref('')
 const aBorrador = (ls: Linea[]): Borrador[] => ls.map((l) => ({
   cuenta_puc: l.cuenta_puc || '', descripcion: l.descripcion || '',
   debito: Number(l.debito) ? String(l.debito) : '', credito: Number(l.credito) ? String(l.credito) : '',
-  tercero_nit: l.tercero_nit || '', rol: l.rol, codigo_siigo: l.codigo_siigo,
+  tercero_nit: l.tercero_nit || terceroDoc.value, rol: l.rol, codigo_siigo: l.codigo_siigo,
   base: l.base ?? null, concepto_id: l.concepto_id ?? null,
 }))
+
+// El nombre de cada NIT: los que ya traen las líneas, y los que él escribe.
+const nombres = reactive<Record<string, string>>({})
+const nitPlano = (n: string | null | undefined) => String(n || '').trim().split('-')[0]!.replace(/\./g, '')
+function anotarNombres(a: Asiento) {
+  if (a.tercero_nit && a.tercero_nombre) nombres[nitPlano(a.tercero_nit)] = a.tercero_nombre
+  for (const l of a.lineas) {
+    const nit = nitPlano(l.tercero_nit || a.tercero_nit)
+    if (nit && l.tercero_nombre) nombres[nit] = l.tercero_nombre
+  }
+}
+async function buscarNombre(nit: string) {
+  const plano = nitPlano(nit)
+  if (!plano || plano in nombres) return
+  try {
+    const r = await rpc<{ nombres: Record<string, string> }>('terceros_nombres', { db_path: dbPath.value, nits: [plano] })
+    nombres[plano] = r.nombres[plano] || ''
+  } catch { /* sin nombre: queda solo el NIT */ }
+}
+const esOtroTercero = (nit: string) => !!nit && nitPlano(nit) !== nitPlano(terceroDoc.value)
 
 // En centavos, para que la suma no la descuadre el punto flotante.
 const centavos = (v: string) => Math.round(Number(String(v || '0').replace(/,/g, '')) * 100) || 0
@@ -335,7 +359,7 @@ const deCentavos = (c: number) => (c / 100).toLocaleString('es-CO', { maximumFra
 
 function agregarLinea() {
   sucio.value = true
-  borrador.value.push({ cuenta_puc: '', descripcion: '', debito: '', credito: '', tercero_nit: '',
+  borrador.value.push({ cuenta_puc: '', descripcion: '', debito: '', credito: '', tercero_nit: terceroDoc.value,
     rol: null, codigo_siigo: null, base: null, concepto_id: null })
 }
 function quitarLinea(i: number) { borrador.value.splice(i, 1); sucio.value = true }
@@ -498,6 +522,8 @@ function abrir(a: Asiento) {
   const conceptoDeLinea = a.lineas.find((l) => l.rol === 'retencion' && l.concepto_id)?.concepto_id
   correccion.cuenta_puc = g.cuenta_puc || lineaDecidida(a)?.cuenta_puc || ''
   correccion.patron = g.patron || ''
+  terceroDoc.value = a.tercero_nit || ''
+  anotarNombres(a)
   borrador.value = aBorrador(a.lineas)
   sucio.value = !!a.editado
   correccion.retencion = g.sin_retencion ? 'ninguna'
@@ -854,8 +880,9 @@ onMounted(cargar)
                   <tr v-for="ln in a.lineas" :key="ln.id" class="border-t border-border/50">
                     <td class="py-1 pr-2 font-mono">{{ ln.cuenta_puc }}</td>
                     <td class="py-1 pr-2">{{ ln.descripcion }}</td>
-                    <td class="py-1 pr-2 font-mono" :class="ln.tercero_nit ? 'text-primary' : 'text-muted-foreground'">
-                      {{ ln.tercero_nit || a.tercero_nit }}
+                    <td class="py-1 pr-2">
+                      <span class="font-mono" :class="ln.tercero_nit && nitPlano(ln.tercero_nit) !== nitPlano(a.tercero_nit) ? 'text-primary' : ''">{{ ln.tercero_nit || a.tercero_nit }}</span>
+                      <span v-if="ln.tercero_nombre" class="ml-1.5 text-muted-foreground">{{ ln.tercero_nombre }}</span>
                     </td>
                     <td class="py-1 text-right font-mono">{{ Number(ln.debito) ? pesos(ln.debito) : '' }}</td>
                     <td class="py-1 text-right font-mono">{{ Number(ln.credito) ? pesos(ln.credito) : '' }}</td>
@@ -912,7 +939,7 @@ onMounted(cargar)
                       <tr class="text-left text-[10px] uppercase text-muted-foreground">
                         <th class="py-1 font-normal">Cuenta</th>
                         <th class="py-1 font-normal">Concepto</th>
-                        <th class="py-1 font-normal" title="Vacío = el tercero del documento">Tercero</th>
+                        <th class="py-1 font-normal" title="El del documento; cámbialo en la cuenta que vaya con otro">Tercero</th>
                         <th class="py-1 text-right font-normal">Débito</th>
                         <th class="py-1 text-right font-normal">Crédito</th>
                         <th class="w-14" />
@@ -927,8 +954,14 @@ onMounted(cargar)
                         </td>
                         <td class="py-1 pr-1"><Input v-model="ln.descripcion" class="h-7 min-w-40 text-xs" /></td>
                         <td class="py-1 pr-1">
-                          <Input v-model="ln.tercero_nit" class="h-7 w-28 font-mono text-xs"
-                            :class="ln.tercero_nit ? 'text-primary' : ''" :placeholder="a.tercero_nit || ''" />
+                          <Input v-model="ln.tercero_nit" class="h-7 w-36 font-mono text-xs"
+                            :class="esOtroTercero(ln.tercero_nit) ? 'border-primary text-primary' : ''"
+                            :title="esOtroTercero(ln.tercero_nit) ? 'Otro tercero que el del documento: se recuerda al aprobar' : ''"
+                            @change="buscarNombre(ln.tercero_nit)" />
+                          <div class="mt-0.5 w-36 truncate text-[10px] text-muted-foreground"
+                            :title="nombres[nitPlano(ln.tercero_nit)] || ''">
+                            {{ nombres[nitPlano(ln.tercero_nit)] || (ln.tercero_nit ? 'Sin nombre' : '') }}
+                          </div>
                         </td>
                         <td class="py-1 pr-1"><Input v-model="ln.debito" class="h-7 w-32 text-right font-mono text-xs" inputmode="decimal" /></td>
                         <td class="py-1 pr-1"><Input v-model="ln.credito" class="h-7 w-32 text-right font-mono text-xs" inputmode="decimal" /></td>
