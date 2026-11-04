@@ -624,3 +624,67 @@ def test_el_otro_tercero_se_quita_desde_reglas(conn):
     fila = dict(conn.execute("SELECT * FROM regla_causacion WHERE id = ?", (regla.regla_id,)).fetchone())
     causacion.guardar(conn, {**fila, "quitar_terceros": True})
     assert causacion.proponer(conn, {"tercero_nit": "800100200", "naturaleza": "compra"}).terceros is None
+
+
+# ───────────────────── Empezar el mes de cero (D-140) ─────────────────────────
+
+def _db(conn) -> str:
+    return conn.execute("PRAGMA database_list").fetchone()["file"]
+
+
+def test_empezar_de_cero_borra_lo_aprobado_y_lo_leido_del_mes(conn):
+    asiento.generar(conn, "2026-09")
+    a = _uno(conn)
+    asiento.aprobar(conn, a["id"], cuenta_puc="519530")
+    conn.commit()
+
+    cuenta = storage.reiniciar_mes(_db(conn), "2026-09")
+    assert cuenta["hecho"] is False
+    assert (cuenta["asientos"], cuenta["aprobados"], cuenta["cargas"], cuenta["documentos"]) == (1, 1, 1, 1)
+    assert asiento.listar(conn, "2026-09"), "contar no borra nada"
+
+    storage.reiniciar_mes(_db(conn), "2026-09", hacerlo=True)
+    assert asiento.listar(conn, "2026-09") == []
+    assert conn.execute("SELECT COUNT(*) FROM excel_row WHERE periodo = '2026-09'").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM documento").fetchone()[0] == 0
+    assert causacion.proponer(conn, {"tercero_nit": "800100200", "naturaleza": "compra"}).regla_id, \
+        "sin pedirlo, las reglas se quedan"
+
+
+def test_empezar_de_cero_olvida_lo_aprendido_si_se_pide(conn):
+    asiento.generar(conn, "2026-09")
+    a, lineas = _repartida(conn)
+    asiento.aprobar(conn, a["id"], lineas=lineas)
+    conn.commit()
+    storage.reiniciar_mes(_db(conn), "2026-09", olvidar_reglas=True, hacerlo=True)
+    regla = causacion.proponer(conn, {"tercero_nit": "800100200", "naturaleza": "compra"})
+    assert regla.reparto is None, "el reparto aprendido se olvida"
+    assert regla.regla_id, "la regla escrita a mano se queda"
+
+
+def test_un_documento_de_otro_mes_no_se_borra(conn):
+    conn.execute("INSERT INTO excel_load(id, source_path, source_name, total_rows, periodo)"
+                 " VALUES (2,'y.xlsx','y.xlsx',1,'2026-10')")
+    conn.execute("INSERT INTO excel_row(load_id,row_index,cufe_cude,data_json,periodo)"
+                 " VALUES (2,0,?,'{}','2026-10')", (CUFE,))
+    conn.commit()
+    storage.reiniciar_mes(_db(conn), "2026-09", hacerlo=True)
+    assert conn.execute("SELECT COUNT(*) FROM documento").fetchone()[0] == 1
+
+
+def test_borrar_el_mes_de_verdad_pide_escribirlo(conn):
+    from contab_core.sidecar import HANDLERS
+    with pytest.raises(ValueError, match="escribe el mes"):
+        HANDLERS["reiniciar_mes"]({"db_path": _db(conn), "periodo": "2026-09", "hacerlo": True,
+                                   "confirmacion": "si"})
+    r = HANDLERS["reiniciar_mes"]({"db_path": _db(conn), "periodo": "2026-09", "hacerlo": True,
+                                   "confirmacion": "2026-09"})
+    assert r["hecho"] is True
+
+
+def test_borrar_el_mes_tambien_borra_sus_asientos(conn):
+    asiento.generar(conn, "2026-09")
+    asiento.aprobar(conn, _uno(conn)["id"], cuenta_puc="519530")
+    conn.commit()
+    storage.delete_periodo(_db(conn), "2026-09")
+    assert asiento.listar(conn, "2026-09") == []

@@ -1299,8 +1299,12 @@ def list_periodos(db_path: str | Path, include_deleted: bool = False) -> list[di
 
 
 def delete_periodo(db_path: str | Path, periodo: str) -> dict:
-    """Borra el mes y su(s) Excel (hard delete; cascada a filas/validaciones)."""
+    """Borra el mes con todo lo suyo en la base (hard delete).
+
+    Antes solo borraba el Excel y la carpeta: los asientos aprobados y los XML
+    quedaban, y volvían a salir al crear el mes otra vez (D-140)."""
     p = _norm_periodo(periodo)
+    reiniciar_mes(db_path, p, hacerlo=True)
     conn = connect(db_path)
     try:
         ensure_schema(conn)
@@ -1310,6 +1314,65 @@ def delete_periodo(db_path: str | Path, periodo: str) -> dict:
     finally:
         conn.close()
     return {"periodo": p, "deleted": True}
+
+
+def reiniciar_mes(db_path: str | Path, periodo: str, *, olvidar_reglas: bool = False,
+                  hacerlo: bool = False) -> dict:
+    """Deja un mes como recién creado, para volver a probar el flujo desde cero.
+
+    El contador borraba las carpetas para empezar de nuevo, pero en la base
+    quedaban los asientos aprobados y guardados (que volver a armar no toca), los
+    XML leídos y el índice de CUFE: la «prueba de cero» salía con restos de una
+    versión anterior (D-140). Esto borra todo lo del mes en la base; el mes y su
+    carpeta se quedan, y los archivos del disco no se tocan.
+
+    Con `olvidar_reglas` también se olvida lo aprendido al aprobar —en toda la
+    empresa: las reglas no son de un mes—. Sin `hacerlo`, solo cuenta.
+    """
+    p = _norm_periodo(periodo)
+    conn = connect(db_path)
+    try:
+        ensure_schema(conn)
+        conn.execute("PRAGMA foreign_keys = ON")
+        cufes = {r[0] for r in conn.execute(
+            "SELECT DISTINCT cufe_cude FROM excel_row WHERE periodo = ? AND cufe_cude IS NOT NULL", (p,))}
+        cufes |= {r[0] for r in conn.execute("SELECT cufe FROM asiento_propuesto WHERE periodo = ?", (p,))}
+        # Un documento que también está en otro mes (un rezagado) se queda.
+        de_otros = {r[0] for r in conn.execute(
+            "SELECT DISTINCT cufe_cude FROM excel_row WHERE periodo <> ? AND cufe_cude IS NOT NULL", (p,))}
+        solo_de_este = sorted(cufes - de_otros)
+        carpeta = (conn.execute("SELECT pdfs_folder FROM periodo_folder WHERE periodo = ?", (p,))
+                   .fetchone() or [None])[0]
+
+        def contar(sql: str, args: tuple) -> int:
+            return int(conn.execute(sql, args).fetchone()[0])
+
+        marcas = ",".join("?" * len(solo_de_este)) or "NULL"
+        conteo = {
+            "asientos": contar("SELECT COUNT(*) FROM asiento_propuesto WHERE periodo = ?", (p,)),
+            "aprobados": contar("SELECT COUNT(*) FROM asiento_propuesto WHERE periodo = ? AND aprobado = 1", (p,)),
+            "cargas": contar("SELECT COUNT(*) FROM excel_load WHERE periodo = ?", (p,)),
+            "documentos": contar(f"SELECT COUNT(*) FROM documento WHERE cufe IN ({marcas})", tuple(solo_de_este)),
+            "soportes": contar("SELECT COUNT(*) FROM pdf_cufe_index WHERE folder_path = ?", (carpeta,)) if carpeta else 0,
+            "nomina": contar("SELECT COUNT(*) FROM nomina_comprobante WHERE periodo = ?", (p,)),
+            "reglas": contar("SELECT COUNT(*) FROM regla_causacion WHERE origen = 'aprendida'", ())
+            if olvidar_reglas else 0,
+        }
+        if hacerlo:
+            with transaction(conn):
+                conn.execute("DELETE FROM asiento_propuesto WHERE periodo = ?", (p,))
+                conn.execute("DELETE FROM excel_load WHERE periodo = ?", (p,))
+                conn.execute(f"DELETE FROM documento WHERE cufe IN ({marcas})", tuple(solo_de_este))
+                if carpeta:
+                    conn.execute("DELETE FROM pdf_cufe_index WHERE folder_path = ?", (carpeta,))
+                conn.execute("DELETE FROM nomina_comprobante WHERE periodo = ?", (p,))
+                conn.execute("DELETE FROM ingesta_run WHERE periodo = ?", (p,))
+                if olvidar_reglas:
+                    conn.execute("DELETE FROM regla_causacion WHERE origen = 'aprendida'")
+                    conn.execute("UPDATE regla_causacion SET reparto = NULL, terceros = NULL")
+    finally:
+        conn.close()
+    return {"periodo": p, "hecho": hacerlo, **conteo}
 
 
 def set_load_periodo(db_path: str | Path, load_id: int, periodo: str) -> dict:
