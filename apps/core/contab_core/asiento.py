@@ -466,6 +466,13 @@ def _armar(conn, ctx, documento, propuesta, *, tercero_decidido: bool | None):
             conn, propuesta, _d(documento.get("total_impuestos")), _d(documento.get("subtotal"))),
         codigos_concepto=ctx["codigos_concepto"], iva_cfg=ctx["iva"])
     avisos = [*avisos, *calculo.avisos]
+    # La cuenta que la vez pasada fue con otro tercero va otra vez con él (D-139).
+    for cuenta, nit in (propuesta.terceros or {}).items():
+        puestas = [ln for ln in lineas if ln.cuenta_puc == cuenta and not ln.tercero_nit]
+        for ln in puestas:
+            ln.tercero_nit = nit
+        if puestas:
+            avisos.append(f"La cuenta {cuenta} va con el tercero {nit}, como la última vez.")
     if documento.get("origen") == documentos_module.ORIGEN_EXCEL:
         avisos.append(
             "Sin el XML de este documento: se propuso con el total y el IVA "
@@ -729,6 +736,41 @@ def _sin_negativos(lineas: list[Linea]) -> None:
                 ln.base = abs(ln.base)
 
 
+def _nit_plano(nit: str | None) -> str:
+    return str(nit or "").strip().split("-")[0].replace(".", "")
+
+
+def terceros_de(lineas: list[Linea], tercero_documento: str | None) -> dict[str, str]:
+    """Las cuentas que en este asiento van con otro tercero que el del documento.
+
+    Una cuenta con dos terceros distintos no se recuerda: no hay cuál proponer."""
+    propio = _nit_plano(tercero_documento)
+    vistos: dict[str, set[str]] = {}
+    for ln in lineas:
+        if ln.cuenta_puc:
+            vistos.setdefault(ln.cuenta_puc, set()).add(_nit_plano(ln.tercero_nit) or propio)
+    return {c: next(iter(n)) for c, n in vistos.items() if len(n) == 1 and next(iter(n)) != propio}
+
+
+def nombres_de(conn, nits) -> dict[str, str]:
+    """El nombre de cada tercero que se conoce, por NIT."""
+    planos = sorted({_nit_plano(n) for n in nits if n})
+    if not planos:
+        return {}
+    filas = conn.execute(
+        f"SELECT nit, razon_social FROM tercero WHERE nit IN ({','.join('?' * len(planos))})",
+        planos).fetchall()
+    return {r["nit"]: r["razon_social"] for r in filas if r["razon_social"]}
+
+
+def _con_nombres(conn, a: dict[str, Any]) -> dict[str, Any]:
+    nombres = nombres_de(conn, [a.get("tercero_nit"), *(ln.get("tercero_nit") for ln in a["lineas"])])
+    a["tercero_nombre"] = nombres.get(_nit_plano(a.get("tercero_nit")))
+    for ln in a["lineas"]:
+        ln["tercero_nombre"] = nombres.get(_nit_plano(ln.get("tercero_nit") or a.get("tercero_nit")))
+    return a
+
+
 def _escribir(conn, periodo, documento, estado, avisos, regla_id, lineas,
               *, asiento_id: int | None) -> None:
     if asiento_id:
@@ -773,7 +815,7 @@ def listar(conn, periodo: str, *, estado: str | None = None) -> list[dict[str, A
         a["lineas"] = [dict(r) for r in conn.execute(
             "SELECT * FROM asiento_linea WHERE asiento_id = ? ORDER BY orden",
             (a["id"],)).fetchall()]
-        salida.append(a)
+        salida.append(_con_nombres(conn, a))
     return salida
 
 
@@ -1028,7 +1070,7 @@ def aprobar(
         if "aprender_regla" not in c:
             c["aprender_regla"] = aprender_regla
         propias = [Linea(r["cuenta_puc"], r["descripcion"] or "", debito=_d(r["debito"]),
-                         credito=_d(r["credito"]), rol=r["rol"])
+                         credito=_d(r["credito"]), rol=r["rol"], tercero_nit=r["tercero_nit"])
                    for r in conn.execute("SELECT * FROM asiento_linea WHERE asiento_id = ?"
                                          " ORDER BY orden", (a["id"],))]
         problemas = _problemas(propias)
@@ -1038,10 +1080,11 @@ def aprobar(
         sin_iva = next((x for x in propias if x.rol == ROL_NO_GRAVADO and x.cuenta_puc), None)
         _aprender(conn, a, cuenta_puc=c.get("cuenta_puc") or (principal.cuenta_puc if principal else None),
                   correccion=c, cuenta_no_gravada=sin_iva.cuenta_puc if sin_iva else None,
-                  reparto=reparto_de(propias, a.get("naturaleza")))
+                  reparto=reparto_de(propias, a.get("naturaleza")),
+                  terceros=terceros_de(propias, a.get("tercero_nit")))
     else:
         _aprender(conn, a, cuenta_puc=cuenta_puc, correccion=dados, cuenta_no_gravada=None,
-                  reparto=None)
+                  reparto=None, terceros=None)
         # Se rehace el asiento con lo corregido.
         documento = _documento_de(conn, a)
         if documento is not None:
@@ -1062,7 +1105,7 @@ def aprobar(
     return listar_uno(conn, a["id"])
 
 
-def _aprender(conn, a, *, cuenta_puc, correccion, cuenta_no_gravada, reparto) -> None:
+def _aprender(conn, a, *, cuenta_puc, correccion, cuenta_no_gravada, reparto, terceros) -> None:
     """La regla, para que la próxima factura de este tercero salga sola."""
     if not (correccion.get("aprender_regla", True) and cuenta_puc and a.get("tercero_nit")):
         return
@@ -1094,7 +1137,7 @@ def _aprender(conn, a, *, cuenta_puc, correccion, cuenta_no_gravada, reparto) ->
         iva_codigo=correccion.get("iva_codigo"),
         retenciones_cliente=((correccion.get("retenciones_cliente") or "").strip() or None)
         if es_venta else None,
-        cuenta_no_gravada=cuenta_no_gravada, reparto=reparto)
+        cuenta_no_gravada=cuenta_no_gravada, reparto=reparto, terceros=terceros)
 
 
 def aprobar_lote(conn, periodo: str, ids: list[int] | None = None) -> dict[str, Any]:
@@ -1148,4 +1191,4 @@ def listar_uno(conn, asiento_id: int) -> dict[str, Any]:
     a["lineas"] = [dict(r) for r in conn.execute(
         "SELECT * FROM asiento_linea WHERE asiento_id = ? ORDER BY orden",
         (a["id"],)).fetchall()]
-    return a
+    return _con_nombres(conn, a)

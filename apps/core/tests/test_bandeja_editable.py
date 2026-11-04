@@ -555,3 +555,72 @@ def test_el_reparto_se_quita_desde_reglas(conn):
     regla = next(r for r in causacion.listar(conn) if r["tercero_nit"] == "800100200")
     causacion.guardar(conn, {**regla, "quitar_reparto": True})
     assert causacion.proponer(conn, {"tercero_nit": "800100200", "naturaleza": "compra"}).reparto is None
+
+
+# ───────────────────── El tercero de cada cuenta (D-139) ──────────────────────
+
+def _con_otro_tercero(conn, nit="890903407"):
+    """La línea de proveedores va con otro tercero; las demás con el del documento."""
+    a = _uno(conn)
+    lineas = [dict(x) for x in a["lineas"]]
+    for x in lineas:
+        x["tercero_nit"] = nit if x["rol"] == "cartera" else a["tercero_nit"]
+    cartera = next(x for x in lineas if x["rol"] == "cartera")["cuenta_puc"]
+    return a, lineas, cartera
+
+
+def test_el_tercero_de_una_cuenta_se_recuerda_y_se_propone(conn):
+    asiento.generar(conn, "2026-09")
+    a, lineas, cartera = _con_otro_tercero(conn)
+    asiento.aprobar(conn, a["id"], lineas=lineas)
+    regla = causacion.proponer(conn, {"tercero_nit": "800100200", "naturaleza": "compra"})
+    assert regla.terceros == {cartera: "890903407"}, "el tercero del documento no se guarda"
+
+    asiento.desaprobar(conn, a["id"])
+    asiento.descartar(conn, a["id"])
+    a = _uno(conn)
+    por_cuenta = {x["cuenta_puc"]: x["tercero_nit"] for x in a["lineas"]}
+    assert por_cuenta[cartera] == "890903407"
+    assert all(n is None for c, n in por_cuenta.items() if c != cartera)
+    assert any(f"La cuenta {cartera} va con el tercero 890903407" in x for x in a["avisos"])
+
+
+def test_aprobar_todo_con_el_tercero_del_documento_lo_olvida(conn):
+    asiento.generar(conn, "2026-09")
+    a, lineas, _cartera = _con_otro_tercero(conn)
+    asiento.aprobar(conn, a["id"], lineas=lineas)
+    asiento.desaprobar(conn, a["id"])
+    asiento.descartar(conn, a["id"])
+    a = _uno(conn)
+    lineas = [{**dict(x), "tercero_nit": a["tercero_nit"]} for x in a["lineas"]]
+    asiento.aprobar(conn, a["id"], lineas=lineas)
+    assert causacion.proponer(conn, {"tercero_nit": "800100200", "naturaleza": "compra"}).terceros is None
+
+
+def test_cada_linea_trae_el_nombre_de_su_tercero(conn):
+    from contab_core import terceros
+    terceros.guardar(conn, {"nit": "890903407", "razon_social": "OTRO TERCERO SAS"})
+    asiento.generar(conn, "2026-09")
+    a, lineas, cartera = _con_otro_tercero(conn)
+    asiento.guardar(conn, a["id"], lineas)
+    a = _uno(conn)
+    nombres = {x["cuenta_puc"]: x["tercero_nombre"] for x in a["lineas"]}
+    assert nombres[cartera] == "OTRO TERCERO SAS"
+
+
+def test_una_cuenta_con_dos_terceros_no_se_recuerda():
+    L = asiento.Linea
+    lineas = [L("519530", "a", debito=Decimal("1"), tercero_nit="111"),
+              L("519530", "b", debito=Decimal("1"), tercero_nit="222"),
+              L("220505", "c", credito=Decimal("2"), tercero_nit="333-1")]
+    assert asiento.terceros_de(lineas, "999") == {"220505": "333"}
+
+
+def test_el_otro_tercero_se_quita_desde_reglas(conn):
+    asiento.generar(conn, "2026-09")
+    a, lineas, _cartera = _con_otro_tercero(conn)
+    asiento.aprobar(conn, a["id"], lineas=lineas)
+    regla = causacion.proponer(conn, {"tercero_nit": "800100200", "naturaleza": "compra"})
+    fila = dict(conn.execute("SELECT * FROM regla_causacion WHERE id = ?", (regla.regla_id,)).fetchone())
+    causacion.guardar(conn, {**fila, "quitar_terceros": True})
+    assert causacion.proponer(conn, {"tercero_nit": "800100200", "naturaleza": "compra"}).terceros is None
