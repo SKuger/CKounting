@@ -1642,6 +1642,7 @@ def _h_tarifas_list(params: dict) -> dict:
             "conceptos": conceptos,
             "uvt": tarifas_module.listar_uvt(conn),
             "ultima_importacion": tarifas_module.ultima_importacion(conn),
+            "conteo": tarifas_module.contar_conceptos(conn),
             "anio": anio,
         }
     finally:

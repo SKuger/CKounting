@@ -218,3 +218,56 @@ def test_sobre_y_codigo_siigo_se_pueden_llenar_desde_el_archivo(tmp_path: Path):
     codigos = dict(conn.execute("SELECT concepto, codigo_siigo FROM retencion_concepto").fetchall())
     assert codigos["Compras"] == "17"
     assert codigos["Honorarios"] == "13", "volver a subir sin el código no borra el del catálogo"
+
+
+def test_conteo_dice_cuantos_hay_aunque_esten_archivados(excel: Path, tmp_path: Path):
+    """La lista vacía con la base llena tiene que poder explicarse en pantalla."""
+    conn = storage.connect(tmp_path / "e.db")
+    storage.ensure_schema(conn)
+    tarifas.guardar(conn, tarifas.cargar(excel))
+    total = len(tarifas.listar_conceptos(conn))
+    assert tarifas.contar_conceptos(conn) == {"total": total, "archivados": 0}
+    for c in tarifas.listar_conceptos(conn):
+        tarifas.archivar_concepto(conn, c["id"])
+    assert tarifas.listar_conceptos(conn) == []
+    assert tarifas.contar_conceptos(conn) == {"total": total, "archivados": total}
+
+
+def test_una_base_rara_no_tumba_la_lista(tmp_path: Path):
+    conn = storage.connect(tmp_path / "e.db")
+    storage.ensure_schema(conn)
+    tarifas.guardar_uvt(conn, 2026, "52374")
+    conn.execute("INSERT INTO retencion_concepto(concepto, base_minima_uvt) VALUES ('X', '27 UVT')")
+    c = tarifas.listar_conceptos(conn)[0]
+    assert tarifas.base_minima_pesos(conn, c, 2026) is None
+
+
+def test_lo_escrito_a_mano_se_normaliza(tmp_path: Path):
+    conn = storage.connect(tmp_path / "e.db")
+    storage.ensure_schema(conn)
+    c = tarifas.guardar_concepto(conn, {
+        "concepto": "Honorarios", "aplica_a": "ambos", "sobre": "base",
+        "tarifa": "11%", "base_minima_uvt": "N/A", "observaciones": "Art. 392 E.T."})
+    assert c["tarifa"] == "11"
+    assert c["base_minima_uvt"] is None
+    assert c["observaciones"] == "Art. 392 E.T."
+    c = tarifas.guardar_concepto(conn, {**c, "tarifa": "3,5", "base_minima_uvt": "0,5"})
+    assert c["tarifa"] == "3.5"
+    assert Decimal(c["base_minima_uvt"]) == Decimal("0.5")
+
+
+def test_la_tarifa_se_guarda_sin_ceros_de_sobra(tmp_path: Path):
+    """`0.011 × 100` daba «1.100», que en el campo se leía «mil cien»."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Retenciones"
+    ws.append(["Concepto", "Tarifa (%)", "Base mínima (UVT)"])
+    ws.append(["Autorretención", 0.011, 27.0])
+    ws.append(["Honorarios", 0.11, "N/A"])
+    for fila in (2, 3):
+        ws.cell(fila, 2).number_format = "0.0%"
+    ruta = tmp_path / "t.xlsx"
+    wb.save(ruta)
+    c = tarifas.cargar(ruta).conceptos
+    assert [x["tarifa"] for x in c] == ["1.1", "11"]
+    assert c[0]["base_minima_uvt"] == "27"

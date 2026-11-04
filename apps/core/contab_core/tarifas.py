@@ -96,6 +96,13 @@ def _es(cabecera: str, campo: str) -> bool:
     return any(c == a or c.startswith(a) for a in _ALIAS[campo])
 
 
+def _plano(n: Decimal) -> Decimal:
+    """Sin ceros de sobra: `0.011 × 100` da `1.100`, que en pantalla —y en
+    Colombia— se lee «mil cien». Se guarda `1.1`."""
+    n = n.normalize()
+    return n.quantize(Decimal(1)) if n == n.to_integral() else n
+
+
 def tarifa_de_celda(celda) -> tuple[Decimal | None, str | None]:
     """(tarifa en porcentaje, texto si no era un número).
 
@@ -110,10 +117,10 @@ def tarifa_de_celda(celda) -> tuple[Decimal | None, str | None]:
         n = Decimal(str(v))
         formato = str(celda.number_format or "")
         if "%" in formato:
-            return n * 100, None
+            return _plano(n * 100), None
         # Sin formato de porcentaje, un valor por debajo de 1 es casi seguro una
         # fracción escrita a mano (0,11). Se acepta, pero se deja constancia.
-        return n, None
+        return _plano(n), None
     return None, _txt(v)
 
 
@@ -123,7 +130,7 @@ def base_minima_de(v: Any) -> Decimal | None:
     if t in SIN_MINIMO:
         return None
     try:
-        return Decimal(str(v).replace(",", "."))
+        return _plano(Decimal(str(v).replace(",", ".")))
     except (InvalidOperation, ValueError):
         return None
 
@@ -315,10 +322,15 @@ def base_minima_pesos(conn, concepto: dict[str, Any], anio: int) -> Decimal | No
     uvt_base = concepto.get("base_minima_uvt")
     if uvt_base in (None, ""):
         return None
-    valor = uvt_del_anio(conn, anio)
-    if valor is None:
+    # Una fila con algo raro en la base (escrita a mano antes de que se
+    # validara) no puede tumbar la lista entera: se queda sin pesos y ya.
+    try:
+        valor = uvt_del_anio(conn, anio)
+        if valor is None:
+            return None
+        return (Decimal(str(uvt_base)) * valor).quantize(Decimal("1"))
+    except (InvalidOperation, ValueError):
         return None
-    return (Decimal(str(uvt_base)) * valor).quantize(Decimal("1"))
 
 
 def listar_conceptos(conn, *, incluir_archivados: bool = False) -> list[dict[str, Any]]:
@@ -327,6 +339,20 @@ def listar_conceptos(conn, *, incluir_archivados: bool = False) -> list[dict[str
         sql += " WHERE archivado = 0"
     sql += " ORDER BY concepto, aplica_a"
     return [dict(r) for r in conn.execute(sql)]
+
+
+def contar_conceptos(conn) -> dict[str, int]:
+    """Cuántos hay guardados y cuántos de ellos están archivados.
+
+    Va junto a la lista para que la pantalla pueda decir «hay N que no se ven»
+    en vez de «todavía no hay tarifas» cuando la lista sale vacía pero la base
+    no lo está (2026-11-04: el contador importó dos veces, la segunda dijo
+    «123 actualizadas», y la pantalla seguía en cero).
+    """
+    r = conn.execute(
+        "SELECT COUNT(*), COALESCE(SUM(CASE WHEN archivado = 0 THEN 0 ELSE 1 END), 0)"
+        " FROM retencion_concepto").fetchone()
+    return {"total": int(r[0]), "archivados": int(r[1])}
 
 
 def listar_uvt(conn) -> list[dict[str, Any]]:
@@ -338,7 +364,14 @@ def guardar_concepto(conn, data: dict[str, Any]) -> dict[str, Any]:
     cid = data.get("id")
     campos = ("concepto", "aplica_a", "sobre", "tarifa", "tarifa_texto",
               "base_minima_uvt", "cuenta_puc", "codigo_siigo", "vigencia_desde", "observaciones")
-    valores = [(_txt(data.get(c)) or None) for c in campos]
+    limpio = dict(data)
+    # Lo que se escribe a mano llega como texto: «11%», «0,5», «N/A». Se guarda
+    # ya normalizado, para que el cálculo no tropiece después con él.
+    tarifa = _txt(limpio.get("tarifa")).replace("%", "").replace(",", ".").strip()
+    limpio["tarifa"] = tarifa or None
+    base = base_minima_de(_txt(limpio.get("base_minima_uvt")))
+    limpio["base_minima_uvt"] = str(base) if base is not None else None
+    valores = [(_txt(limpio.get(c)) or None) for c in campos]
     if cid:
         conn.execute(
             f"UPDATE retencion_concepto SET {', '.join(f'{c} = ?' for c in campos)},"
