@@ -4,7 +4,7 @@
 // aprende la plantilla comparando ese Excel con el 992 que ya está en Siigo;
 // cada mes se sube el Excel, se revisan las dos quincenas y se aprueban. Lo
 // aprobado sale en el mismo «Archivo de Siigo» de la bandeja.
-import { ArrowLeft, UploadCloud, Check, Undo2, ChevronRight } from 'lucide-vue-next'
+import { ArrowLeft, UploadCloud, Check, Undo2, ChevronRight, Plus, Users } from 'lucide-vue-next'
 
 type PorCuenta = { cuenta: string; debito: string; credito: string }
 type Comprobante = {
@@ -36,6 +36,65 @@ function humanError(e: unknown): string {
 }
 const pesos = (v: string) => Number(v || 0).toLocaleString('es-CO', { maximumFractionDigits: 2 })
 
+// ── Los empleados y sus entidades (D-142) ──────────────────────────────────────
+// Cada empleado elige su EPS, sus fondos de pensiones y cesantías y su caja; la
+// ARL la designa el empleador, y su tarifa sale de la clase de riesgo de cada uno.
+type Entidad = { cuenta: string; nit: string }
+const ENTIDADES = [
+  { k: 'salud', titulo: 'EPS', conCuenta: true },
+  { k: 'pension', titulo: 'Fondo de pensiones', conCuenta: true },
+  { k: 'cesantias', titulo: 'Fondo de cesantías', conCuenta: false },
+  { k: 'caja', titulo: 'Caja de compensación', conCuenta: true },
+] as const
+type ClaveEntidad = typeof ENTIDADES[number]['k']
+type FilaEmpleado = { id: string; nombre: string; riesgo: string; nuevo?: boolean; sucio?: boolean } & Record<ClaveEntidad, Entidad>
+type Empleados = {
+  empleados: FilaEmpleado[]; arl: Entidad; por_defecto: Record<ClaveEntidad, Entidad>
+  smmlv: Record<string, string>; riesgos: Record<string, string>
+}
+const verEmpleados = ref(false)
+const filas = ref<FilaEmpleado[]>([])
+const riesgos = ref<Record<string, string>>({})
+const empresaNom = reactive({ arl: { cuenta: '', nit: '' } as Entidad, smmlv: '' })
+const anio = computed(() => periodo.value.slice(0, 4))
+const sinRiesgo = computed(() => filas.value.filter((f) => !f.nuevo && !f.riesgo).length)
+
+async function cargarEmpleados() {
+  try {
+    const r = await rpc<Empleados>('nomina_empleados', { db_path: dbPath.value })
+    filas.value = r.empleados
+    riesgos.value = r.riesgos
+    empresaNom.arl = { ...r.arl }
+    empresaNom.smmlv = r.smmlv[anio.value] || ''
+  } catch (e) {
+    toast.error('No se pudieron cargar los empleados', humanError(e))
+  }
+}
+function agregarEmpleado() {
+  const vacia = (): Entidad => ({ cuenta: '', nit: '' })
+  filas.value.unshift({ id: '', nombre: '', riesgo: '', nuevo: true, sucio: true,
+    salud: vacia(), pension: vacia(), cesantias: vacia(), caja: vacia() })
+}
+async function guardarEmpleado(f: FilaEmpleado) {
+  try {
+    const r = await rpc<FilaEmpleado>('nomina_empleado_guardar', { db_path: dbPath.value, empleado: f })
+    Object.assign(f, r, { nuevo: false, sucio: false })
+    toast.success('Empleado guardado', f.nombre || f.id)
+  } catch (e) {
+    toast.error('No se guardó el empleado', humanError(e))
+  }
+}
+async function guardarEmpresaNom() {
+  try {
+    await rpc('nomina_empresa_guardar', { db_path: dbPath.value,
+      empresa: { arl: empresaNom.arl, smmlv: { [anio.value]: empresaNom.smmlv } } })
+    toast.success('Guardado', 'La ARL de la empresa y el salario mínimo.')
+  } catch (e) {
+    toast.error('No se guardó', humanError(e))
+  }
+}
+const tarifaTxt = (t: string) => Number(t).toLocaleString('es-CO', { maximumFractionDigits: 3 })
+
 const ETIQUETA_CLAVE = (k: string) => k.replace('nom:debito:', 'Débito · ').replace('nom:credito:', 'Crédito · ').replaceAll('_', ' ')
 
 async function cargar() {
@@ -45,6 +104,7 @@ async function cargar() {
       db_path: dbPath.value, periodo: periodo.value })
     comprobantes.value = r.comprobantes
     tienePlantilla.value = r.plantilla
+    await cargarEmpleados()
     const info = await rpc<{ razon_social: string }>('open_empresa', { db_path: dbPath.value })
     razonSocial.value = info.razon_social
   } catch (e) {
@@ -193,6 +253,83 @@ onMounted(cargar)
             <Button size="sm" :disabled="ocupado" @click="aplicarAprendizaje">Guardar la plantilla</Button>
             <Button size="sm" variant="ghost" :disabled="ocupado" @click="vistaAprendido = null">Cancelar</Button>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- los empleados: sus entidades y su clase de riesgo -->
+    <section class="rounded-lg border border-border bg-card p-3">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <h2 class="flex items-center gap-1.5 text-sm font-semibold">
+          <Users class="size-4" /> Empleados
+          <span class="text-xs font-normal text-muted-foreground">{{ filas.length }}</span>
+          <span v-if="sinRiesgo" class="text-xs font-normal text-status-warning">· {{ sinRiesgo }} sin clase de riesgo</span>
+          <span v-if="!empresaNom.smmlv" class="text-xs font-normal text-status-warning">· falta el salario mínimo de {{ anio }}</span>
+        </h2>
+        <Button size="sm" variant="ghost" @click="verEmpleados = !verEmpleados">{{ verEmpleados ? 'Cerrar' : 'Abrir' }}</Button>
+      </div>
+      <div v-if="verEmpleados" class="mt-3 grid gap-3">
+        <p class="max-w-3xl text-xs text-muted-foreground">
+          Cada empleado elige su EPS, sus fondos y su caja; la ARL la designa la empresa y su tarifa sale de la clase de
+          riesgo de cada uno. La salud y la pensión del empleado se toman del Excel y se revisan contra el 4 %; con el
+          salario mínimo se revisan el fondo de solidaridad (desde 4) y la exoneración (hasta 10).
+        </p>
+        <div class="flex flex-wrap items-end gap-3 rounded-md border border-border bg-muted/30 p-3">
+          <div class="grid gap-1">
+            <Label class="text-xs">ARL de la empresa · NIT</Label>
+            <Input v-model="empresaNom.arl.nit" class="h-8 w-36 font-mono" />
+          </div>
+          <div class="grid gap-1">
+            <Label class="text-xs">Cuenta</Label>
+            <Input v-model="empresaNom.arl.cuenta" class="h-8 w-28 font-mono" />
+          </div>
+          <div class="grid gap-1">
+            <Label class="text-xs">Salario mínimo {{ anio }}</Label>
+            <Input v-model="empresaNom.smmlv" class="h-8 w-36 font-mono" inputmode="numeric" />
+          </div>
+          <Button size="sm" @click="guardarEmpresaNom">Guardar</Button>
+          <span class="text-[11px] text-muted-foreground">
+            Clases de riesgo: {{ Object.entries(riesgos).map(([c, t]) => `${c} ${tarifaTxt(t)} %`).join(' · ') }}
+          </span>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full min-w-[980px] text-xs">
+            <thead>
+              <tr class="text-left text-[10px] uppercase text-muted-foreground">
+                <th class="py-1 pr-2 font-normal">Cédula · nombre</th>
+                <th class="py-1 pr-2 font-normal">Riesgo ARL</th>
+                <th v-for="e in ENTIDADES" :key="e.k" class="py-1 pr-2 font-normal">{{ e.titulo }} <span class="normal-case">(NIT{{ e.conCuenta ? ' · cuenta' : '' }})</span></th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(f, i) in filas" :key="f.id || `nuevo-${i}`" class="border-t border-border/50 align-top">
+                <td class="py-1.5 pr-2">
+                  <Input v-if="f.nuevo" v-model="f.id" class="h-7 w-32 font-mono text-xs" placeholder="Cédula" />
+                  <span v-else class="font-mono">{{ f.id }}</span>
+                  <Input v-model="f.nombre" class="mt-1 h-7 w-60 text-xs" placeholder="Nombre" @input="f.sucio = true" />
+                </td>
+                <td class="py-1.5 pr-2">
+                  <select v-model="f.riesgo" class="h-7 rounded-md border bg-background px-1.5 text-xs"
+                    :class="f.riesgo ? 'border-border' : 'border-status-warning'" @change="f.sucio = true">
+                    <option value="">— elegir —</option>
+                    <option v-for="(t, c) in riesgos" :key="c" :value="c">{{ c }} · {{ tarifaTxt(t) }} %</option>
+                  </select>
+                </td>
+                <td v-for="e in ENTIDADES" :key="e.k" class="py-1.5 pr-2">
+                  <Input v-model="f[e.k].nit" class="h-7 w-28 font-mono text-xs" placeholder="NIT" @input="f.sucio = true" />
+                  <Input v-if="e.conCuenta" v-model="f[e.k].cuenta" class="mt-1 h-7 w-28 font-mono text-xs" placeholder="Cuenta" @input="f.sucio = true" />
+                </td>
+                <td class="py-1.5">
+                  <Button v-if="f.sucio" size="sm" @click="guardarEmpleado(f)">Guardar</Button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <Button size="sm" variant="outline" @click="agregarEmpleado"><Plus class="size-3.5" /> Agregar empleado</Button>
+          <span class="ml-2 text-[11px] text-muted-foreground">Los empleados del Excel se agregan solos al subir la nómina del mes.</span>
         </div>
       </div>
     </section>
