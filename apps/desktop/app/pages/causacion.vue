@@ -31,6 +31,7 @@ type Asiento = {
 type Guardada = {
   cuenta_puc?: string; patron?: string; concepto_retencion_id?: number | string | null
   sin_retencion?: boolean; aprender_regla?: boolean; iva_codigo?: string; retenciones_cliente?: string
+  reteiva?: string
 }
 const ETIQUETA: Record<Naturaleza, string> = { compra: 'Compra', venta: 'Venta', doc_soporte: 'Doc. soporte' }
 type Resumen = { total: number; completos: number; revisar: number; aprobados: number; porcentaje_completo: number }
@@ -58,12 +59,14 @@ const trabajo = useJob()
 // Los conceptos de retención de la empresa, para elegir uno al aprobar.
 type Concepto = { id: number; concepto: string; aplica_a: string; sobre: string }
 const conceptos = ref<Concepto[]>([])
+// Los de ReteIVA (sobre el IVA), para su propio desplegable (D-143).
+const conceptosIva = ref<Concepto[]>([])
 
 // Lo que él corrige de un asiento antes de darle el visto bueno. `retencion`
 // es '' (no ha dicho), 'ninguna' (dijo que no se retiene) o el id del concepto.
 // Sin esto la regla aprendida no contaba como decisión, y aprobar la primera
 // factura de un proveedor no liberaba las siguientes.
-const correccion = reactive({ cuenta_puc: '', patron: '', retencion: '' as string, aprender_regla: true, iva_codigo: '' })
+const correccion = reactive({ cuenta_puc: '', patron: '', retencion: '' as string, aprender_regla: true, iva_codigo: '', reteiva: '' })
 
 const exportOpen = ref(false)
 const exportando = ref(false)
@@ -380,17 +383,23 @@ function correccionParams(a: Asiento) {
     sin_retencion: correccion.retencion === 'ninguna',
     aprender_regla: correccion.aprender_regla,
     iva_codigo: correccion.iva_codigo,
+    reteiva: a.naturaleza === 'venta' ? '' : correccion.reteiva,
     retenciones_cliente: a.naturaleza === 'venta' && retCliente.tocado
       ? ([retCliente.retefuente, retCliente.reteiva, retCliente.reteica].filter(Boolean).join(',') || 'ninguna')
       : '',
   }
 }
 
+// Los avisos de la última vista previa: los guardados dicen cómo estaba antes
+// de que él cambiara un desplegable («no se calcula nada» con la línea ya puesta).
+const avisosVista = ref<string[] | null>(null)
+
 async function rehacerBorrador(a: Asiento) {
   previsualizando.value = true
   try {
-    const r = await rpc<{ lineas: Linea[] }>('asiento_previsualizar', {
+    const r = await rpc<{ lineas: Linea[]; avisos: string[] }>('asiento_previsualizar', {
       db_path: dbPath.value, id: a.id, ...correccionParams(a), ...cuentas })
+    avisosVista.value = r.avisos
     const nuevas = aBorrador(r.lineas)
     if (!sucio.value) { borrador.value = nuevas; return }
     // Lo suyo (gasto, ingreso, parte sin IVA, líneas agregadas) se queda; los
@@ -481,6 +490,7 @@ async function cargar() {
     resumen.value = r.resumen
     const t = await rpc<{ conceptos: Concepto[] }>('tarifas_list', { db_path: dbPath.value })
     conceptos.value = t.conceptos.filter((c) => c.sobre !== 'iva')
+    conceptosIva.value = t.conceptos.filter((c) => c.sobre === 'iva')
     const c = await rpc<typeof cuentas>('cuentas_empresa', { db_path: dbPath.value })
     for (const k of Object.keys(cuentas) as (keyof typeof cuentas)[]) cuentas[k] = c[k] || ''
     const info = await rpc<{ razon_social: string }>('open_empresa', { db_path: dbPath.value })
@@ -516,10 +526,15 @@ function guardadaDe(a: Asiento): Guardada {
 function abrir(a: Asiento) {
   if (abierto.value === a.id) { abierto.value = null; return }
   abierto.value = a.id
+  avisosVista.value = null
   // Lo que guardó vuelve como lo dejó (Carlos, 0.18.0: se perdían la retención
   // y el «recordarlo cuando diga»). Sin nada guardado, lo que dicen las líneas.
   const g = guardadaDe(a)
-  const conceptoDeLinea = a.lineas.find((l) => l.rol === 'retencion' && l.concepto_id)?.concepto_id
+  // La línea de ReteIVA también es una retención con concepto: cada
+  // desplegable toma la suya.
+  const esIva = (id?: number | null) => conceptosIva.value.some((c) => c.id === id)
+  const conceptoDeLinea = a.lineas.find((l) => l.rol === 'retencion' && l.concepto_id && !esIva(l.concepto_id))?.concepto_id
+  const reteivaDeLinea = a.lineas.find((l) => l.rol === 'retencion' && esIva(l.concepto_id))?.concepto_id
   correccion.cuenta_puc = g.cuenta_puc || lineaDecidida(a)?.cuenta_puc || ''
   correccion.patron = g.patron || ''
   terceroDoc.value = a.tercero_nit || ''
@@ -531,6 +546,7 @@ function abrir(a: Asiento) {
       : conceptoDeLinea ? String(conceptoDeLinea) : ''
   correccion.aprender_regla = g.aprender_regla ?? true
   correccion.iva_codigo = g.iva_codigo || a.lineas.find((l) => l.rol === 'iva')?.codigo_siigo || ''
+  correccion.reteiva = g.reteiva || (reteivaDeLinea ? String(reteivaDeLinea) : '')
   const codigos = g.retenciones_cliente
     ? g.retenciones_cliente.split(',').map((c) => c.trim())
     : a.lineas.filter((l) => l.rol === 'retencion').map((l) => l.codigo_siigo || '')
@@ -845,8 +861,8 @@ onMounted(cargar)
             </div>
 
             <div v-if="abierto === a.id" class="border-b border-border bg-muted/30 px-3 py-3">
-              <ul v-if="a.avisos.length" class="mb-3 space-y-1">
-                <li v-for="(x, i) in a.avisos" :key="i" class="text-xs"
+              <ul v-if="(avisosVista ?? a.avisos).length" class="mb-3 space-y-1">
+                <li v-for="(x, i) in (avisosVista ?? a.avisos)" :key="i" class="text-xs"
                   :class="/no cuadra/i.test(x) ? 'font-semibold text-status-error' : 'text-status-warning'">· {{ x }}</li>
               </ul>
 
@@ -925,6 +941,15 @@ onMounted(cargar)
                       @change="rehacerBorrador(a)">
                       <option value="">— el de la tarifa —</option>
                       <option v-for="i in ivas" :key="i.codigo" :value="i.codigo">{{ i.codigo }} · {{ i.nombre }}</option>
+                    </select>
+                  </div>
+                  <div v-if="a.naturaleza !== 'venta' && conceptosIva.length && a.lineas.some((l) => l.rol === 'iva')" class="grid gap-1">
+                    <Label class="text-xs">Retención de IVA</Label>
+                    <select v-model="correccion.reteiva" class="h-8 rounded-md border border-border bg-background px-2 text-xs"
+                      @change="rehacerBorrador(a)">
+                      <option value="">Según el proveedor (solo régimen simple)</option>
+                      <option value="ninguna">Ninguna</option>
+                      <option v-for="c in conceptosIva" :key="c.id" :value="String(c.id)">{{ c.concepto }}</option>
                     </select>
                   </div>
                   <span class="pb-2 text-xs text-muted-foreground">
