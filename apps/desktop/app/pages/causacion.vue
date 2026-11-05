@@ -130,6 +130,7 @@ async function onSiigoFolder(ruta: string) {
   siigoExportando.value = true
   try {
     const r = await rpc<{ path: string; comprobantes: number; lineas: number; cuadra: boolean; faltan: string[]
+      nomina?: { incluidos: number; sin_aprobar: string[] }
       no_salen: { numero: string | null; fecha: string | null; tercero_nit: string | null; diferencia: string; sin_cuenta: boolean }[] }>(
       'siigo_exportar', { db_path: dbPath.value, periodo: periodo.value, output_dir: ruta })
     await cargarSiigo()
@@ -139,11 +140,16 @@ async function onSiigoFolder(ruta: string) {
         + r.no_salen.map((x) => `${x.numero || x.fecha} (${x.tercero_nit})`).join(', ')
         + '. Deshaz su aprobación con la flecha, corrígelos y vuelve a armar el archivo.')
     }
+    const deNomina = r.nomina?.incluidos ? ` (${r.nomina.incluidos} de nómina)` : ''
+    if (r.nomina?.sin_aprobar.length) {
+      toast.warn(`La nómina de ${r.nomina.sin_aprobar.map(etiquetaQuincena).join(' y ')} no va en el archivo`,
+        'No está aprobada. Apruébala en «Nómina» y vuelve a armar el archivo.')
+    }
     if (r.faltan.length) {
-      toast.error(`${r.comprobantes} comprobantes, pero faltan datos`,
+      toast.error(`${r.comprobantes} comprobantes${deNomina}, pero faltan datos`,
         'Celdas vacías en el archivo: ' + r.faltan.map(etiquetaFalta).join(', ') + '. Complétalos en «Siigo» o en Tarifas y vuelve a exportar.')
     } else {
-      toast.success(`${r.comprobantes} comprobantes · ${r.lineas} líneas`,
+      toast.success(`${r.comprobantes} comprobantes${deNomina} · ${r.lineas} líneas`,
         (r.cuadra ? 'El archivo cuadra. ' : 'OJO: el archivo NO cuadra. ') + r.path)
     }
   } catch (e) {
@@ -277,6 +283,11 @@ function humanError(e: unknown): string {
 const pendientes = computed(() => asientos.value.filter((a) => !a.aprobado && a.estado !== 'completo'))
 const listos = computed(() => asientos.value.filter((a) => !a.aprobado && a.estado === 'completo'))
 const aprobados = computed(() => asientos.value.filter((a) => a.aprobado))
+// La nómina del mes también va en el archivo de Siigo (D-134): con solo la
+// nómina aprobada, el botón tiene que poder usarse.
+const nominas = ref<{ quincena: string; aprobado: number }[]>([])
+const nominasAprobadas = computed(() => nominas.value.filter((n) => n.aprobado).length)
+const etiquetaQuincena = (q: string) => (q === '1Q' ? 'la primera quincena' : q === '2Q' ? 'la segunda quincena' : q)
 
 const hayVentas = computed(() => asientos.value.some((a) => a.naturaleza === 'venta'))
 const hayCompras = computed(() => asientos.value.some((a) => a.naturaleza !== 'venta'))
@@ -496,6 +507,9 @@ async function cargar() {
     const info = await rpc<{ razon_social: string }>('open_empresa', { db_path: dbPath.value })
     razonSocial.value = info.razon_social
     await cargarSiigo()
+    const n = await rpc<{ comprobantes: { quincena: string; aprobado: number }[] }>('nomina_list', {
+      db_path: dbPath.value, periodo: periodo.value })
+    nominas.value = n.comprobantes
   } catch (e) {
     toast.error('No se pudo cargar la causación', humanError(e))
   } finally {
@@ -654,8 +668,8 @@ onMounted(cargar)
         @click="exportOpen = true">
         <Download class="size-3.5" /> Exportar {{ aprobados.length }} aprobados
       </Button>
-      <Button size="sm" variant="outline" :disabled="siigoExportando || !aprobados.length"
-        title="Los asientos aprobados en el formato de importación de comprobantes de Siigo"
+      <Button size="sm" variant="outline" :disabled="siigoExportando || (!aprobados.length && !nominasAprobadas)"
+        title="Los asientos aprobados y la nómina aprobada del mes, en el formato de importación de comprobantes de Siigo"
         @click="siigoOpen = true">
         <FileSpreadsheet class="size-3.5" /> Archivo de Siigo
       </Button>
