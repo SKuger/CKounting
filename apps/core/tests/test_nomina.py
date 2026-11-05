@@ -187,3 +187,16 @@ def test_la_nomina_aprobada_sale_en_el_archivo_de_siigo(conn, archivos, tmp_path
     nomina.generar(conn, "2026-09", archivos[0])
     siigo.export_siigo(conn, "2026-09", tmp_path / "out")
     assert nomina.listar(conn, "2026-09")[0]["siigo_consecutivo"] == 67
+
+
+def test_el_archivo_de_siigo_dice_la_nomina_que_no_lleva(conn, archivos, tmp_path):
+    """El contador, 2026-11-05: «la nómina también va en el archivo de Siigo».
+    Solo va la aprobada; la que no, se dice por su quincena."""
+    nomina.aprender(conn, *archivos)
+    nomina.generar(conn, "2026-09", archivos[0])
+    c = nomina.listar(conn, "2026-09")[0]
+    r = siigo.export_siigo(conn, "2026-09", tmp_path / "out")
+    assert r["nomina"] == {"incluidos": 0, "sin_aprobar": [c["quincena"]]}
+    nomina.aprobar(conn, c["id"])
+    r = siigo.export_siigo(conn, "2026-09", tmp_path / "out")
+    assert r["nomina"] == {"incluidos": 1, "sin_aprobar": []}
