@@ -169,6 +169,7 @@ def calcular(
     sin_retencion: bool = False,
     tercero_decidido: bool = False,
     anio: int | None = None,
+    reteiva: str | None = None,
 ) -> Calculo:
     """Las retenciones que corresponden a este documento.
 
@@ -176,19 +177,35 @@ def calcular(
     regla propuso). Sin él no se puede calcular retefuente: el concepto define la
     tarifa, y adivinarlo desde la descripción de la factura es la tarea 4.3, no
     esta.
+
+    `reteiva` es el ReteIVA que eligió (D-143): el id de un concepto de Tarifas,
+    `'ninguna'`, o None para lo de siempre —solo frente al régimen simple—.
+
+    Lo elegido a mano se aplica **aunque la empresa no tenga perfil fiscal**: el
+    perfil está para no inventar una retención, y una que el contador eligió no
+    es inventada (el contador, 2026-11-05: «si selecciono una opción de
+    retención debería agregar una línea»).
     """
     res = Calculo()
+    reteiva_id = _id_elegido(reteiva)
     if documento is None:
         res.avisos.append("Sin el XML del documento no se puede calcular la retención.")
         res.revisar = True
         return res
-    if perfil is None:
+    if perfil is None and concepto_id is None and reteiva_id is None:
         # Sin perfil no se inventa uno por defecto: una retención calculada sobre
         # un supuesto hace más daño que una no calculada.
         res.avisos.append(
             "Esta empresa no tiene perfil fiscal configurado; no se calcula nada.")
         res.revisar = True
         return res
+    if perfil is None:
+        res.avisos.append(
+            "Esta empresa no tiene perfil fiscal: se aplicó solo la retención elegida a mano. "
+            "El perfil se configura en la página de la empresa.")
+        res.revisar = True
+    # Sin perfil, lo elegido se aplica como si fuera agente: por eso lo eligió.
+    efectivo = perfil if perfil is not None else {"agente_retefuente": True, "agente_reteiva": True}
 
     res.responsabilidades, res.origen_tercero = datos_del_tercero(tercero, documento)
     if res.origen_tercero == ORIGEN_SIN_DATOS:
@@ -210,7 +227,7 @@ def calcular(
     anio = anio or int(str(documento.get("fecha_emision") or "0000")[:4] or 0)
 
     # ── Retención en la fuente ──
-    if not perfil.get("agente_retefuente"):
+    if not efectivo.get("agente_retefuente"):
         res.avisos.append("La empresa no es agente de retención en la fuente.")
     elif _tiene(res.responsabilidades, AUTORRETENEDOR):
         res.avisos.append(
@@ -256,9 +273,14 @@ def calcular(
                         cuenta_puc=concepto.get("cuenta_puc"),
                         concepto_id=concepto["id"]))
 
-    # ── ReteIVA: solo frente a proveedores del régimen simple ──
+    # ── ReteIVA ──
     iva = _dec(documento.get("total_impuestos"))
-    if perfil.get("agente_reteiva") and iva > CERO:
+    if reteiva == NINGUNA:
+        pass
+    elif reteiva_id is not None:
+        _reteiva_elegido(conn, res, reteiva_id, efectivo=efectivo, iva=iva, base=base, anio=anio)
+    # Lo de siempre: solo frente a proveedores del régimen simple.
+    elif perfil is not None and perfil.get("agente_reteiva") and iva > CERO:
         if _tiene(res.responsabilidades, REGIMEN_SIMPLE):
             concepto = _concepto_reteiva(conn)
             tarifa = _dec(concepto.get("tarifa")) if concepto else Decimal("15")
@@ -278,6 +300,51 @@ def calcular(
                 "No se practicó ReteIVA porque no consta que el proveedor sea del "
                 "régimen simple — y es justo lo que no se sabe de este tercero.")
     return res
+
+
+NINGUNA = "ninguna"
+
+
+def _id_elegido(valor: str | int | None) -> int | None:
+    texto = str(valor or "").strip()
+    return int(texto) if texto.isdigit() else None
+
+
+def _reteiva_elegido(conn, res: Calculo, concepto_id: int, *, efectivo, iva: Decimal,
+                     base: Decimal, anio: int | None) -> None:
+    """El ReteIVA del concepto que eligió, sobre el IVA del documento."""
+    if not efectivo.get("agente_reteiva"):
+        res.revisar = True
+        res.avisos.append(
+            "Se eligió ReteIVA, pero el perfil fiscal dice que la empresa no es agente "
+            "de ReteIVA: no se aplicó.")
+        return
+    if iva == CERO:
+        res.avisos.append("Se eligió ReteIVA, pero este documento no trae IVA.")
+        return
+    fila = conn.execute("SELECT * FROM retencion_concepto WHERE id = ?", (int(concepto_id),)).fetchone()
+    if fila is None:
+        res.revisar = True
+        res.avisos.append(f"El concepto de ReteIVA {concepto_id} ya no existe.")
+        return
+    concepto = dict(fila)
+    if concepto.get("tarifa") in (None, ""):
+        res.revisar = True
+        res.avisos.append(
+            f"«{concepto['concepto']}» no tiene tarifa numérica"
+            f" ({concepto.get('tarifa_texto') or '—'}): hay que resolverla a mano.")
+        return
+    # La base mínima es la de la operación, no la del IVA.
+    minima = tarifas_module.base_minima_pesos(conn, concepto, anio) if anio else None
+    if minima is not None and abs(base) < minima:
+        res.avisos.append(
+            f"No llega a la base mínima de «{concepto['concepto']}»: {base} < {minima}.")
+        return
+    tarifa = _dec(concepto["tarifa"])
+    res.retenciones.append(Retencion(
+        tipo="reteiva", concepto=concepto["concepto"], base=iva, tarifa=tarifa,
+        valor=_pesos(iva * tarifa / Decimal("100")),
+        cuenta_puc=concepto.get("cuenta_puc"), concepto_id=concepto["id"]))
 
 
 def _concepto_reteiva(conn) -> dict[str, Any] | None:

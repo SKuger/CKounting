@@ -206,9 +206,19 @@ def test_lo_que_dice_la_factura_evita_tener_que_revisar(conn):
 # ──────────────────────── lo que NO se calcula en silencio ─────────────────────
 
 def test_sin_perfil_fiscal_no_se_inventa_nada(conn):
+    r = retenciones.calcular(conn, perfil=None, documento=doc())
+    assert r.retenciones == [] and r.revisar is True
+    assert any("perfil fiscal" in a for a in r.avisos)
+
+
+def test_sin_perfil_lo_elegido_a_mano_si_se_aplica(conn):
+    """El contador, 2026-11-05: «si selecciono una opción de retención debería
+    agregar una línea». Elegirla no es inventarla; el perfil sigue faltando y
+    se dice, y la fila queda para revisar."""
     r = retenciones.calcular(conn, perfil=None, documento=doc(),
                              concepto_id=ident("Honorarios", conn))
-    assert r.retenciones == [] and r.revisar is True
+    assert [x.tipo for x in r.retenciones] == ["retefuente"]
+    assert r.revisar is True
     assert any("perfil fiscal" in a for a in r.avisos)
 
 
@@ -232,3 +242,51 @@ def test_los_importes_son_decimal_y_se_redondean_al_peso(conn):
     assert isinstance(v, Decimal)
     assert v == Decimal("36667"), "11% de 333.333 = 36.666,63 → 36.667"
     assert v == v.to_integral_value(), "la DIAN no liquida céntimos"
+
+
+# ────────────────────── ReteIVA elegido a mano (D-143) ─────────────────────────
+
+def test_el_reteiva_elegido_se_aplica_al_proveedor_ordinario(conn):
+    """El contador, 2026-11-05: un campo para elegir la Retención de IVA. Lo
+    elegido manda sobre la regla del régimen simple."""
+    r = retenciones.calcular(conn, perfil=PERFIL, documento=doc(),
+                             tercero={"responsabilidades": ["O-13"]},
+                             concepto_id=ident("Honorarios", conn),
+                             reteiva=str(ident("ReteIVA servicios", conn)))
+    riva = [x for x in r.retenciones if x.tipo == "reteiva"]
+    assert len(riva) == 1
+    assert riva[0].valor == Decimal("28500"), "15% de 190.000 de IVA"
+    assert riva[0].cuenta_puc == "23670103"
+
+
+def test_ninguna_quita_el_reteiva_del_regimen_simple(conn):
+    r = retenciones.calcular(conn, perfil=PERFIL, documento=doc(),
+                             tercero={"responsabilidades": ["O-47"]},
+                             concepto_id=ident("Honorarios", conn), reteiva="ninguna")
+    assert [x for x in r.retenciones if x.tipo == "reteiva"] == []
+
+
+def test_el_reteiva_elegido_respeta_la_base_minima_de_la_operacion(conn):
+    conn.execute("UPDATE retencion_concepto SET base_minima_uvt = '10'"
+                 " WHERE concepto = 'ReteIVA servicios'")
+    r = retenciones.calcular(conn, perfil=PERFIL, documento=doc(subtotal="400000", total_impuestos="76000"),
+                             tercero={"responsabilidades": []},
+                             concepto_id=ident("Honorarios", conn),
+                             reteiva=str(ident("ReteIVA servicios", conn)))
+    assert [x for x in r.retenciones if x.tipo == "reteiva"] == []
+    assert any("base mínima" in a for a in r.avisos)
+
+
+def test_el_perfil_que_dice_no_agente_de_reteiva_manda(conn):
+    r = retenciones.calcular(conn, perfil={**PERFIL, "agente_reteiva": 0}, documento=doc(),
+                             tercero={"responsabilidades": []},
+                             concepto_id=ident("Honorarios", conn),
+                             reteiva=str(ident("ReteIVA servicios", conn)))
+    assert [x for x in r.retenciones if x.tipo == "reteiva"] == []
+    assert r.revisar is True
+
+
+def test_sin_perfil_el_reteiva_elegido_tambien_se_aplica(conn):
+    r = retenciones.calcular(conn, perfil=None, documento=doc(),
+                             reteiva=str(ident("ReteIVA servicios", conn)))
+    assert [x.tipo for x in r.retenciones] == ["reteiva"]
