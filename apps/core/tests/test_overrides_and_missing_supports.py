@@ -161,3 +161,24 @@ def test_missing_supports_errors_when_no_pdfs_folder(empresa_with_load, tmp_path
             "output_path": str(out),
         })
     assert "carpeta" in str(exc_info.value).lower()
+
+
+def test_renombrar_no_anida_transacciones(empresa_with_load, tmp_path: Path):
+    """2026-11-05: renombraba bien y después decía «cannot start a transaction
+    within a transaction». Reindexar tras renombrar ve PDFs nuevos, e
+    index_folder abre su propia transacción por cada uno."""
+    db_path = empresa_with_load["db_path"]
+    carpeta = tmp_path / "soportes"
+    carpeta.mkdir()
+    (carpeta / "factura.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+    conn = storage.connect(db_path)
+    try:
+        periodo = conn.execute("SELECT periodo FROM excel_load WHERE id = ?",
+                               (empresa_with_load["load_id"],)).fetchone()[0]
+    finally:
+        conn.close()
+    storage.set_periodo_folder(db_path, periodo, str(carpeta))
+    for dry_run in (True, False):
+        r = HANDLERS["rename_soportes"]({
+            "db_path": str(db_path), "load_id": empresa_with_load["load_id"], "dry_run": dry_run})
+        assert isinstance(r, dict)
