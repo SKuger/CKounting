@@ -158,6 +158,23 @@ def _cuenta_del_catalogo(catalogo, codigo: str | None, contexto: str) -> str | N
     return (fila or {}).get("cuenta") or None
 
 
+def _con_tarifa(concepto: str, tarifa: Decimal) -> str:
+    """«Honorarios (11%)», pero no «Servicios declarantes 4% (4%)»: los
+    conceptos del contador ya traen la tarifa en el nombre."""
+    numero = re.escape(_tarifa_txt(tarifa)).replace(r"\.", "[.,]")
+    # Sin dígito antes: «4%» no es el final de «14%».
+    if re.search(rf"(?<![\d.,]){numero}\s?%", concepto):
+        return concepto
+    return f"{concepto} ({tarifa}%)"
+
+
+def _descripcion_del_catalogo(catalogo, codigo: str | None, contexto: str) -> str | None:
+    fila = catalogo.get(((codigo or "").strip(), contexto)) if codigo else None
+    fila = fila or {}
+    return (str(fila.get("descripcion") or "").strip()
+            or str(fila.get("nombre") or "").strip() or None)
+
+
 def _codigo_iva(conn, propuesta, iva: Decimal, base: Decimal) -> str | None:
     """El código de IVA de esta línea: el de la regla, o el de la tarifa."""
     if propuesta.iva_codigo:
@@ -315,6 +332,7 @@ def _calcular_retenciones(conn, *, perfil, documento, propuesta, tercero_decidid
         conn, perfil=perfil, documento=visto, tercero=tercero,
         concepto_id=propuesta.concepto_retencion_id,
         sin_retencion=propuesta.sin_retencion,
+        reteiva=propuesta.reteiva,
         tercero_decidido=tercero_decidido)
 
 
@@ -598,7 +616,11 @@ def _lineas_de(
             if not cuenta:
                 avisos.append(f"Falta la cuenta del {etiqueta}"
                               + (f" al {t} %" if t else "") + ": elíjala en la línea.")
-            ln = Linea(cuenta, etiqueta + (f" {t}%" if t and len(tramos) > 1 else ""),
+            # Con el código en el catálogo, la línea dice lo que dice el
+            # catálogo («Iva descontable por servicios 19%»): cambiar el código
+            # cambia la cuenta y también el concepto (el contador, 2026-11-05).
+            ln = Linea(cuenta, _descripcion_del_catalogo(catalogo, codigo, contexto)
+                       or etiqueta + (f" {t}%" if t and len(tramos) > 1 else ""),
                        rol=ROL_IVA, base=b, codigo_siigo=codigo)
             setattr(ln, lado, v)
             salida.append(ln)
@@ -704,7 +726,7 @@ def _lineas_de(
         for r in calculo.retenciones:
             codigo = codigos_concepto.get(r.concepto_id or 0) or None
             cuenta = _cuenta_del_catalogo(catalogo, codigo, contexto) or r.cuenta_puc
-            lineas.append(Linea(cuenta, f"{r.concepto} ({r.tarifa}%)", credito=r.valor,
+            lineas.append(Linea(cuenta, _con_tarifa(r.concepto, r.tarifa), credito=r.valor,
                                 rol=ROL_RETENCION, base=r.base, concepto_id=r.concepto_id,
                                 codigo_siigo=codigo))
             retenido += r.valor
@@ -849,7 +871,7 @@ def resumen(conn, periodo: str) -> dict[str, Any]:
 # (`correccion`) para que aprobarlo después —uno a uno o en bloque— aprenda lo
 # mismo que si lo hubiera aprobado en el momento.
 CAMPOS_CORRECCION = ("cuenta_puc", "patron", "concepto_retencion_id", "sin_retencion",
-                     "aprender_regla", "iva_codigo", "retenciones_cliente")
+                     "aprender_regla", "iva_codigo", "retenciones_cliente", "reteiva")
 
 
 def _uno(conn, asiento_id: int) -> dict[str, Any]:
@@ -882,6 +904,8 @@ def _propuesta_corregida(conn, documento, c: dict[str, Any]):
         propuesta.iva_codigo = c["iva_codigo"].strip()
     if (c.get("retenciones_cliente") or "").strip():
         propuesta.retenciones_cliente = c["retenciones_cliente"].strip()
+    if str(c.get("reteiva") or "").strip():
+        propuesta.reteiva = str(c["reteiva"]).strip()
     return propuesta
 
 
@@ -1033,6 +1057,7 @@ def aprobar(
     iva_codigo: str | None = None,
     retenciones_cliente: str | None = None,
     lineas: list[dict[str, Any]] | None = None,
+    reteiva: str | None = None,
 ) -> dict[str, Any]:
     """Da por bueno un asiento, con las correcciones que él haya hecho.
 
@@ -1050,7 +1075,7 @@ def aprobar(
     dados = {"cuenta_puc": cuenta_puc, "patron": patron,
              "concepto_retencion_id": concepto_retencion_id, "sin_retencion": sin_retencion,
              "aprender_regla": aprender_regla, "iva_codigo": iva_codigo,
-             "retenciones_cliente": retenciones_cliente}
+             "retenciones_cliente": retenciones_cliente, "reteiva": reteiva}
     cuentas_empresa = {"cuenta_proveedores": cuenta_proveedores,
                        "cuenta_iva_descontable": cuenta_iva_descontable,
                        "cuenta_clientes": cuenta_clientes,
@@ -1116,9 +1141,13 @@ def _aprender(conn, a, *, cuenta_puc, correccion, cuenta_no_gravada, reparto, te
         # No eligió retención en esta pantalla: se conserva lo que ya se sabía
         # —la de las líneas, o la de la regla—. Sin esto, guardar un asiento
         # editado y aprobarlo le borraba el concepto a la regla del proveedor.
+        # La de retención en la fuente: la línea de ReteIVA también es una
+        # retención con concepto (D-143), y no es la que va a la regla.
         fila = conn.execute(
-            "SELECT concepto_id FROM asiento_linea WHERE asiento_id = ? AND rol = ?"
-            " AND concepto_id IS NOT NULL LIMIT 1", (a["id"], ROL_RETENCION)).fetchone()
+            "SELECT l.concepto_id FROM asiento_linea l"
+            " JOIN retencion_concepto c ON c.id = l.concepto_id"
+            " WHERE l.asiento_id = ? AND l.rol = ? AND c.sobre <> 'iva' LIMIT 1",
+            (a["id"], ROL_RETENCION)).fetchone()
         regla = conn.execute(
             "SELECT concepto_retencion_id, sin_retencion FROM regla_causacion WHERE id = ?",
             (a.get("regla_id") or 0,)).fetchone()
@@ -1137,6 +1166,7 @@ def _aprender(conn, a, *, cuenta_puc, correccion, cuenta_no_gravada, reparto, te
         iva_codigo=correccion.get("iva_codigo"),
         retenciones_cliente=((correccion.get("retenciones_cliente") or "").strip() or None)
         if es_venta else None,
+        reteiva=None if es_venta else (str(correccion.get("reteiva") or "").strip() or None),
         cuenta_no_gravada=cuenta_no_gravada, reparto=reparto, terceros=terceros)
 
 

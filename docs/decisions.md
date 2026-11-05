@@ -1642,3 +1642,29 @@ variables los porcentajes; por ahora son los de la norma.
 
 **Pendiente**: una empresa sin un 992 en Siigo todavía no puede escribir a mano
 las cuentas de la plantilla (devengos, provisiones, neto); solo aprenderlas.
+
+## D-143 — Lo elegido a mano en la bandeja se aplica: retención sin perfil, ReteIVA y el concepto del IVA
+
+**Decisión** (2026-11-05, a pedido del contador: «si selecciono una opción de
+retención en la fuente debería agregar una línea…»; «faltaría un campo donde se
+pueda seleccionar la Retención de IVA»):
+
+- **La retención que él elige se aplica aunque la empresa no tenga perfil
+  fiscal.** El perfil está para no inventar una retención; una elegida a mano
+  no es inventada. Se calcula con la tarifa y la base mínima de Tarifas, se
+  avisa que falta el perfil y el asiento queda por revisar. Sin nada elegido,
+  sin perfil sigue sin calcularse nada. Si el perfil existe y dice que la
+  empresa no es agente, manda el perfil.
+- **Un campo «Retención de IVA»** en la bandeja y en Reglas: los conceptos de
+  Tarifas que van sobre el IVA, «Ninguna», o «Según el proveedor» (lo de
+  antes: solo frente al régimen simple, D-108). Lo elegido va sobre el IVA del
+  documento, con la base mínima del concepto contra la base de la operación, y
+  se recuerda por proveedor en `regla_causacion.reteiva` (migración 21).
+- **Cambiar el código de IVA cambia también el concepto de la línea**: con el
+  código en el catálogo de Siigo, la línea dice su descripción («Iva
+  descontable por servicios 19%»). La cuenta ya seguía al código.
+- El concepto de la retención no repite la tarifa cuando su nombre ya la trae
+  («Servicios declarantes 4%», no «… 4% (4%)»).
+
+**Por qué**: el contador decide la retención mirando la factura; si la elige y
+no aparece la línea, la pantalla le está diciendo que no le hizo caso.

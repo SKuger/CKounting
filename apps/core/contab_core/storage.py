@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import log
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 # Cuánto espera una escritura a que se libere el lock antes de rendirse (ms).
 BUSY_TIMEOUT_MS = 5_000
@@ -372,6 +372,7 @@ CREATE TABLE IF NOT EXISTS regla_causacion (
   cuenta_no_gravada     TEXT,              -- la parte del documento sin IVA, a su propia cuenta
   reparto               TEXT,              -- JSON [{cuenta, parte}]: el gasto o ingreso en varias cuentas (D-136)
   terceros              TEXT,              -- JSON {cuenta: nit}: la cuenta que va con otro tercero (D-139)
+  reteiva               TEXT,              -- ReteIVA elegido: id del concepto, 'ninguna', o NULL = según el proveedor (D-143)
   vigencia_desde        TEXT,
   veces_usada           INTEGER NOT NULL DEFAULT 0,
   -- 'manual'    la escribió el contador
@@ -697,6 +698,16 @@ def _m018_bandeja_editable(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE {tabla} ADD COLUMN {col} {ddl}")
 
 
+def _m021_reteiva_elegido(conn: sqlite3.Connection) -> None:
+    """Migración 21 — el ReteIVA que el contador elige en la bandeja (D-143).
+
+    `NULL` es lo de antes: se practica solo frente al régimen simple. `'ninguna'`
+    es «a este no», y un id es el concepto de Tarifas que él eligió.
+    """
+    if "reteiva" not in {r["name"] for r in conn.execute("PRAGMA table_info(regla_causacion)").fetchall()}:
+        conn.execute("ALTER TABLE regla_causacion ADD COLUMN reteiva TEXT")
+
+
 def _m020_tercero_por_cuenta(conn: sqlite3.Connection) -> None:
     """Migración 20 — el tercero de cada cuenta en la regla (D-139).
 
@@ -1016,6 +1027,7 @@ MIGRACIONES: list[tuple[int, object]] = [
     (18, _m018_bandeja_editable),
     (19, _m019_reparto_por_tercero),
     (20, _m020_tercero_por_cuenta),
+    (21, _m021_reteiva_elegido),
 ]
 
 

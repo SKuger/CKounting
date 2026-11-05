@@ -13,6 +13,7 @@ type Regla = {
   cuenta_no_gravada?: string | null
   reparto?: string | null
   terceros?: string | null
+  reteiva?: string | null
   origen: string; veces_usada: number; archivada: number
 }
 type Concepto = { id: number; concepto: string; sobre: string }
@@ -24,6 +25,7 @@ const dbPath = computed(() => (route.query.db as string) || '')
 
 const reglas = ref<Regla[]>([])
 const conceptos = ref<Concepto[]>([])
+const conceptosIva = ref<Concepto[]>([])
 const ivas = ref<Iva[]>([])
 const razonSocial = ref('')
 const cargando = ref(false)
@@ -46,8 +48,11 @@ function retencion(r: Regla): string {
     if (r.retenciones_cliente === null) return 'no se sabe'
     return r.retenciones_cliente === 'ninguna' ? 'Ninguna' : r.retenciones_cliente.replaceAll(',', ' · ')
   }
-  if (r.sin_retencion) return 'Ninguna'
-  return nombreConcepto(r.concepto_retencion_id) || '—'
+  const rf = r.sin_retencion ? 'Ninguna' : (nombreConcepto(r.concepto_retencion_id) || '—')
+  // El ReteIVA elegido (D-143) va al lado; sin elegir no se dice nada.
+  if (r.reteiva === 'ninguna') return `${rf} · sin ReteIVA`
+  const iva = conceptosIva.value.find((c) => String(c.id) === r.reteiva)?.concepto
+  return iva ? `${rf} · ${iva}` : rf
 }
 
 const filtradas = computed(() => {
@@ -71,6 +76,7 @@ async function cargar() {
     reglas.value = r.reglas
     const t = await rpc<{ conceptos: Concepto[] }>('tarifas_list', { db_path: dbPath.value })
     conceptos.value = t.conceptos.filter((c) => c.sobre !== 'iva')
+    conceptosIva.value = t.conceptos.filter((c) => c.sobre === 'iva')
     const s = await rpc<{ ivas: Iva[] }>('siigo_config', { db_path: dbPath.value })
     ivas.value = s.ivas || []
     const info = await rpc<{ razon_social: string }>('open_empresa', { db_path: dbPath.value })
@@ -84,7 +90,7 @@ async function cargar() {
 
 // El panel de edición guarda TEXTO; `retencion` es '' (no dicho), 'ninguna' o el id.
 const abierta = ref<number | null>(null)
-const borrador = reactive({ cuenta_puc: '', patron: '', iva_codigo: '', retencion: '', retenciones_cliente: '', cuenta_no_gravada: '', quitar_reparto: false, quitar_terceros: false })
+const borrador = reactive({ cuenta_puc: '', patron: '', iva_codigo: '', retencion: '', reteiva: '', retenciones_cliente: '', cuenta_no_gravada: '', quitar_reparto: false, quitar_terceros: false })
 
 // El reparto aprendido al aprobar (D-136): «60 % 519530 · 40 % 51350501».
 function reparto(r: Regla): string {
@@ -110,6 +116,7 @@ function editar(r: Regla) {
   Object.assign(borrador, {
     cuenta_puc: r.cuenta_puc, patron: r.patron || '', iva_codigo: r.iva_codigo || '',
     retencion: r.sin_retencion ? 'ninguna' : (r.concepto_retencion_id ? String(r.concepto_retencion_id) : ''),
+    reteiva: r.reteiva || '',
     retenciones_cliente: r.retenciones_cliente || '',
     cuenta_no_gravada: r.cuenta_no_gravada || '',
     quitar_reparto: false,
@@ -127,6 +134,7 @@ async function guardar(r: Regla) {
         iva_codigo: borrador.iva_codigo,
         sin_retencion: borrador.retencion === 'ninguna',
         concepto_retencion_id: borrador.retencion && borrador.retencion !== 'ninguna' ? Number(borrador.retencion) : null,
+        reteiva: r.naturaleza === 'venta' ? null : borrador.reteiva,
         retenciones_cliente: borrador.retenciones_cliente,
         cuenta_no_gravada: borrador.cuenta_no_gravada,
         quitar_reparto: borrador.quitar_reparto,
@@ -266,7 +274,15 @@ onMounted(cargar)
                       <option v-for="c in conceptos" :key="c.id" :value="String(c.id)">{{ c.concepto }}</option>
                     </select>
                   </div>
-                  <div v-else class="grid gap-1">
+                  <div v-if="r.naturaleza !== 'venta' && conceptosIva.length" class="grid gap-1">
+                    <Label class="text-xs">Retención de IVA</Label>
+                    <select v-model="borrador.reteiva" class="h-8 rounded-md border border-border bg-background px-2 text-xs">
+                      <option value="">Según el proveedor (solo régimen simple)</option>
+                      <option value="ninguna">Ninguna</option>
+                      <option v-for="c in conceptosIva" :key="c.id" :value="String(c.id)">{{ c.concepto }}</option>
+                    </select>
+                  </div>
+                  <div v-if="r.naturaleza === 'venta'" class="grid gap-1">
                     <Label class="text-xs">Le retiene (códigos de Siigo)</Label>
                     <Input v-model="borrador.retenciones_cliente" class="h-8 w-40 font-mono" placeholder="05,07,11 · ninguna" />
                   </div>

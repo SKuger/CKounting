@@ -267,7 +267,13 @@ def export_siigo(conn, periodo: str, output_dir: str | Path) -> dict[str, Any]:
     # tipo de nómina de la empresa y cada línea con su propio tercero.
     from . import nomina as nomina_module
     tipo_nom = (cfg.get("tipo:nomina") or "").strip()
-    for nc in [n for n in nomina_module.listar(conn, periodo) if n["aprobado"]]:
+    nominas = nomina_module.listar(conn, periodo)
+    # La que no está aprobada no sale, y hay que decirlo: si no, el archivo
+    # parece completo y la nómina simplemente no está (el contador, 2026-11-05).
+    nomina_sin_aprobar = [n["quincena"] for n in nominas if not n["aprobado"]]
+    nomina_incluida = 0
+    for nc in [n for n in nominas if n["aprobado"]]:
+        nomina_incluida += 1
         if not tipo_nom:
             faltan.add("tipo:nomina")
         if not nc.get("siigo_consecutivo") and tipo_nom:
@@ -310,6 +316,7 @@ def export_siigo(conn, periodo: str, output_dir: str | Path) -> dict[str, Any]:
         "cuadra": total_debito == total_credito,
         "faltan": sorted(faltan),
         "no_salen": no_salen,
+        "nomina": {"incluidos": nomina_incluida, "sin_aprobar": nomina_sin_aprobar},
     }
 
 

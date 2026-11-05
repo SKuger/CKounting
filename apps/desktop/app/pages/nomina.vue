@@ -183,6 +183,7 @@ async function subirMes(e: Event) {
 async function aprobar(c: Comprobante, si: boolean) {
   try {
     await rpc('nomina_aprobar', { db_path: dbPath.value, id: c.id, aprobado: si })
+    if (si) toast.success('Nómina aprobada', 'Va en el «Archivo de Siigo» de Causación, junto con los asientos del mes.')
     await cargar()
   } catch (e) {
     toast.error('No se pudo aprobar', humanError(e))
@@ -341,7 +342,7 @@ onMounted(cargar)
         <UploadCloud class="size-3.5" /> {{ ocupado ? 'Armando…' : `Subir el Excel de nómina de ${periodo}` }}
         <input type="file" accept=".xlsx,.xlsm,.ods" class="hidden" @change="subirMes">
       </Button>
-      <span class="text-xs text-muted-foreground">Se puede volver a subir: lo aprobado no se toca.</span>
+      <span class="text-xs text-muted-foreground">Se puede volver a subir: lo aprobado no se toca. La nómina aprobada sale en el «Archivo de Siigo» de Causación.</span>
     </section>
 
     <section class="rounded-lg border border-border bg-card">

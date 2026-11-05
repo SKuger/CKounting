@@ -532,3 +532,40 @@ def test_el_prefijo_sale_del_reporte_aunque_empiece_por_numero(conn):
 
 def test_una_cedula_con_cero_adelante_lo_conserva():
     assert siigo._nit("0123456-7") == "0123456"
+
+
+def test_cambiar_el_codigo_de_iva_cambia_cuenta_y_concepto(conn, tmp_path):
+    """El contador, 2026-11-05: «si modifico el IVA (código de Siigo) debería
+    modificar la cuenta y concepto». La cuenta ya seguía al código; el concepto
+    decía «IVA descontable» siempre."""
+    ruta = tmp_path / "cat.xlsx"
+    _excel_catalogo_real(ruta)
+    siigo.aplicar_catalogo(conn, siigo.cargar_catalogo(ruta))
+    asiento.generar(conn, "2026-09")
+    a = next(a for a in asiento.listar(conn, "2026-09") if a["cufe"] == CUFE)
+    iva = next(ln for ln in a["lineas"] if ln["rol"] == "iva")
+    assert (iva["cuenta_puc"], iva["descripcion"]) == ("24081501", "Iva descontable por servicios 19%")
+
+    vista = asiento.previsualizar(conn, a["id"], iva_codigo="01")
+    iva = next(ln for ln in vista["lineas"] if ln["rol"] == "iva")
+    assert (iva["cuenta_puc"], iva["descripcion"]) == ("24081001", "Iva descontable por compras 19%")
+
+
+def test_el_reteiva_elegido_va_al_asiento_y_a_la_regla(conn, tmp_path):
+    tarifas.guardar_concepto(conn, {
+        "concepto": "ReteIVA 15%", "aplica_a": "ambos", "sobre": "iva", "tarifa": "15",
+        "cuenta_puc": "23670101", "codigo_siigo": "30", "vigencia_desde": "2026-01-01"})
+    rid = next(c["id"] for c in tarifas.listar_conceptos(conn) if c["sobre"] == "iva")
+    compras = next(c["id"] for c in tarifas.listar_conceptos(conn) if c["concepto"] == "Compras.")
+    asiento.generar(conn, "2026-09")
+    a = next(a for a in asiento.listar(conn, "2026-09") if a["cufe"] == CUFE)
+
+    vista = asiento.previsualizar(conn, a["id"], concepto_retencion_id=compras, reteiva=str(rid))
+    riva = [ln for ln in vista["lineas"] if ln["rol"] == "retencion" and ln["concepto_id"] == rid]
+    assert len(riva) == 1 and riva[0]["cuenta_puc"] == "23670101" and riva[0]["codigo_siigo"] == "30"
+
+    asiento.aprobar(conn, a["id"], cuenta_puc="51101001", concepto_retencion_id=compras, reteiva=str(rid))
+    regla = next(r for r in causacion.listar(conn) if r["naturaleza"] == "compra")
+    assert regla["reteiva"] == str(rid), "la próxima factura del proveedor lo trae solo"
+    assert causacion.proponer(conn, next(
+        d for d in documentos.documentos_a_causar(conn, "2026-09") if d["cufe"] == CUFE)).reteiva == str(rid)

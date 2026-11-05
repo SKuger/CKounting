@@ -1296,15 +1296,17 @@ def _h_rename_soportes(params: dict) -> dict:
         folder = storage_module.periodo_pdfs_folder(conn, periodo)
         if not folder or not Path(folder).is_dir():
             raise ValueError("La carpeta de soportes de este mes no está configurada o no existe.")
-        with storage_module.transaction(conn):
-            pdf_cufe_module.index_folder(conn, folder)
+        # Sin `transaction()` alrededor: index_folder abre la suya por cada PDF,
+        # y SQLite no anida. Envolverlo daba «cannot start a transaction within
+        # a transaction» en cuanto había un PDF nuevo — siempre, tras renombrar,
+        # porque todos los nombres cambiaron (2026-11-05).
+        pdf_cufe_module.index_folder(conn, folder)
         rows = excel_module.fetch_load_rows(conn, load_id)
         pdfs = pdf_cufe_module.list_indexed_pdfs(conn, folder)
         result = rename_module.rename_soportes(rows, pdfs, folder, dry_run=dry_run)
         if not dry_run:
             # tras renombrar, refrescar el índice para que la app vea los nombres nuevos
-            with storage_module.transaction(conn):
-                pdf_cufe_module.index_folder(conn, folder)
+            pdf_cufe_module.index_folder(conn, folder)
         return result
     finally:
         conn.close()
@@ -1389,6 +1391,7 @@ def _h_asiento_aprobar(params: dict) -> dict:
             aprender_regla=bool(params.get("aprender_regla", True)),
             iva_codigo=(params.get("iva_codigo") or "").strip() or None,
             retenciones_cliente=(params.get("retenciones_cliente") or "").strip() or None,
+            reteiva=str(params.get("reteiva") or "").strip() or None,
             lineas=params.get("lineas"),
         )
     finally:
