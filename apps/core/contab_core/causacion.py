@@ -72,6 +72,9 @@ class Propuesta:
     reparto: list[tuple[str, Decimal]] | None = None
     # La cuenta que va con otro tercero que el del documento: {cuenta: nit} (D-139).
     terceros: dict[str, str] | None = None
+    # ReteIVA elegido (D-143): id del concepto de Tarifas, 'ninguna', o None =
+    # lo de siempre (solo frente al régimen simple).
+    reteiva: str | None = None
 
     def como_dict(self) -> dict[str, Any]:
         return {
@@ -84,6 +87,7 @@ class Propuesta:
             "cuenta_no_gravada": self.cuenta_no_gravada,
             "reparto": [{"cuenta": c, "parte": str(p)} for c, p in self.reparto] if self.reparto else None,
             "terceros": self.terceros or None,
+            "reteiva": self.reteiva,
         }
 
 
@@ -173,6 +177,7 @@ def proponer(conn, documento: dict[str, Any]) -> Propuesta:
         cuenta_no_gravada=mejor.get("cuenta_no_gravada") or None,
         reparto=leer_reparto(mejor.get("reparto")),
         terceros=leer_terceros(mejor.get("terceros")),
+        reteiva=(mejor.get("reteiva") or None) if "reteiva" in mejor else None,
         regla_id=mejor["id"], por_que=por_que, seguro=True,
     )
 
@@ -192,6 +197,7 @@ def aprender(
     cuenta_no_gravada: str | None = None,
     reparto: list[tuple[str, Decimal]] | None = None,
     terceros: dict[str, str] | None = None,
+    reteiva: str | None = None,
 ) -> dict[str, Any]:
     """Guarda lo que el contador decidió, para no volvérselo a preguntar.
 
@@ -215,22 +221,23 @@ def aprender(
             "UPDATE regla_causacion SET cuenta_puc = ?, concepto_retencion_id = ?,"
             " sin_retencion = ?, iva_codigo = COALESCE(?, iva_codigo),"
             " retenciones_cliente = COALESCE(?, retenciones_cliente),"
-            " cuenta_no_gravada = COALESCE(?, cuenta_no_gravada), archivada = 0,"
+            " cuenta_no_gravada = COALESCE(?, cuenta_no_gravada),"
+            " reteiva = COALESCE(?, reteiva), archivada = 0,"
             " updated_at = datetime('now') WHERE id = ?",
             (cuenta_puc, concepto_retencion_id, 1 if sin_retencion else 0,
              (iva_codigo or "").strip() or None, (retenciones_cliente or "").strip() or None,
-             (cuenta_no_gravada or "").strip() or None, ya[0]))
+             (cuenta_no_gravada or "").strip() or None, (reteiva or "").strip() or None, ya[0]))
         rid = ya[0]
     else:
         cur = conn.execute(
             "INSERT INTO regla_causacion(tercero_nit, patron, cuenta_puc,"
             " concepto_retencion_id, sin_retencion, vigencia_desde, origen, naturaleza,"
-            " iva_codigo, retenciones_cliente, cuenta_no_gravada)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            " iva_codigo, retenciones_cliente, cuenta_no_gravada, reteiva)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (tercero_nit, patron, cuenta_puc, concepto_retencion_id,
              1 if sin_retencion else 0, vigencia_desde, ORIGEN_APRENDIDA, naturaleza,
              (iva_codigo or "").strip() or None, (retenciones_cliente or "").strip() or None,
-             (cuenta_no_gravada or "").strip() or None))
+             (cuenta_no_gravada or "").strip() or None, (reteiva or "").strip() or None))
         rid = int(cur.lastrowid)
     if reparto is not None:
         # [] borra el reparto: esta vez lo llevó todo a una sola cuenta.
@@ -311,6 +318,7 @@ def guardar(conn, data: dict[str, Any]) -> dict[str, Any]:
         (data.get("iva_codigo") or "").strip() or None,
         (data.get("retenciones_cliente") or "").strip() or None,
         (data.get("cuenta_no_gravada") or "").strip() or None,
+        (str(data.get("reteiva") or "")).strip() or None,
     )
     if valores[5] not in ("compra", "venta", "doc_soporte"):
         raise ValueError(f"Naturaleza desconocida: «{valores[5]}».")
@@ -319,13 +327,14 @@ def guardar(conn, data: dict[str, Any]) -> dict[str, Any]:
             "UPDATE regla_causacion SET tercero_nit = ?, patron = ?, cuenta_puc = ?,"
             " concepto_retencion_id = ?, vigencia_desde = ?, naturaleza = ?,"
             " sin_retencion = ?, iva_codigo = ?, retenciones_cliente = ?,"
-            " cuenta_no_gravada = ?, updated_at = datetime('now') WHERE id = ?", (*valores, int(rid)))
+            " cuenta_no_gravada = ?, reteiva = ?, updated_at = datetime('now') WHERE id = ?",
+            (*valores, int(rid)))
     else:
         cur = conn.execute(
             "INSERT INTO regla_causacion(tercero_nit, patron, cuenta_puc,"
             " concepto_retencion_id, vigencia_desde, naturaleza, sin_retencion,"
-            " iva_codigo, retenciones_cliente, cuenta_no_gravada, origen)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?, 'manual')", valores)
+            " iva_codigo, retenciones_cliente, cuenta_no_gravada, reteiva, origen)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?, 'manual')", valores)
         rid = int(cur.lastrowid)
     if data.get("quitar_reparto"):
         conn.execute("UPDATE regla_causacion SET reparto = NULL WHERE id = ?", (int(rid),))

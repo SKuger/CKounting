@@ -1391,6 +1391,7 @@ def _h_asiento_aprobar(params: dict) -> dict:
             aprender_regla=bool(params.get("aprender_regla", True)),
             iva_codigo=(params.get("iva_codigo") or "").strip() or None,
             retenciones_cliente=(params.get("retenciones_cliente") or "").strip() or None,
+            reteiva=str(params.get("reteiva") or "").strip() or None,
             lineas=params.get("lineas"),
         )
     finally:
