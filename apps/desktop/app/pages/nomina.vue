@@ -4,7 +4,7 @@
 // aprende la plantilla comparando ese Excel con el 992 que ya está en Siigo;
 // cada mes se sube el Excel, se revisan las dos quincenas y se aprueban. Lo
 // aprobado sale en el mismo «Archivo de Siigo» de la bandeja.
-import { ArrowLeft, UploadCloud, Check, Undo2, ChevronRight, Plus, Users } from 'lucide-vue-next'
+import { ArrowLeft, UploadCloud, Check, Undo2, ChevronRight, Plus, Users, ListChecks, Trash2 } from 'lucide-vue-next'
 
 type PorCuenta = { cuenta: string; debito: string; credito: string }
 type Comprobante = {
@@ -51,13 +51,14 @@ type FilaEmpleado = { id: string; nombre: string; riesgo: string; nuevo?: boolea
 type Empleados = {
   empleados: FilaEmpleado[]; arl: Entidad; por_defecto: Record<ClaveEntidad, Entidad>
   smmlv: Record<string, string>; riesgos: Record<string, string>
+  riesgo_por_defecto: string; parametros: Record<string, { smmlv?: string; aux_transporte?: string }>
 }
 const verEmpleados = ref(false)
 const filas = ref<FilaEmpleado[]>([])
 const riesgos = ref<Record<string, string>>({})
-const empresaNom = reactive({ arl: { cuenta: '', nit: '' } as Entidad, smmlv: '' })
+const empresaNom = reactive({ arl: { cuenta: '', nit: '' } as Entidad, smmlv: '', aux: '', riesgo: '' })
 const anio = computed(() => periodo.value.slice(0, 4))
-const sinRiesgo = computed(() => filas.value.filter((f) => !f.nuevo && !f.riesgo).length)
+const sinRiesgo = computed(() => empresaNom.riesgo ? 0 : filas.value.filter((f) => !f.nuevo && !f.riesgo).length)
 
 async function cargarEmpleados() {
   try {
@@ -65,7 +66,11 @@ async function cargarEmpleados() {
     filas.value = r.empleados
     riesgos.value = r.riesgos
     empresaNom.arl = { ...r.arl }
-    empresaNom.smmlv = r.smmlv[anio.value] || ''
+    // El salario mínimo y el auxilio son de todas las empresas (D-145); el de la
+    // empresa, de antes, se muestra mientras no haya uno general.
+    empresaNom.smmlv = r.parametros?.[anio.value]?.smmlv || r.smmlv[anio.value] || ''
+    empresaNom.aux = r.parametros?.[anio.value]?.aux_transporte || ''
+    empresaNom.riesgo = r.riesgo_por_defecto || ''
   } catch (e) {
     toast.error('No se pudieron cargar los empleados', humanError(e))
   }
@@ -87,13 +92,65 @@ async function guardarEmpleado(f: FilaEmpleado) {
 async function guardarEmpresaNom() {
   try {
     await rpc('nomina_empresa_guardar', { db_path: dbPath.value,
-      empresa: { arl: empresaNom.arl, smmlv: { [anio.value]: empresaNom.smmlv } } })
-    toast.success('Guardado', 'La ARL de la empresa y el salario mínimo.')
+      empresa: { arl: empresaNom.arl, riesgo_por_defecto: empresaNom.riesgo,
+        smmlv: { [anio.value]: empresaNom.smmlv }, aux_transporte: { [anio.value]: empresaNom.aux } } })
+    toast.success('Guardado', 'La ARL y la clase de riesgo de la empresa; el salario mínimo y el auxilio, para todas.')
   } catch (e) {
     toast.error('No se guardó', humanError(e))
   }
 }
 const tarifaTxt = (t: string) => Number(t).toLocaleString('es-CO', { maximumFractionDigits: 3 })
+
+// ── La tabla de conceptos (D-145) ──────────────────────────────────────────────
+// Cada pago o descuento con su cuenta, y si es salarial (base de las
+// provisiones) o base de seguridad social (base de los aportes). Lo pidió el
+// contador para matricular una vez lo que el Excel trae y no adivinarlo.
+type FilaDevengo = { clave: string; nombre: string; cuenta: string; salarial: boolean; base_ss: boolean; propio: boolean; columna: string }
+type FilaDeduccion = { clave: string; nombre: string; cuenta: string; propio: boolean; columna: string }
+type FilaProvision = { clave: string; nombre: string; cuenta_gasto: string; cuenta_pasivo: string; tarifa: string }
+type FilaAporte = { clave: string; nombre: string; cuenta_gasto: string; tarifa: string }
+type Conceptos = { devengos: FilaDevengo[]; deducciones: FilaDeduccion[]; provisiones: FilaProvision[]; aportes: FilaAporte[]; neto: { cuenta: string } }
+const verConceptos = ref(false)
+const tabla = ref<Conceptos | null>(null)
+const guardandoConceptos = ref(false)
+const nuevo = reactive({ nombre: '', tipo: 'devengo', columna: '', cuenta: '', salarial: false, base_ss: false })
+const sinCuenta = computed(() => {
+  const t = tabla.value
+  if (!t) return 0
+  return [...t.devengos.map((f) => f.cuenta), ...t.deducciones.map((f) => f.cuenta),
+    ...t.provisiones.flatMap((f) => [f.cuenta_gasto, f.cuenta_pasivo]), ...t.aportes.map((f) => f.cuenta_gasto),
+    t.neto.cuenta].filter((c) => !c).length
+})
+
+async function cargarConceptos() {
+  try {
+    tabla.value = await rpc<Conceptos>('nomina_conceptos', { db_path: dbPath.value })
+  } catch (e) {
+    toast.error('No se pudo cargar la tabla de conceptos', humanError(e))
+  }
+}
+async function guardarConceptos(extra: Record<string, unknown> = {}) {
+  if (!tabla.value) return
+  guardandoConceptos.value = true
+  try {
+    tabla.value = await rpc<Conceptos>('nomina_conceptos_guardar', { db_path: dbPath.value,
+      conceptos: { ...tabla.value, ...extra } })
+    toast.success('Conceptos guardados', 'Vuelva a subir el Excel del mes para rearmar la nómina con ellos.')
+    await cargar()
+  } catch (e) {
+    toast.error('No se guardaron los conceptos', humanError(e))
+  } finally {
+    guardandoConceptos.value = false
+  }
+}
+async function agregarConcepto() {
+  if (!nuevo.nombre.trim()) return
+  await guardarConceptos({ nuevos: [{ ...nuevo }] })
+  Object.assign(nuevo, { nombre: '', tipo: 'devengo', columna: '', cuenta: '', salarial: false, base_ss: false })
+}
+async function borrarConcepto(clave: string) {
+  await guardarConceptos({ borrar: [clave] })
+}
 
 const ETIQUETA_CLAVE = (k: string) => k.replace('nom:debito:', 'Débito · ').replace('nom:credito:', 'Crédito · ').replaceAll('_', ' ')
 
@@ -105,6 +162,7 @@ async function cargar() {
     comprobantes.value = r.comprobantes
     tienePlantilla.value = r.plantilla
     await cargarEmpleados()
+    await cargarConceptos()
     const info = await rpc<{ razon_social: string }>('open_empresa', { db_path: dbPath.value })
     razonSocial.value = info.razon_social
   } catch (e) {
@@ -224,8 +282,8 @@ onMounted(cargar)
       </div>
       <div v-if="verPlantilla || !tienePlantilla" class="mt-2 grid gap-2">
         <p class="text-xs text-muted-foreground">
-          Suba el Excel de nómina de un mes que ya esté en Siigo, y el archivo de carga de Siigo que tenga el
-          comprobante de nómina de ese mes. Contab los compara línea por línea y aprende a qué cuenta va cada
+          Suba el Excel de nómina de un mes que ya esté en Siigo, y el archivo de carga o el movimiento contable
+          de Siigo que tenga el comprobante de nómina de ese mes. Contab los compara línea por línea y aprende a qué cuenta va cada
           concepto y cuál es la EPS, el fondo, la caja y la ARL de cada empleado.
         </p>
         <div class="flex flex-wrap gap-2">
@@ -234,7 +292,7 @@ onMounted(cargar)
             <input type="file" accept=".xlsx,.xlsm,.ods" class="hidden" @change="elegir($event, 'nomina')">
           </Button>
           <Button as="label" size="sm" variant="outline" :disabled="ocupado">
-            <UploadCloud class="size-3.5" /> {{ aprender.cargaNombre || 'Archivo de carga de Siigo' }}
+            <UploadCloud class="size-3.5" /> {{ aprender.cargaNombre || 'Carga o movimiento de Siigo' }}
             <input type="file" accept=".xlsx,.xlsm,.ods" class="hidden" @change="elegir($event, 'carga')">
           </Button>
         </div>
@@ -255,6 +313,118 @@ onMounted(cargar)
             <Button size="sm" variant="ghost" :disabled="ocupado" @click="vistaAprendido = null">Cancelar</Button>
           </div>
         </div>
+      </div>
+    </section>
+
+    <!-- la tabla de conceptos: cuenta y si es base de cada cosa -->
+    <section class="rounded-lg border border-border bg-card p-3">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <h2 class="flex items-center gap-1.5 text-sm font-semibold">
+          <ListChecks class="size-4" /> Conceptos y cuentas
+          <span v-if="sinCuenta" class="text-xs font-normal text-muted-foreground">· {{ sinCuenta }} sin cuenta: solo hacen falta si el Excel los trae</span>
+        </h2>
+        <Button size="sm" variant="ghost" @click="verConceptos = !verConceptos">{{ verConceptos ? 'Cerrar' : 'Abrir' }}</Button>
+      </div>
+      <div v-if="verConceptos && tabla" class="mt-3 grid gap-4 text-xs">
+        <p class="max-w-3xl text-muted-foreground">
+          A qué cuenta va cada concepto. En los pagos, «salarial» quiere decir que entra en la base de las provisiones
+          (prima, cesantías, intereses y vacaciones), y «base de seguridad social», en la de pensión, caja y ARL.
+          Lo que el Excel traiga y no esté aquí se puede matricular abajo.
+        </p>
+
+        <div class="overflow-x-auto">
+          <table class="w-full min-w-[640px]">
+            <thead><tr class="text-left text-[10px] uppercase text-muted-foreground">
+              <th class="py-1 pr-2 font-normal">Pagos al empleado</th><th class="py-1 pr-2 font-normal">Cuenta</th>
+              <th class="py-1 pr-2 text-center font-normal">Salarial</th><th class="py-1 pr-2 text-center font-normal">Base seguridad social</th><th />
+            </tr></thead>
+            <tbody>
+              <tr v-for="f in tabla.devengos" :key="f.clave" class="border-t border-border/50">
+                <td class="py-1 pr-2">{{ f.nombre }}<span v-if="f.propio" class="ml-1 text-muted-foreground">· columna «{{ f.columna }}»</span></td>
+                <td class="py-1 pr-2"><Input v-model="f.cuenta" class="h-7 w-28 font-mono text-xs" /></td>
+                <td class="py-1 pr-2 text-center"><input v-model="f.salarial" type="checkbox"></td>
+                <td class="py-1 pr-2 text-center"><input v-model="f.base_ss" type="checkbox"></td>
+                <td class="py-1 text-right">
+                  <Button v-if="f.propio" variant="ghost" size="icon-sm" title="Quitar este concepto" @click="borrarConcepto(f.clave)"><Trash2 class="size-3.5" /></Button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full min-w-[480px]">
+            <thead><tr class="text-left text-[10px] uppercase text-muted-foreground">
+              <th class="py-1 pr-2 font-normal">Descuentos al empleado</th><th class="py-1 pr-2 font-normal">Cuenta (con el NIT del empleado)</th><th />
+            </tr></thead>
+            <tbody>
+              <tr v-for="f in tabla.deducciones" :key="f.clave" class="border-t border-border/50">
+                <td class="py-1 pr-2">{{ f.nombre }}<span v-if="f.propio" class="ml-1 text-muted-foreground">· columna «{{ f.columna }}»</span></td>
+                <td class="py-1 pr-2"><Input v-model="f.cuenta" class="h-7 w-28 font-mono text-xs" /></td>
+                <td class="py-1 text-right">
+                  <Button v-if="f.propio" variant="ghost" size="icon-sm" title="Quitar este concepto" @click="borrarConcepto(f.clave)"><Trash2 class="size-3.5" /></Button>
+                </td>
+              </tr>
+              <tr class="border-t border-border/50 text-muted-foreground">
+                <td class="py-1 pr-2" colspan="3">Salud, pensión y fondo de solidaridad van a la entidad de cada empleado (en Empleados).</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="grid gap-4 lg:grid-cols-2">
+          <table class="w-full">
+            <thead><tr class="text-left text-[10px] uppercase text-muted-foreground">
+              <th class="py-1 pr-2 font-normal">Provisiones</th><th class="py-1 pr-2 font-normal">Gasto</th><th class="py-1 pr-2 font-normal">Pasivo</th><th class="py-1 pr-2 font-normal">Tarifa %</th>
+            </tr></thead>
+            <tbody>
+              <tr v-for="f in tabla.provisiones" :key="f.clave" class="border-t border-border/50">
+                <td class="py-1 pr-2">{{ f.nombre }}</td>
+                <td class="py-1 pr-2"><Input v-model="f.cuenta_gasto" class="h-7 w-24 font-mono text-xs" :class="f.cuenta_gasto ? '' : 'border-status-warning'" /></td>
+                <td class="py-1 pr-2"><Input v-model="f.cuenta_pasivo" class="h-7 w-24 font-mono text-xs" :class="f.cuenta_pasivo ? '' : 'border-status-warning'" /></td>
+                <td class="py-1 pr-2"><Input v-model="f.tarifa" class="h-7 w-20 font-mono text-xs" /></td>
+              </tr>
+            </tbody>
+          </table>
+          <table class="w-full">
+            <thead><tr class="text-left text-[10px] uppercase text-muted-foreground">
+              <th class="py-1 pr-2 font-normal">Aportes del empleador</th><th class="py-1 pr-2 font-normal">Gasto</th><th class="py-1 pr-2 font-normal">Tarifa %</th>
+            </tr></thead>
+            <tbody>
+              <tr v-for="f in tabla.aportes" :key="f.clave" class="border-t border-border/50">
+                <td class="py-1 pr-2">{{ f.nombre }}</td>
+                <td class="py-1 pr-2"><Input v-model="f.cuenta_gasto" class="h-7 w-24 font-mono text-xs" :class="f.cuenta_gasto ? '' : 'border-status-warning'" /></td>
+                <td class="py-1 pr-2">
+                  <Input v-if="f.clave !== 'arl'" v-model="f.tarifa" class="h-7 w-20 font-mono text-xs" />
+                  <span v-else class="text-muted-foreground">según la clase de riesgo</span>
+                </td>
+              </tr>
+              <tr class="border-t border-border/50">
+                <td class="py-1 pr-2">Neto a pagar</td>
+                <td class="py-1 pr-2" colspan="2"><Input v-model="tabla.neto.cuenta" class="h-7 w-24 font-mono text-xs" :class="tabla.neto.cuenta ? '' : 'border-status-warning'" /></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="flex flex-wrap items-end gap-2 rounded-md border border-border bg-muted/30 p-3">
+          <div class="grid gap-1"><Label class="text-xs">Concepto nuevo</Label><Input v-model="nuevo.nombre" class="h-8 w-48 text-xs" placeholder="Bonificación" /></div>
+          <div class="grid gap-1">
+            <Label class="text-xs">Es un</Label>
+            <select v-model="nuevo.tipo" class="h-8 rounded-md border border-border bg-background px-2 text-xs">
+              <option value="devengo">Pago</option><option value="deduccion">Descuento</option>
+            </select>
+          </div>
+          <div class="grid gap-1"><Label class="text-xs">Columna del Excel</Label><Input v-model="nuevo.columna" class="h-8 w-44 text-xs" :placeholder="nuevo.nombre || 'como dice el Excel'" /></div>
+          <div class="grid gap-1"><Label class="text-xs">Cuenta</Label><Input v-model="nuevo.cuenta" class="h-8 w-28 font-mono text-xs" /></div>
+          <template v-if="nuevo.tipo === 'devengo'">
+            <label class="flex h-8 items-center gap-1"><input v-model="nuevo.salarial" type="checkbox"> Salarial</label>
+            <label class="flex h-8 items-center gap-1"><input v-model="nuevo.base_ss" type="checkbox"> Base seguridad social</label>
+          </template>
+          <Button size="sm" variant="outline" :disabled="!nuevo.nombre.trim() || guardandoConceptos" @click="agregarConcepto"><Plus class="size-3.5" /> Agregar</Button>
+        </div>
+
+        <div><Button size="sm" :disabled="guardandoConceptos" @click="guardarConceptos()">{{ guardandoConceptos ? 'Guardando…' : 'Guardar los conceptos' }}</Button></div>
       </div>
     </section>
 
@@ -285,8 +455,19 @@ onMounted(cargar)
             <Input v-model="empresaNom.arl.cuenta" class="h-8 w-28 font-mono" />
           </div>
           <div class="grid gap-1">
-            <Label class="text-xs">Salario mínimo {{ anio }}</Label>
+            <Label class="text-xs">Clase de riesgo por defecto</Label>
+            <select v-model="empresaNom.riesgo" class="h-8 rounded-md border border-border bg-background px-2 text-xs">
+              <option value="">— ninguna —</option>
+              <option v-for="(t, c) in riesgos" :key="c" :value="c">{{ c }} · {{ tarifaTxt(t) }} %</option>
+            </select>
+          </div>
+          <div class="grid gap-1">
+            <Label class="text-xs">Salario mínimo {{ anio }} <span class="text-muted-foreground">(todas las empresas)</span></Label>
             <Input v-model="empresaNom.smmlv" class="h-8 w-36 font-mono" inputmode="numeric" />
+          </div>
+          <div class="grid gap-1">
+            <Label class="text-xs">Auxilio de transporte {{ anio }} <span class="text-muted-foreground">(todas)</span></Label>
+            <Input v-model="empresaNom.aux" class="h-8 w-32 font-mono" inputmode="numeric" />
           </div>
           <Button size="sm" @click="guardarEmpresaNom">Guardar</Button>
           <span class="text-[11px] text-muted-foreground">
