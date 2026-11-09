@@ -140,7 +140,7 @@ async function ensayarAprendizaje() {
   ocupado.value = true
   try {
     vistaAprendido.value = await rpc<Aprendido>('nomina_aprender', {
-      db_path: dbPath.value, nomina_path: aprender.nomina, carga_path: aprender.carga, dry_run: true })
+      db_path: dbPath.value, nomina_path: aprender.nomina, carga_path: aprender.carga, periodo: periodo.value, dry_run: true })
   } catch (e) {
     toast.error('No se pudo aprender la plantilla', humanError(e))
   } finally {
@@ -152,7 +152,7 @@ async function aplicarAprendizaje() {
   ocupado.value = true
   try {
     const r = await rpc<Aprendido>('nomina_aprender', {
-      db_path: dbPath.value, nomina_path: aprender.nomina, carga_path: aprender.carga, dry_run: false })
+      db_path: dbPath.value, nomina_path: aprender.nomina, carga_path: aprender.carga, periodo: periodo.value, dry_run: false })
     vistaAprendido.value = null
     toast.success('Plantilla de nómina guardada', `${r.aprendido} cuentas y entidades aprendidas`)
     await cargar()
