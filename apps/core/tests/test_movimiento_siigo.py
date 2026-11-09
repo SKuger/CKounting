@@ -57,7 +57,7 @@ def _lineas_992(salario_cta: str):
     out = []
     for e in EMPLEADOS:
         _id, _n, sal, aux, salud, pen, fsp, ret, otras, rod, otros = e
-        ces = _p(Decimal(sal) * Decimal("0.08333"))
+        ces = _p(Decimal(sal) / 12)
         out.append((salario_cta, _id, sal, 0))
         if aux:
             out.append(("51052701", _id, _al_peso(aux), 0))
@@ -66,7 +66,7 @@ def _lineas_992(salario_cta: str):
         if otros:
             out.append(("51054802", _id, otros, 0))
         for d, c, v in (("51053001", "25101001", ces), ("51053301", "25101002", _p(ces * Decimal("0.12"))),
-                        ("51053601", "25101004", ces), ("51053901", "25101003", _p(Decimal(sal) * Decimal("0.04167")))):
+                        ("51053601", "25101004", ces), ("51053901", "25101003", _p(Decimal(sal) / 24))):
             out += [(d, _id, v, 0), (c, _id, 0, v)]
         er, caja, arl = (_p(Decimal(sal) * Decimal(t)) for t in ("0.12", "0.04", "0.00522"))
         out += [("51057001", _id, er, 0), ("51057201", _id, caja, 0), ("51056801", _id, arl, 0),
@@ -119,7 +119,7 @@ def test_la_nomina_se_aprende_del_992_del_mismo_mes(conn, tmp_path):
             cuentas["nom:credito:prima"], cuentas["nom:credito:vacaciones"]) == (
         "25101001", "25101002", "25101004", "25101003"), "el pasivo al 8,333 % sí se encuentra"
     assert (cuentas["nom:tarifa:cesantias"], cuentas["nom:tarifa:prima"],
-            cuentas["nom:tarifa:vacaciones"], cuentas["nom:tarifa:intereses"]) == ("8.333", "8.333", "4.167", "12")
+            cuentas["nom:tarifa:vacaciones"], cuentas["nom:tarifa:intereses"]) == ("8.3333", "8.3333", "4.1667", "12")
     assert r["faltan"] == []
 
 
