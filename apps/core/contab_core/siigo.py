@@ -648,18 +648,61 @@ _NO_GASTO = ("2408", "2365", "2367", "2368", "2205", "1355", "1305", "2335")
 
 
 def _filas_siigo(ruta: str | Path) -> list[dict[str, Any]]:
-    """Todas las filas de todas las hojas que tengan la cabecera del modelo."""
+    """Todas las filas de todas las hojas que tengan la cabecera del modelo.
+
+    Lee dos formas: el **modelo de importación** de Siigo (la cabecera en la
+    primera fila, con «Tipo de comprobante» y «Consecutivo comprobante»), y el
+    reporte **«Movimiento por cuenta contable»** (títulos arriba, la cabecera
+    unas filas más abajo, y el comprobante en una sola columna «CV» como
+    `CC-992-15`). El contador mandó el segundo el 2026-11-09: es lo que Siigo
+    le deja descargar del año, y sin leerlo Contab no aprendía la nómina de
+    una empresa que sí la tiene.
+    """
     out: list[dict[str, Any]] = []
     for h in leer_hojas(ruta):
-        if not h.filas:
+        for i, cab in enumerate(h.filas[:15]):
+            planos = [_plano(v) for v in cab]
+            if "tipo de comprobante" in planos:
+                nombres = [str(v).strip() if v is not None else "" for v in cab]
+                for r in h.filas[i + 1:]:
+                    if r and r[0] is not None:
+                        out.append({nombres[k]: r[k] for k in range(min(len(nombres), len(r))) if nombres[k]})
+                break
+            if "cv" in planos and "cod. cta" in planos:
+                out.extend(_filas_de_movimiento(planos, h.filas[i + 1:]))
+                break
+    return out
+
+
+# El reporte «Movimiento por cuenta contable» → los nombres del modelo de importación.
+_MOVIMIENTO = {
+    "cod. cta": "Código cuenta contable", "nit": "Identificación tercero",
+    "fecha elaboracion": "Fecha de elaboración", "debito": "Débito", "credito": "Crédito",
+    "valor base": "Base gravable libro compras/ventas", "descripcion": "Descripción",
+    "nombre tercero": "Nombre tercero",
+}
+
+
+def _filas_de_movimiento(cab: list[str], filas: list[list[Any]]) -> list[dict[str, Any]]:
+    cv = cab.index("cv")
+    out = []
+    for r in filas:
+        if len(r) <= cv or r[cv] in (None, ""):
             continue
-        cab = h.filas[0]
-        if "tipo de comprobante" not in [_plano(v) for v in cab]:
+        partes = str(r[cv]).strip().split("-")
+        if len(partes) < 3 or not partes[1].strip().isdigit():
             continue
-        nombres = [str(v).strip() if v is not None else "" for v in cab]
-        for r in h.filas[1:]:
-            if r and r[0] is not None:
-                out.append({nombres[i]: r[i] for i in range(min(len(nombres), len(r))) if nombres[i]})
+        fila: dict[str, Any] = {
+            "Tipo de comprobante": partes[1].strip(),
+            "Consecutivo comprobante": int(partes[-1]) if partes[-1].strip().isdigit() else partes[-1].strip(),
+        }
+        for k, nombre in enumerate(cab):
+            if nombre in _MOVIMIENTO and k < len(r):
+                v = r[k]
+                if nombre == "cod. cta" and v is not None:
+                    v = str(v).strip().replace(".0", "")
+                fila[_MOVIMIENTO[nombre]] = v
+        out.append(fila)
     return out
 
 
@@ -706,6 +749,14 @@ def sembrar_reglas(conn, ruta: str | Path, *, dry_run: bool = False) -> dict[str
         for r in conn.execute("SELECT id, codigo_siigo FROM retencion_concepto WHERE archivado = 0")
         if (r["codigo_siigo"] or "").strip()}
 
+    # El reporte de movimiento no trae «Código impuesto»: se deduce de la cuenta
+    # con el catálogo, cuando la cuenta es de un solo código.
+    codigos_de_cuenta: dict[str, set[str]] = {}
+    for (codigo, _ctx), fila in cat.items():
+        if fila.get("cuenta"):
+            codigos_de_cuenta.setdefault(str(fila["cuenta"]).strip(), set()).add(codigo)
+    codigo_por_cuenta = {c: next(iter(cs)) for c, cs in codigos_de_cuenta.items() if len(cs) == 1}
+
     comprobantes: dict[tuple[str, Any], list[dict[str, Any]]] = {}
     for f in _filas_siigo(ruta):
         tipo = str(f.get("Tipo de comprobante") or "").strip().replace(".0", "")
@@ -730,7 +781,8 @@ def sembrar_reglas(conn, ruta: str | Path, *, dry_run: bool = False) -> dict[str
             c = str(ln.get("Código cuenta contable") or "").strip().replace(".0", "")
             deb = Decimal(str(ln.get("Débito") or 0))
             cre = Decimal(str(ln.get("Crédito") or 0))
-            codigo = _codigo(ln.get("Código impuesto")) if ln.get("Código impuesto") not in (None, "") else ""
+            codigo = (_codigo(ln.get("Código impuesto")) if ln.get("Código impuesto") not in (None, "")
+                      else codigo_por_cuenta.get(c, ""))
             if c.startswith("2408") and codigo:
                 iva_codigo = codigo
             if c[:4] in ("2365", "2367") and codigo:
