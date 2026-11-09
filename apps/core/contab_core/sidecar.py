@@ -1541,7 +1541,8 @@ def _h_nomina_aprender(params: dict) -> dict:
     try:
         return nomina_module.aprender(
             conn, Path(params["nomina_path"]), Path(params["carga_path"]),
-            dry_run=bool(params.get("dry_run", False)))
+            dry_run=bool(params.get("dry_run", False)),
+            periodo=storage_module._norm_periodo(params["periodo"]) if params.get("periodo") else None)
     finally:
         conn.close()
 

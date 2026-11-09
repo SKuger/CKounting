@@ -226,6 +226,26 @@ class LineaNomina:
     credito: Decimal = CERO
 
 
+def _ajustar_redondeo(lineas: list[LineaNomina], diferencia: Decimal) -> Decimal:
+    """Cuadra la quincena moviendo un peso en el neto de algunos empleados.
+
+    Cada valor va al peso, y con el medio peso del auxilio de transporte la
+    quincena queda descuadrada por uno o dos pesos. Así no se puede aprobar, y
+    sin aprobar no va en el archivo de Siigo (2026-11-09, ALAGUNA). En Siigo el
+    contador lo absorbe en el neto. Solo hasta un peso por empleado: más que eso
+    no es redondeo y se deja descuadrada, con su aviso.
+    """
+    netos = sorted((x for x in lineas if x.descripcion == ETIQUETA["neto"] and x.credito),
+                   key=lambda x: x.credito, reverse=True)
+    pesos = int(abs(diferencia))
+    if diferencia != diferencia.to_integral() or not pesos or pesos > len(netos):
+        return CERO
+    paso = Decimal(1) if diferencia > 0 else Decimal(-1)
+    for x in netos[:pesos]:
+        x.credito += paso
+    return paso * pesos
+
+
 def _cuenta_empleado(p: dict[str, str], lado: str, concepto: str, e: Empleado) -> str | None:
     return (p.get(f"nom:empleado:{e.id}:{concepto}") or p.get(f"nom:{lado}:{concepto}") or "").strip() or None
 
@@ -401,7 +421,7 @@ def guardar_empresa(conn, data: dict[str, Any]) -> dict[str, Any]:
 # ───────────────────── aprender la plantilla del 992 que ya existe ─────────────
 
 def aprender(conn, ruta_nomina: str | Path, ruta_carga: str | Path, *,
-             dry_run: bool = False) -> dict[str, Any]:
+             dry_run: bool = False, periodo: str | None = None) -> dict[str, Any]:
     """Deduce la plantilla comparando el Excel de nómina con el 992 de Siigo.
 
     Cada quincena se empareja con el 992 cuyo «neto a pagar» suma lo mismo.
@@ -409,6 +429,10 @@ def aprender(conn, ruta_nomina: str | Path, ruta_carga: str | Path, *,
     concepto. Por aporte: la línea de la entidad con el valor de ese empleado
     dice la cuenta y el NIT de su EPS, su fondo, su caja y su ARL. Las tarifas
     de provisiones y aportes también se leen de ahí.
+
+    Con `periodo`, cada quincena se busca primero entre los 992 de ese mes: con
+    el movimiento del año entero, el neto de septiembre coincidía con el de
+    febrero por dos pesos y se aprendía del comprobante equivocado (2026-11-09).
     """
     from . import siigo as siigo_module
 
@@ -429,9 +453,13 @@ def aprender(conn, ruta_nomina: str | Path, ruta_carga: str | Path, *,
     aprendido: dict[str, str] = {}
     votos_entidad: dict[str, dict[str, int]] = {}
     emparejadas: list[str] = []
+    del_mes = {k: v for k, v in comprobantes.items()
+               if periodo and str(v[0].get("Fecha de elaboración") or "")[:7] == periodo}
+    candidatos = del_mes or comprobantes
+    tarifas_vistas: dict[str, set[Decimal]] = {}
     for q in nomina.values():
         neto = sum((e.v("neto") for e in q.empleados), CERO)
-        mejor = min(comprobantes.items(), key=lambda kv: abs(
+        mejor = min(candidatos.items(), key=lambda kv: abs(
             sum((_d(f.get("Crédito")) for f in kv[1] if str(f.get("Código cuenta contable") or "").startswith("2505")), CERO) - neto))
         lineas = mejor[1]
         emparejadas.append(f"{q.nombre} ↔ {tipo_nomina}-{_nit(mejor[0])}")
@@ -466,6 +494,7 @@ def aprender(conn, ruta_nomina: str | Path, ruta_carga: str | Path, *,
                 # pesan lo mismo (8,33 %): en su PUC la subcuenta de cesantías va
                 # primero, en el gasto (5105 30 < 5105 36) y en el pasivo.
                 pares: dict[str, list[str]] = {}
+                valores: dict[str, Decimal] = {}
                 for f in propias:
                     if not _d(f.get("Débito")):
                         continue
@@ -478,28 +507,36 @@ def aprender(conn, ruta_nomina: str | Path, ruta_carga: str | Path, *,
                             pares.setdefault(k, [])
                             if c not in pares[k]:
                                 pares[k].append(c)
+                            valores.setdefault(k, _d(f["Débito"]))
+                            if k in ("cesantias", "vacaciones"):
+                                # La tarifa que de verdad usa la empresa: 8,333 % y
+                                # no 8,33 %. Con la de la ley redondeada, el pasivo
+                                # no se encontraba y la nómina no cuadraba con Siigo.
+                                tarifas_vistas.setdefault(k, set()).add(pct.quantize(Decimal("0.001")))
                             break
+                if "cesantias" in valores and "intereses" in valores:
+                    tarifas_vistas.setdefault("intereses", set()).add(
+                        (valores["intereses"] / valores["cesantias"] * 100).quantize(Decimal("0.01")))
                 ces_prima = sorted(pares.pop("cesantias", []))
                 for k, c in zip(("cesantias", "prima"), ces_prima, strict=False):
                     aprendido.setdefault(f"nom:debito:{k}", c)
                 for k, cs in pares.items():
                     aprendido.setdefault(f"nom:debito:{k}", cs[0])
 
-                ces = _peso(base * Decimal("0.0833"))
-                pasivos_ces = sorted({_nit(f["Código cuenta contable"]) for f in propias
-                                      if str(f.get("Código cuenta contable") or "").startswith("2510")
-                                      and abs(_d(f.get("Crédito")) - ces) <= 1})
-                for k, c in zip(("cesantias", "prima"), pasivos_ces, strict=False):
-                    aprendido.setdefault(f"nom:credito:{k}", c)
-                for f in propias:
-                    v = _d(f.get("Crédito"))
-                    c = _nit(f.get("Código cuenta contable") or "")
-                    if not v or not c.startswith("2510"):
-                        continue
-                    for k, esperado in (("intereses", _peso(ces * Decimal("0.12"))),
-                                        ("vacaciones", _peso(base * Decimal("0.0417")))):
-                        if abs(v - esperado) <= 1:
-                            aprendido.setdefault(f"nom:credito:{k}", c)
+                # El pasivo de cada provisión es el crédito a 2510 por el mismo
+                # valor que su gasto, con la cédula del empleado.
+                def pasivos(valor: Decimal, propias=propias) -> list[str]:
+                    return sorted({_nit(f["Código cuenta contable"]) for f in propias
+                                   if str(f.get("Código cuenta contable") or "").startswith("2510")
+                                   and abs(_d(f.get("Crédito")) - valor) <= 1})
+                if "cesantias" in valores:
+                    for k, c in zip(("cesantias", "prima"), pasivos(valores["cesantias"]), strict=False):
+                        aprendido.setdefault(f"nom:credito:{k}", c)
+                for k in ("intereses", "vacaciones"):
+                    if k in valores:
+                        cs = pasivos(valores[k])
+                        if cs:
+                            aprendido.setdefault(f"nom:credito:{k}", cs[0])
 
             # Entidades: líneas cuyo tercero no es empleado, con el valor de él.
             ajenas = [f for f in lineas if _nit(f.get("Identificación tercero") or "") not in ids
@@ -526,6 +563,14 @@ def aprender(conn, ruta_nomina: str | Path, ruta_carga: str | Path, *,
 
     for aporte, votos in votos_entidad.items():
         aprendido[f"nom:entidad:*:{aporte}"] = max(votos.items(), key=lambda kv: kv[1])[0]
+    # Solo si todos los empleados dan la misma: una sola que no cuadre es un
+    # caso suyo, no la tarifa de la empresa.
+    for k, vistas in tarifas_vistas.items():
+        if len(vistas) == 1:
+            t = format(next(iter(vistas)).normalize(), "f")
+            aprendido[f"nom:tarifa:{k}"] = t
+            if k == "cesantias":
+                aprendido["nom:tarifa:prima"] = t
 
     # Lo que la plantilla todavía no sabe, para decirlo con nombre.
     p = plantilla({**siigo_module.config(conn), **aprendido})
@@ -576,6 +621,12 @@ def generar(conn, periodo: str, ruta_nomina: str | Path) -> dict[str, Any]:
         debito = sum((x.debito for x in lineas), CERO)
         credito = sum((x.credito for x in lineas), CERO)
         avisos = [f"Falta {f}" for f in faltan]
+        ajuste = _ajustar_redondeo(lineas, debito - credito)
+        if ajuste:
+            credito += ajuste
+            avisos.append(
+                f"Se ajustó el neto en {ajuste} pesos por el redondeo al peso (el medio peso del "
+                "auxilio de transporte), como se hace en Siigo.")
         smmlv = _d(p.get(f"nom:smmlv:{periodo[:4]}")) or None
         if smmlv is None:
             avisos.append(f"Falta el salario mínimo de {periodo[:4]} (en Empleados): sin él no se "
