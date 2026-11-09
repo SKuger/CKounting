@@ -1668,3 +1668,31 @@ pueda seleccionar la Retención de IVA»):
 
 **Por qué**: el contador decide la retención mirando la factura; si la elige y
 no aparece la línea, la pantalla le está diciendo que no le hizo caso.
+
+## D-144 — El movimiento de Siigo como fuente, y la nómina que cuadra
+
+**Decisión** (2026-11-09, armando septiembre de ALAGUNA de punta a punta):
+
+- **Contab lee el reporte «Movimiento por cuenta contable» de Siigo**, además del
+  modelo de importación: títulos arriba, la cabecera unas filas más abajo y el
+  comprobante en una sola columna `CV` (`CC-992-15`). Es lo que el contador
+  descarga del año. Sirve para aprender la nómina y para sembrar reglas; como no
+  trae «Código impuesto», el código se deduce de la cuenta con el catálogo
+  cuando la cuenta es de un solo código.
+- **La quincena se empareja con el 992 de su mismo mes.** Con el movimiento del
+  año, el neto de septiembre coincidía con el de febrero por dos pesos.
+- **El pasivo de cada provisión es el crédito a 2510 por el valor de su
+  gasto**, y la tarifa de la empresa se lee del 992 cuando todos los empleados
+  dan la misma. ALAGUNA provisiona al 8,333 % y al 4,167 %; el 8,33 % fijo no
+  encontraba el pasivo y no cuadraba con Siigo.
+- **Hasta un peso de descuadre por empleado se absorbe en el neto**, con aviso,
+  como lo hace el contador en Siigo. Más que eso no es redondeo y se deja
+  descuadrada.
+
+**Por qué**: la nómina de ALAGUNA no llegaba al archivo de Siigo por una cadena
+de cuatro cosas: sin leer su movimiento no había plantilla; sin plantilla no se
+armaba; armada, no cuadraba por dos pesos; y descuadrada no se puede aprobar.
+
+**Pendiente con el contador**: la cuenta de «otras deducciones» (en septiembre
+fue a 13301502 con otro tercero); la base de los aportes, que en Siigo sale
+6–12 % mayor que la de Contab; y el reparto entre rodamiento y otros pagos.
