@@ -58,8 +58,14 @@ DEDUCCIONES = {
     "retencion en la fuente": "retencion", "cartera": "cartera", "prestamos": "prestamos",
     "otras deducciones": "otras_deducciones",
 }
-# Lo que entra en la base de las provisiones y los aportes: lo salarial.
+# Lo que entra en la base de las provisiones y los aportes: lo salarial. Es lo
+# de partida; cada empresa lo cambia en su tabla de conceptos (D-145).
 SALARIALES = ("salario", "vacaciones_disfrutadas", "comisiones", "recargo_nocturno", "extras")
+DEVENGOS_CLAVES = ("salario", "vacaciones_disfrutadas", "comisiones", "incapacidad", "recargo_nocturno",
+                   "extras", "aux_transporte", "aux_datos", "rodamiento", "otros_pagos")
+# Las deducciones que van con el NIT del empleado; salud, pensión y fondo de
+# solidaridad van a la entidad (D-142).
+DEDUCCIONES_DEL_EMPLEADO = ("retencion", "cartera", "prestamos", "otras_deducciones")
 
 # Las que se calculan, con la tarifa que trae el archivo de septiembre de REAL.
 # Son ley y quedan en la plantilla, editables: no se fijan en el código.
@@ -145,8 +151,14 @@ class Quincena:
     columnas_sin_leer: list[str] = field(default_factory=list)
 
 
-def leer_nomina(ruta: str | Path) -> dict[str, Quincena]:
-    """Las hojas «1Q» y «2Q» del Excel de nómina, por empleado y por concepto."""
+def leer_nomina(ruta: str | Path, propios: dict[str, str] | None = None) -> dict[str, Quincena]:
+    """Las hojas «1Q» y «2Q» del Excel de nómina, por empleado y por concepto.
+
+    `propios` es {texto de la columna: clave} de los conceptos que la empresa
+    matriculó en su tabla (una bonificación, por ejemplo): esa columna se lee
+    como un concepto más en vez de quedar «sin leer».
+    """
+    propios = {_plano(k): v for k, v in (propios or {}).items()}
     out: dict[str, Quincena] = {}
     for h in leer_hojas(ruta):
         nombre = h.titulo.strip().upper()
@@ -179,6 +191,8 @@ def leer_nomina(ruta: str | Path) -> dict[str, Quincena]:
                 columnas[c] = DEDUCCIONES[texto]
             elif texto in DEVENGOS:
                 columnas[c] = DEVENGOS[texto]
+            elif texto in propios:
+                columnas[c] = propios[texto]
             elif texto and not texto.startswith(("total", "dias", "horas", "salario basico")) and texto != "aux tte":
                 sin_leer.append(texto)
         empleados = []
@@ -215,6 +229,67 @@ def plantilla(cfg: dict[str, str]) -> dict[str, str]:
     for k, v in TARIFAS_INICIALES.items():
         p.setdefault(f"nom:tarifa:{k}", v)
     return p
+
+
+def propios(p: dict[str, str]) -> dict[str, dict[str, str]]:
+    """Los conceptos que la empresa matriculó: {clave: {nombre, tipo, columna}}."""
+    import json
+    out = {}
+    for k, v in p.items():
+        if k.startswith("nom:propio:") and v:
+            try:
+                d = json.loads(v)
+            except ValueError:
+                continue
+            out[k.split(":", 2)[2]] = {"nombre": str(d.get("nombre") or ""), "tipo": str(d.get("tipo") or "devengo"),
+                                        "columna": str(d.get("columna") or "")}
+    return out
+
+
+def columnas_propias(p: dict[str, str]) -> dict[str, str]:
+    return {d["columna"]: k for k, d in propios(p).items() if d["columna"]}
+
+
+def es(p: dict[str, str], marca: str, concepto: str) -> bool:
+    """¿El concepto es salarial (`salarial`) o base de seguridad social (`base_ss`)?
+    Sin marcar, lo de siempre: solo lo salarial."""
+    v = (p.get(f"nom:{marca}:{concepto}") or "").strip()
+    return concepto in SALARIALES if v == "" else v == "1"
+
+
+def devengos_de(p: dict[str, str]) -> list[str]:
+    return [*DEVENGOS_CLAVES, *(k for k, d in propios(p).items() if d["tipo"] == "devengo")]
+
+
+def deducciones_de(p: dict[str, str]) -> list[str]:
+    return [*DEDUCCIONES_DEL_EMPLEADO, *(k for k, d in propios(p).items() if d["tipo"] == "deduccion")]
+
+
+def base_de(e: Empleado, p: dict[str, str], marca: str) -> Decimal:
+    return sum((e.v(k) for k in devengos_de(p) if es(p, marca, k)), CERO)
+
+
+def etiqueta(p: dict[str, str], concepto: str) -> str:
+    return ETIQUETA.get(concepto) or propios(p).get(concepto, {}).get("nombre") or concepto
+
+
+def riesgo_de(p: dict[str, str], e: Empleado) -> str:
+    return ((p.get(f"nom:riesgo:{e.id}") or "").strip() or (p.get("nom:riesgo:*") or "").strip()).upper()
+
+
+def parametros(anio: str, p: dict[str, str] | None = None) -> dict[str, Decimal | None]:
+    """El salario mínimo y el auxilio de transporte del año. Son los mismos para
+    todas las empresas (el contador, 2026-11-09), así que viven en los ajustes
+    del programa; el de la empresa, de antes, queda como respaldo."""
+    from . import program_db
+    try:
+        ajustes = program_db.get_settings()
+    except Exception:
+        ajustes = {}
+    p = p or {}
+    smmlv = _d(ajustes.get(f"nomina:smmlv:{anio}")) or _d(p.get(f"nom:smmlv:{anio}"))
+    aux = _d(ajustes.get(f"nomina:aux_transporte:{anio}"))
+    return {"smmlv": smmlv or None, "aux_transporte": aux or None}
 
 
 @dataclass
@@ -267,12 +342,14 @@ def armar(quincena: Quincena, p: dict[str, str]) -> tuple[list[LineaNomina], lis
             return
         if not cuenta and falta_clave:
             faltan.add(falta_clave)
-        lineas.append(LineaNomina(cuenta, tercero, ETIQUETA.get(concepto, concepto), debito, credito))
+        lineas.append(LineaNomina(cuenta, tercero, etiqueta(p, concepto), debito, credito))
 
     for e in quincena.empleados:
-        base = sum((e.v(k) for k in SALARIALES), CERO)
-        for k in ("salario", "vacaciones_disfrutadas", "comisiones", "incapacidad", "recargo_nocturno",
-                  "extras", "aux_transporte", "aux_datos", "rodamiento", "otros_pagos"):
+        # Dos bases (D-145): las provisiones van sobre lo salarial; los aportes,
+        # sobre lo que es base de seguridad social. La empresa marca cada concepto.
+        base = base_de(e, p, "salarial")
+        base_ss = base_de(e, p, "base_ss")
+        for k in devengos_de(p):
             linea(_cuenta_empleado(p, "debito", k, e), e.id, k, debito=e.v(k), falta_clave=f"nom:debito:{k}")
 
         ces = _peso(base * tarifa["cesantias"])
@@ -282,10 +359,10 @@ def armar(quincena: Quincena, p: dict[str, str]) -> tuple[list[LineaNomina], lis
             linea(_cuenta_empleado(p, "debito", k, e), e.id, k, debito=v, falta_clave=f"nom:debito:{k}")
             linea(_cuenta_empleado(p, "credito", k, e), e.id, k, credito=v, falta_clave=f"nom:credito:{k}")
 
-        aporte = {k: _peso(base * tarifa[k]) for k in APORTES}
-        riesgo = (p.get(f"nom:riesgo:{e.id}") or "").strip().upper()
+        aporte = {k: _peso(base_ss * tarifa[k]) for k in APORTES}
+        riesgo = riesgo_de(p, e)
         if riesgo in RIESGOS_ARL:
-            aporte["arl"] = _peso(base * RIESGOS_ARL[riesgo] / 100)
+            aporte["arl"] = _peso(base_ss * RIESGOS_ARL[riesgo] / 100)
         for k, v in aporte.items():
             linea(_cuenta_empleado(p, "debito", k, e), e.id, k, debito=v, falta_clave=f"nom:debito:{k}")
 
@@ -303,7 +380,7 @@ def armar(quincena: Quincena, p: dict[str, str]) -> tuple[list[LineaNomina], lis
             if cuenta and not nit and any(v for _, v in partes):
                 faltan.add(f"nom:entidad:{e.id}:{nombre}")
 
-        for k in ("retencion", "cartera", "prestamos", "otras_deducciones"):
+        for k in deducciones_de(p):
             linea(_cuenta_empleado(p, "credito", k, e), e.id, k, credito=e.v(k), falta_clave=f"nom:credito:{k}")
         linea(_cuenta_empleado(p, "credito", "neto", e), e.id, "neto", credito=e.v("neto"),
               falta_clave="nom:credito:neto")
@@ -311,7 +388,8 @@ def armar(quincena: Quincena, p: dict[str, str]) -> tuple[list[LineaNomina], lis
     return lineas, sorted(faltan)
 
 
-def revisar(quincena: Quincena, p: dict[str, str], smmlv: Decimal | None) -> list[str]:
+def revisar(quincena: Quincena, p: dict[str, str], smmlv: Decimal | None,
+            aux_transporte: Decimal | None = None) -> list[str]:
     """Lo que el Excel trae distinto de la ley, para que él lo mire (D-142).
 
     No cambia ningún valor: el comprobante lleva lo que se liquidó y se pagó.
@@ -320,7 +398,7 @@ def revisar(quincena: Quincena, p: dict[str, str], smmlv: Decimal | None) -> lis
     """
     avisos: list[str] = []
     for e in quincena.empleados:
-        base = sum((e.v(k) for k in SALARIALES), CERO)
+        base = base_de(e, p, "base_ss")
         if not base:
             continue
         quien = e.nombre or e.id
@@ -335,7 +413,11 @@ def revisar(quincena: Quincena, p: dict[str, str], smmlv: Decimal | None) -> lis
             if base >= smmlv * 5:
                 avisos.append(f"{quien} gana 10 o más salarios mínimos: el empleador no está exonerado "
                               "de salud, SENA e ICBF. Contab todavía no los causa.")
-        if not (p.get(f"nom:riesgo:{e.id}") or "").strip():
+        # Más que el auxilio de un mes no puede ser: a quien se le paga
+        # mensualizado le llega entero en una quincena, y eso está bien.
+        if aux_transporte and e.v("aux_transporte") > aux_transporte + 1:
+            avisos.append(f"{quien}: el auxilio de transporte del Excel es mayor que el de un mes completo.")
+        if not riesgo_de(p, e):
             avisos.append(f"{quien}: falta la clase de riesgo de la ARL; se usó la tarifa general.")
     return avisos
 
@@ -355,7 +437,7 @@ def empleados(conn) -> dict[str, Any]:
     ids = set()
     for k in p:
         partes = k.split(":")
-        if (partes[1] in ("nombre", "riesgo") and len(partes) == 3) or (
+        if (partes[1] in ("nombre", "riesgo") and len(partes) == 3 and partes[2] != "*") or (
                 partes[1] == "entidad" and partes[2] != "*"):
             ids.add(partes[2])
     lista = []
@@ -371,7 +453,24 @@ def empleados(conn) -> dict[str, Any]:
         "por_defecto": {ent: _entidad_dict(p.get(f"nom:entidad:*:{ent}")) for ent in ENTIDADES_DEL_EMPLEADO},
         "smmlv": {k.split(":")[2]: v for k, v in p.items() if k.startswith("nom:smmlv:")},
         "riesgos": {k: str(v) for k, v in RIESGOS_ARL.items()},
+        "riesgo_por_defecto": (p.get("nom:riesgo:*") or "").strip().upper(),
+        "parametros": _parametros_guardados(),
     }
+
+
+def _parametros_guardados() -> dict[str, dict[str, str]]:
+    """{año: {smmlv, aux_transporte}} de los ajustes del programa."""
+    from . import program_db
+    try:
+        ajustes = program_db.get_settings()
+    except Exception:
+        return {}
+    out: dict[str, dict[str, str]] = {}
+    for k, v in ajustes.items():
+        partes = str(k).split(":")
+        if len(partes) == 3 and partes[0] == "nomina" and partes[1] in ("smmlv", "aux_transporte"):
+            out.setdefault(partes[2], {})[partes[1]] = str(v or "")
+    return out
 
 
 def _texto_entidad(v: dict[str, Any] | None) -> str:
@@ -407,15 +506,135 @@ def guardar_empresa(conn, data: dict[str, Any]) -> dict[str, Any]:
         for k in [k for k in siigo_module.config(conn) if k.startswith("nom:entidad:") and k.endswith(":arl")
                   and not k.startswith("nom:entidad:*:")]:
             valores[k] = ""
-    for anio, v in (data.get("smmlv") or {}).items():
-        if not str(anio).isdigit() or len(str(anio)) != 4:
-            raise ValueError(f"«{anio}» no es un año.")
-        texto = str(v or "").replace(".", "").replace(",", "").strip()
-        if texto and not texto.isdigit():
-            raise ValueError("El salario mínimo va en pesos, sin decimales.")
-        valores[f"nom:smmlv:{anio}"] = texto
+    if "riesgo_por_defecto" in data:
+        r = str(data.get("riesgo_por_defecto") or "").strip().upper()
+        if r and r not in RIESGOS_ARL:
+            raise ValueError(f"La clase de riesgo es I, II, III, IV o V; llegó «{r}».")
+        valores["nom:riesgo:*"] = r
+    # El salario mínimo y el auxilio de transporte son de todas las empresas: van
+    # a los ajustes del programa, no a esta base (el contador, 2026-11-09).
+    globales: dict[str, str] = {}
+    for clave in ("smmlv", "aux_transporte"):
+        for anio, v in (data.get(clave) or {}).items():
+            if not str(anio).isdigit() or len(str(anio)) != 4:
+                raise ValueError(f"«{anio}» no es un año.")
+            texto = str(v or "").replace(".", "").replace(",", "").replace("$", "").strip()
+            if texto and not texto.isdigit():
+                raise ValueError("El salario mínimo y el auxilio de transporte van en pesos, sin decimales.")
+            globales[f"nomina:{clave}:{anio}"] = texto
+    if globales:
+        from . import program_db
+        program_db.save_settings(globales)
     siigo_module.guardar_config(conn, valores)
     return empleados(conn)
+
+
+# ─────────────────────── la tabla de conceptos de nómina (D-145) ──────────────
+
+def _slug(nombre: str) -> str:
+    import re
+    t = re.sub(r"[^a-z0-9]+", "_", _plano(nombre)).strip("_")
+    return f"p_{t}" if t else ""
+
+
+def conceptos(conn) -> dict[str, Any]:
+    """La tabla de conceptos de la empresa: cuenta, y si es salarial o base de
+    seguridad social. Es lo que pidió el contador: matricular cada pago una vez
+    y que al registrar la nómina ya se sepa cómo tomarlo."""
+    from . import siigo as siigo_module
+
+    p = plantilla(siigo_module.config(conn))
+    mios = propios(p)
+
+    def cuenta(lado: str, k: str) -> str:
+        return (p.get(f"nom:{lado}:{k}") or "").strip()
+
+    return {
+        "devengos": [{"clave": k, "nombre": etiqueta(p, k), "cuenta": cuenta("debito", k),
+                      "salarial": es(p, "salarial", k), "base_ss": es(p, "base_ss", k),
+                      "propio": k in mios, "columna": mios.get(k, {}).get("columna", "")}
+                     for k in devengos_de(p)],
+        "deducciones": [{"clave": k, "nombre": etiqueta(p, k), "cuenta": cuenta("credito", k),
+                         "propio": k in mios, "columna": mios.get(k, {}).get("columna", "")}
+                        for k in deducciones_de(p)],
+        "provisiones": [{"clave": k, "nombre": etiqueta(p, k), "cuenta_gasto": cuenta("debito", k),
+                         "cuenta_pasivo": cuenta("credito", k), "tarifa": p.get(f"nom:tarifa:{k}") or ""}
+                        for k in PROVISIONES],
+        "aportes": [{"clave": k, "nombre": etiqueta(p, k), "cuenta_gasto": cuenta("debito", k),
+                     "tarifa": "" if k == "arl" else (p.get(f"nom:tarifa:{k}") or "")}
+                    for k in APORTES],
+        "neto": {"cuenta": cuenta("credito", "neto")},
+    }
+
+
+def _cuenta_valida(v: Any) -> str:
+    t = str(v or "").strip().replace(".0", "")
+    if t and not t.isdigit():
+        raise ValueError(f"«{t}» no es una cuenta: solo números.")
+    return t
+
+
+def guardar_conceptos(conn, data: dict[str, Any]) -> dict[str, Any]:
+    """Guarda la tabla. `nuevos` matricula conceptos propios y `borrar` los quita."""
+    import json
+
+    from . import siigo as siigo_module
+
+    valores: dict[str, str] = {}
+    for f in data.get("devengos") or []:
+        k = str(f.get("clave") or "")
+        valores[f"nom:debito:{k}"] = _cuenta_valida(f.get("cuenta"))
+        valores[f"nom:salarial:{k}"] = "1" if f.get("salarial") else "0"
+        valores[f"nom:base_ss:{k}"] = "1" if f.get("base_ss") else "0"
+    for f in data.get("deducciones") or []:
+        valores[f"nom:credito:{f.get('clave')}"] = _cuenta_valida(f.get("cuenta"))
+    for f in data.get("provisiones") or []:
+        k = str(f.get("clave") or "")
+        valores[f"nom:debito:{k}"] = _cuenta_valida(f.get("cuenta_gasto"))
+        valores[f"nom:credito:{k}"] = _cuenta_valida(f.get("cuenta_pasivo"))
+        if str(f.get("tarifa") or "").strip():
+            valores[f"nom:tarifa:{k}"] = _tarifa_valida(f["tarifa"])
+    for f in data.get("aportes") or []:
+        k = str(f.get("clave") or "")
+        valores[f"nom:debito:{k}"] = _cuenta_valida(f.get("cuenta_gasto"))
+        if k != "arl" and str(f.get("tarifa") or "").strip():
+            valores[f"nom:tarifa:{k}"] = _tarifa_valida(f["tarifa"])
+    if "neto" in data:
+        valores["nom:credito:neto"] = _cuenta_valida((data.get("neto") or {}).get("cuenta"))
+    for f in data.get("nuevos") or []:
+        nombre = str(f.get("nombre") or "").strip()
+        tipo = str(f.get("tipo") or "devengo")
+        if not nombre:
+            raise ValueError("El concepto nuevo necesita un nombre.")
+        if tipo not in ("devengo", "deduccion"):
+            raise ValueError("Un concepto es un pago (devengo) o un descuento (deducción).")
+        clave = _slug(nombre)
+        valores[f"nom:propio:{clave}"] = json.dumps(
+            {"nombre": nombre, "tipo": tipo, "columna": str(f.get("columna") or nombre).strip()},
+            ensure_ascii=False)
+        lado = "debito" if tipo == "devengo" else "credito"
+        valores[f"nom:{lado}:{clave}"] = _cuenta_valida(f.get("cuenta"))
+        if tipo == "devengo":
+            valores[f"nom:salarial:{clave}"] = "1" if f.get("salarial") else "0"
+            valores[f"nom:base_ss:{clave}"] = "1" if f.get("base_ss") else "0"
+    for clave in data.get("borrar") or []:
+        if not str(clave).startswith("p_"):
+            raise ValueError("Solo se borran los conceptos propios.")
+        for pref in ("propio", "debito", "credito", "salarial", "base_ss"):
+            valores[f"nom:{pref}:{clave}"] = ""
+    siigo_module.guardar_config(conn, valores)
+    return conceptos(conn)
+
+
+def _tarifa_valida(v: Any) -> str:
+    t = str(v).replace("%", "").replace(",", ".").strip()
+    try:
+        d = Decimal(t)
+    except Exception as exc:
+        raise ValueError(f"«{v}» no es una tarifa.") from exc
+    if d < 0 or d > 100:
+        raise ValueError(f"La tarifa {t} % no tiene sentido.")
+    return format(d.normalize(), "f")
 
 
 # ───────────────────── aprender la plantilla del 992 que ya existe ─────────────
@@ -436,7 +655,8 @@ def aprender(conn, ruta_nomina: str | Path, ruta_carga: str | Path, *,
     """
     from . import siigo as siigo_module
 
-    nomina = leer_nomina(ruta_nomina)
+    actual = plantilla(siigo_module.config(conn))
+    nomina = leer_nomina(ruta_nomina, columnas_propias(actual))
     if not nomina:
         raise ValueError("El Excel no tiene hojas «1Q» ni «2Q» con la liquidación por empleado.")
     comprobantes: dict[Any, list[dict[str, Any]]] = {}
@@ -456,7 +676,7 @@ def aprender(conn, ruta_nomina: str | Path, ruta_carga: str | Path, *,
     del_mes = {k: v for k, v in comprobantes.items()
                if periodo and str(v[0].get("Fecha de elaboración") or "")[:7] == periodo}
     candidatos = del_mes or comprobantes
-    tarifas_vistas: dict[str, set[Decimal]] = {}
+    tarifas_vistas: dict[str, list[Decimal]] = {}
     for q in nomina.values():
         neto = sum((e.v("neto") for e in q.empleados), CERO)
         mejor = min(candidatos.items(), key=lambda kv: abs(
@@ -487,7 +707,7 @@ def aprender(conn, ruta_nomina: str | Path, ruta_carga: str | Path, *,
                         aprendido[f"nom:empleado:{e.id}:{k}"] = cuenta
                     propias.remove(f)
 
-            base = sum((e.v(k) for k in SALARIALES), CERO)
+            base = base_de(e, actual, "salarial")
             if base:
                 # Provisiones y aportes del empleador: débito con su cédula, y la
                 # tarifa es la que da ese valor sobre su base. Cesantías y prima
@@ -512,11 +732,11 @@ def aprender(conn, ruta_nomina: str | Path, ruta_carga: str | Path, *,
                                 # La tarifa que de verdad usa la empresa: 8,333 % y
                                 # no 8,33 %. Con la de la ley redondeada, el pasivo
                                 # no se encontraba y la nómina no cuadraba con Siigo.
-                                tarifas_vistas.setdefault(k, set()).add(pct.quantize(Decimal("0.001")))
+                                tarifas_vistas.setdefault(k, []).append(pct)
                             break
                 if "cesantias" in valores and "intereses" in valores:
-                    tarifas_vistas.setdefault("intereses", set()).add(
-                        (valores["intereses"] / valores["cesantias"] * 100).quantize(Decimal("0.01")))
+                    tarifas_vistas.setdefault("intereses", []).append(
+                        valores["intereses"] / valores["cesantias"] * 100)
                 ces_prima = sorted(pares.pop("cesantias", []))
                 for k, c in zip(("cesantias", "prima"), ces_prima, strict=False):
                     aprendido.setdefault(f"nom:debito:{k}", c)
@@ -563,11 +783,14 @@ def aprender(conn, ruta_nomina: str | Path, ruta_carga: str | Path, *,
 
     for aporte, votos in votos_entidad.items():
         aprendido[f"nom:entidad:*:{aporte}"] = max(votos.items(), key=lambda kv: kv[1])[0]
-    # Solo si todos los empleados dan la misma: una sola que no cuadre es un
-    # caso suyo, no la tarifa de la empresa.
+    # Solo si todos los empleados dan la misma (salvo el redondeo al peso): una
+    # que no cuadre es un caso suyo, no la tarifa de la empresa. Con cuatro
+    # decimales: ALAGUNA provisiona 1/12 exacto, y 8,333 % ya se aleja diez
+    # pesos sobre un salario de tres millones.
     for k, vistas in tarifas_vistas.items():
-        if len(vistas) == 1:
-            t = format(next(iter(vistas)).normalize(), "f")
+        if vistas and max(vistas) - min(vistas) <= Decimal("0.002"):
+            media = sum(vistas, CERO) / len(vistas)
+            t = format(media.quantize(Decimal("0.01") if k == "intereses" else Decimal("0.0001")).normalize(), "f")
             aprendido[f"nom:tarifa:{k}"] = t
             if k == "cesantias":
                 aprendido["nom:tarifa:prima"] = t
@@ -604,9 +827,10 @@ def generar(conn, periodo: str, ruta_nomina: str | Path) -> dict[str, Any]:
     from . import siigo as siigo_module
 
     p = plantilla(siigo_module.config(conn))
-    nomina = leer_nomina(ruta_nomina)
+    nomina = leer_nomina(ruta_nomina, columnas_propias(p))
     if not nomina:
         raise ValueError("El Excel no tiene hojas «1Q» ni «2Q» con la liquidación por empleado.")
+    params = parametros(periodo[:4], p)
     resumen = []
     for q in nomina.values():
         ya = conn.execute("SELECT id, aprobado FROM nomina_comprobante WHERE periodo = ? AND quincena = ?",
@@ -627,15 +851,16 @@ def generar(conn, periodo: str, ruta_nomina: str | Path) -> dict[str, Any]:
             avisos.append(
                 f"Se ajustó el neto en {ajuste} pesos por el redondeo al peso (el medio peso del "
                 "auxilio de transporte), como se hace en Siigo.")
-        smmlv = _d(p.get(f"nom:smmlv:{periodo[:4]}")) or None
+        smmlv = params["smmlv"]
         if smmlv is None:
             avisos.append(f"Falta el salario mínimo de {periodo[:4]} (en Empleados): sin él no se "
                           "revisan el fondo de solidaridad ni la exoneración.")
-        avisos.extend(revisar(q, p, smmlv))
+        avisos.extend(revisar(q, p, smmlv, params["aux_transporte"]))
         if debito != credito:
             avisos.append(f"La quincena no cuadra por {debito - credito} pesos: revise el neto del Excel.")
         if q.columnas_sin_leer:
-            avisos.append("Columnas del Excel que no se leyeron: " + ", ".join(q.columnas_sin_leer))
+            avisos.append("Columnas del Excel que no se leyeron: " + ", ".join(q.columnas_sin_leer)
+                          + ". Si son un pago o una deducción, matricúlelas en «Conceptos y cuentas».")
         import json
         if ya:
             conn.execute("DELETE FROM nomina_comprobante WHERE id = ?", (ya["id"],))
