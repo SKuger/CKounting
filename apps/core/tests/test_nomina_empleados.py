@@ -53,7 +53,7 @@ def test_la_arl_de_la_empresa_reemplaza_la_de_cada_empleado(conn):
                                       "smmlv": {"2026": "1.000.000"}})
     assert r["arl"] == {"cuenta": "23700601", "nit": "800000010"}
     assert "nom:entidad:1001:arl" not in siigo.config(conn)
-    assert r["smmlv"] == {"2026": "1000000"}
+    assert r["parametros"]["2026"]["smmlv"] == "1000000", "el salario mínimo es de todas las empresas"
 
 
 def test_la_arl_sale_de_la_clase_de_riesgo_del_empleado(conn):

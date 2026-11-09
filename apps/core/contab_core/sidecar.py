@@ -1535,13 +1535,22 @@ def _h_nomina_empresa_guardar(params: dict) -> dict:
     return _con_empresa(params, lambda c: nomina_module.guardar_empresa(c, params.get("empresa") or {}))
 
 
+def _h_nomina_conceptos(params: dict) -> dict:
+    return _con_empresa(params, nomina_module.conceptos)
+
+
+def _h_nomina_conceptos_guardar(params: dict) -> dict:
+    return _con_empresa(params, lambda c: nomina_module.guardar_conceptos(c, params.get("conceptos") or {}))
+
+
 def _h_nomina_aprender(params: dict) -> dict:
     """La plantilla de nómina, deducida del 992 que ya está en Siigo (D-134)."""
     conn = _con(params["db_path"])
     try:
         return nomina_module.aprender(
             conn, Path(params["nomina_path"]), Path(params["carga_path"]),
-            dry_run=bool(params.get("dry_run", False)))
+            dry_run=bool(params.get("dry_run", False)),
+            periodo=storage_module._norm_periodo(params["periodo"]) if params.get("periodo") else None)
     finally:
         conn.close()
 
@@ -2166,6 +2175,8 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "nomina_empleados": _h_nomina_empleados,
     "nomina_empleado_guardar": _h_nomina_empleado_guardar,
     "nomina_empresa_guardar": _h_nomina_empresa_guardar,
+    "nomina_conceptos": _h_nomina_conceptos,
+    "nomina_conceptos_guardar": _h_nomina_conceptos_guardar,
     "cuentas_empresa": _h_cuentas_empresa,
     "tarifas_list": _h_tarifas_list,
     "tarifas_guardar_concepto": _h_tarifas_guardar_concepto,

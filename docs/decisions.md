@@ -1668,3 +1668,66 @@ pueda seleccionar la Retención de IVA»):
 
 **Por qué**: el contador decide la retención mirando la factura; si la elige y
 no aparece la línea, la pantalla le está diciendo que no le hizo caso.
+
+## D-144 — El movimiento de Siigo como fuente, y la nómina que cuadra
+
+**Decisión** (2026-11-09, armando septiembre de ALAGUNA de punta a punta):
+
+- **Contab lee el reporte «Movimiento por cuenta contable» de Siigo**, además del
+  modelo de importación: títulos arriba, la cabecera unas filas más abajo y el
+  comprobante en una sola columna `CV` (`CC-992-15`). Es lo que el contador
+  descarga del año. Sirve para aprender la nómina y para sembrar reglas; como no
+  trae «Código impuesto», el código se deduce de la cuenta con el catálogo
+  cuando la cuenta es de un solo código.
+- **La quincena se empareja con el 992 de su mismo mes.** Con el movimiento del
+  año, el neto de septiembre coincidía con el de febrero por dos pesos.
+- **El pasivo de cada provisión es el crédito a 2510 por el valor de su
+  gasto**, y la tarifa de la empresa se lee del 992 cuando todos los empleados
+  dan la misma. ALAGUNA provisiona al 8,333 % y al 4,167 %; el 8,33 % fijo no
+  encontraba el pasivo y no cuadraba con Siigo.
+- **Hasta un peso de descuadre por empleado se absorbe en el neto**, con aviso,
+  como lo hace el contador en Siigo. Más que eso no es redondeo y se deja
+  descuadrada.
+
+**Por qué**: la nómina de ALAGUNA no llegaba al archivo de Siigo por una cadena
+de cuatro cosas: sin leer su movimiento no había plantilla; sin plantilla no se
+armaba; armada, no cuadraba por dos pesos; y descuadrada no se puede aprobar.
+
+**Pendiente con el contador**: la cuenta de «otras deducciones» (en septiembre
+fue a 13301502 con otro tercero); la base de los aportes, que en Siigo sale
+6–12 % mayor que la de Contab; y el reparto entre rodamiento y otros pagos.
+
+## D-145 — La tabla de conceptos de nómina, y lo que es de todas las empresas
+
+**Decisión** (2026-11-09, a pedido del contador: «puede haber una tabla donde se
+matriculen las cuentas y se informe si dicho pago es base para la seguridad
+social o no»):
+
+- **«Conceptos y cuentas» en Nómina.** Cada pago al empleado con su cuenta y dos
+  marcas: **salarial** (entra en la base de prima, cesantías, intereses y
+  vacaciones) y **base de seguridad social** (entra en la de pensión del
+  empleador, caja y ARL). Sin marcar, lo de antes: solo lo salarial. Los
+  descuentos con su cuenta y el NIT del empleado; provisiones con gasto, pasivo y
+  tarifa; aportes con gasto y tarifa; el neto. Claves `nom:salarial:<c>` y
+  `nom:base_ss:<c>` en `siigo_config`, sin migración.
+- **Conceptos propios**: un pago o un descuento que el Excel trae y Contab no
+  conoce (una bonificación) se matricula con su nombre, la columna del Excel, la
+  cuenta y sus marcas (`nom:propio:<clave>`). Desde ahí esa columna se lee.
+- **Los anticipos** son «otras deducciones», con el NIT del empleado (en ALAGUNA,
+  13301502). No siempre aparecen.
+- **El salario mínimo y el auxilio de transporte son de todas las empresas**:
+  viven en los ajustes del programa (`nomina:smmlv:<año>`,
+  `nomina:aux_transporte:<año>`); el de la empresa, de antes, queda de respaldo.
+  Un auxilio mayor que el de un mes se avisa; el mensualizado, no.
+- **Una clase de riesgo por defecto por empresa** (`nom:riesgo:*`) para quien no
+  tenga la suya. En ALAGUNA es la I.
+- La tarifa de provisiones que se aprende del 992 va con cuatro decimales:
+  ALAGUNA provisiona 1/12 exacto.
+
+**Por qué**: hay pagos que son base de seguridad social y otros que no, y eso lo
+sabe la empresa, no el código.
+
+**Pendiente**: en el septiembre de ALAGUNA los aportes de Siigo salen sobre una
+base 1–43 % mayor que el salario, y ninguna combinación de los conceptos del
+Excel la explica (tampoco la regla del 40 %). Hace falta que el contador muestre
+cómo arma esa base. La UVT sigue por empresa (D-102), aunque también es común.
